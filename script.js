@@ -74,7 +74,8 @@ const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/
 // Configuration
 const CONFIG = {
     text: isMobile ? "K" : "TOPKEK",
-    textSize: isMobile ? 2 : 3, // Smaller text on mobile
+    textSize: isMobile ? 2.5 : 3, // Smaller text on mobile
+    textHeight: isMobile ? 0.1 : 0.5,
     particleSize: 0.1,
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: isMobile ? 15000 : 50000, // Reduced particle count for mobile
@@ -85,10 +86,8 @@ const CONFIG = {
     letterSpacing: 0.5, // Extra spacing between letters
     animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
     gridCols: 10, // For grid calculation
-    animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
-    gridCols: 10, // For grid calculation
     gridSpacing: 2,
-    shadowMapSize: isMobile ? 256 : 2048 // Reduced shadow map size for mobile
+    shadowMapSize: isMobile ? 128 : 2048 // Reduced shadow map size for mobile
 };
 
 // State
@@ -128,7 +127,7 @@ function init() {
     // 1. Scene Setup
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111); // Dark background
-    // scene.fog = new THREE.Fog(0x111111, 10, 50); // Optional fog
+    scene.fog = new THREE.Fog(0x000000, 10, 50); // Optional fog
 
     // 2. Camera
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -148,7 +147,7 @@ function init() {
 
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
     bloomPass.threshold = 0.2;
-    bloomPass.strength = 0.3; // Adjust for glow intensity
+    bloomPass.strength = 0.4; // Adjust for glow intensity
     bloomPass.radius = 1;
 
     const outputPass = new OutputPass();
@@ -353,7 +352,7 @@ function generateParticles(font) {
         const charGeo = new TextGeometry(char, {
             font: font,
             size: CONFIG.textSize,
-            height: 0.5, // Thickness
+            height: CONFIG.textHeight, // Thickness
             curveSegments: 12,
             bevelEnabled: true,
             bevelThickness: 0.5,
