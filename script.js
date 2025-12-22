@@ -69,11 +69,15 @@ const CRTShader = {
     `
 };
 
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 800;
+
 // Configuration
 const CONFIG = {
-    text: (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 800) ? "K" : "TOPKEK",
+    text: isMobile ? "K" : "TOPKEK",
+    textSize: isMobile ? 1.5 : 3, // Smaller text on mobile
     particleSize: 0.1,
     particleCount: 0, // Will be determined by sampler
+    targetCubeCount: isMobile ? 15000 : 50000, // Reduced particle count for mobile
     repulsionRadius: 3, // Increased radius
     repulsionStrength: 4,
     returnSpeed: 0.2,
@@ -197,6 +201,11 @@ function init() {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
+
+    // Touch Events
+    window.addEventListener('touchstart', onTouchStart, { passive: false });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd);
 
     createUI();
 }
@@ -333,7 +342,7 @@ function generateParticles(font) {
     chars.forEach(char => {
         const charGeo = new TextGeometry(char, {
             font: font,
-            size: 3,
+            size: CONFIG.textSize,
             height: 0.5, // Thickness
             curveSegments: 12,
             bevelEnabled: true,
@@ -368,7 +377,7 @@ function generateParticles(font) {
     const sampler = new MeshSurfaceSampler(mesh).build();
 
     // --- CUBES (Shell) ---
-    const targetCubeCount = 50000;
+    const targetCubeCount = CONFIG.targetCubeCount;
 
     // Restore Bevel: size, size, size, segments, radius
     const boxGeo = new RoundedBoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize, 2, CONFIG.particleSize * 0.05);
@@ -1031,4 +1040,57 @@ function animate() {
     }
 
     composer.render();
+}
+
+function onTouchStart(event) {
+    if (event.touches.length > 0) {
+        if (event.target === renderer.domElement) {
+            event.preventDefault();
+        }
+
+        isDragging = true;
+        previousMouseX = event.touches[0].clientX;
+        previousMouseY = event.touches[0].clientY;
+
+        // Update mouse pos for raycaster
+        mouse.x = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.touches[0].clientY / window.innerHeight) * 2 + 1;
+    }
+}
+
+function onTouchMove(event) {
+    if (event.touches.length > 0) {
+        if (event.target === renderer.domElement) {
+            event.preventDefault();
+        }
+
+        const clientX = event.touches[0].clientX;
+        const clientY = event.touches[0].clientY;
+
+        // Update generic mouse
+        mouse.x = (clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+        if (isDragging) {
+            const deltaX = clientX - previousMouseX;
+            const deltaY = clientY - previousMouseY;
+
+            previousMouseX = clientX;
+            previousMouseY = clientY;
+
+            targetCameraAngle -= deltaX * 0.005;
+            targetCameraVerticalAngle -= deltaY * 0.005;
+
+            // Clamp angles
+            targetCameraAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraAngle));
+            targetCameraVerticalAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraVerticalAngle));
+        }
+    }
+}
+
+function onTouchEnd(event) {
+    isDragging = false;
+    // Reset mouse offscreen
+    mouse.x = -1000;
+    mouse.y = -1000;
 }
