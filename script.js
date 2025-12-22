@@ -85,7 +85,10 @@ const CONFIG = {
     letterSpacing: 0.5, // Extra spacing between letters
     animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
     gridCols: 10, // For grid calculation
-    gridSpacing: 2
+    animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
+    gridCols: 10, // For grid calculation
+    gridSpacing: 2,
+    shadowMapSize: isMobile ? 256 : 2048 // Reduced shadow map size for mobile
 };
 
 // State
@@ -173,13 +176,13 @@ function init() {
     const dirLight1 = new THREE.DirectionalLight(0xFF0000, 0.7);
     dirLight1.position.set(10, 10, 10);
     dirLight1.castShadow = true;
-    dirLight1.shadow.mapSize.width = 2048;
-    dirLight1.shadow.mapSize.height = 2048;
+    dirLight1.shadow.mapSize.width = CONFIG.shadowMapSize;
+    dirLight1.shadow.mapSize.height = CONFIG.shadowMapSize;
     const dirLight2 = new THREE.DirectionalLight(0x0000FF, 0.7);
     dirLight2.position.set(-10, -10, 10);
     dirLight2.castShadow = true;
-    dirLight2.shadow.mapSize.width = 2048;
-    dirLight2.shadow.mapSize.height = 2048;
+    dirLight2.shadow.mapSize.width = CONFIG.shadowMapSize;
+    dirLight2.shadow.mapSize.height = CONFIG.shadowMapSize;
     scene.add(dirLight1);
     scene.add(dirLight2);
 
