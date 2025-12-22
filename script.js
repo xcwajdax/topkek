@@ -74,7 +74,7 @@ const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/
 // Configuration
 const CONFIG = {
     text: isMobile ? "K" : "TOPKEK",
-    textSize: isMobile ? 1.5 : 3, // Smaller text on mobile
+    textSize: isMobile ? 2 : 3, // Smaller text on mobile
     particleSize: 0.1,
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: isMobile ? 15000 : 50000, // Reduced particle count for mobile
@@ -236,6 +236,13 @@ function createUI() {
     ui.appendChild(btn2);
     ui.appendChild(btn3);
     document.body.appendChild(ui);
+
+    if (isMobile) {
+        const info = document.createElement('div');
+        info.className = 'mobile-info';
+        info.innerText = 'Check out on Pc/MAC';
+        document.body.appendChild(info);
+    }
 }
 
 function setMode(mode, activeBtn, inactiveBtns) {

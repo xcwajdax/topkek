@@ -56,3 +56,14 @@ body {
     color: black;
     border-color: white;
 }
+
+.mobile-info {
+    position: absolute;
+    bottom: 5px;
+    width: 100%;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 99;
+}
