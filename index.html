@@ -1,9 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive 3D Text Disintegration</title>
+    <title>TOPKEK Productions</title>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
     <link rel="stylesheet" href="style.css">
     <script type="importmap">
         {
@@ -14,10 +17,32 @@
         }
     </script>
 </head>
+
 <body>
     <div id="canvas-container"></div>
-    <div id="loading">Loading...</div>
+    <div id="loader-container">
+        <div id="loader-content">
+            <div id="loading-text">Loading Assets...</div>
+            <div id="progress-bar-container">
+                <div id="progress-fill"></div>
+            </div>
+            <div id="progress-percentage">0%</div>
+        </div>
+    </div>
+
+    <!-- APPSTAIN MODAL -->
+    <div id="appstain-modal" class="hidden">
+        <div id="appstain-content">
+            <h2>APPSTAIN alpha v0.45.1</h2>
+            <p>Enter Password to Access Files</p>
+            <input type="password" id="appstain-password" placeholder="Password">
+            <button id="appstain-submit" class="mode-btn">Take me to the Files</button>
+            <p id="appstain-error" style="color: red; display: none;">Access Denied</p>
+            <button id="appstain-close" class="close-btn">X</button>
+        </div>
+    </div>
 
     <script type="module" src="script.js"></script>
 </body>
+
 </html>

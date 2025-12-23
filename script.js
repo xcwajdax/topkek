@@ -11,6 +11,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
+import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG } from './config.js';
 
 const CRTShader = {
     uniforms: {
@@ -18,8 +20,8 @@ const CRTShader = {
         'time': { value: 0 },
         'start_time': { value: 0 },
         'resolution': { value: new THREE.Vector2() },
-        'curvature': { value: new THREE.Vector2(0.5, 0.40) }, // 1.0 = flat
-        'lineWidth': { value: 0.1 } // Scanline width
+        'curvature': { value: SHADER_CONFIG.crt.curvature }, // 1.0 = flat
+        'lineWidth': { value: SHADER_CONFIG.crt.lineWidth } // Scanline width
     },
 
     vertexShader: `
@@ -70,36 +72,17 @@ const CRTShader = {
     `
 };
 
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 800;
-
-// Configuration
-const CONFIG = {
-    text: isMobile ? "K" : "TOPKEK",
-    textSize: isMobile ? 2.5 : 3, // Smaller text on mobile
-    textHeight: isMobile ? 0.1 : 0.5,
-    particleSize: 0.1,
-    particleCount: 0, // Will be determined by sampler
-    targetCubeCount: isMobile ? 15000 : 50000, // Reduced particle count for mobile
-    repulsionRadius: 3, // Increased radius
-    repulsionStrength: 4,
-    returnSpeed: 0.2,
-    sampleDensity: 1, // Points per unit area (increase for more dense voxels)
-    letterSpacing: 0.5, // Extra spacing between letters
-    animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
-    gridCols: 10, // For grid calculation
-    gridSpacing: 2,
-    shadowMapSize: isMobile ? 128 : 2048 // Reduced shadow map size for mobile
-};
+// Configuration and State imported from config.js
 
 // State
-let scene, camera, renderer, composer, crtPass;
+let scene, camera, renderer, composer, crtPass, bloomPass;
 let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
-let sphereInstancedMesh;
+let innerCubeInstancedMesh;
 let dummy = new THREE.Object3D();
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2(-1000, -1000); // Start off-screen
 let cubeGroups = []; // Stores rigid body groups
-let sphereParticles = []; // Stores individual sphere particles
+let innerCubeParticles = []; // Stores individual inner cube particles
 let defaultBoxMaterial, glassMaterial, goldMaterial;
 let isAlternateMaterial = false;
 let debugMesh; // Visual debug cursor
@@ -108,12 +91,15 @@ let lastMousePos = new THREE.Vector2();
 let lastMouseTime = 0;
 let lastTarget = new THREE.Vector3();
 let loadedFont = null; // Store loaded font globally
+let loadedFontRegular = null; // Store loaded regular font globally
 
-// Camera Rotation State
+// Camera Rotation & Pan State
 let isDragging = false;
+let isPanning = false;
 let previousMouseX = 0;
 let previousMouseY = 0;
 let cameraAngle = 0;
+let cameraFocusPoint = new THREE.Vector3(0, 0, 0);
 let targetCameraAngle = 0; // Target angle for smoothing
 let cameraVerticalAngle = 0;
 let targetCameraVerticalAngle = 0;
@@ -128,38 +114,43 @@ let isFreeCam = false;
 // Cinematic Camera State
 let isCinematic = true;
 let cinematicSwitchTime = 0;
-const cinematicShots = [
-    // Front Standard
-    { angle: 0, vert: 0, radius: 15, speedMult: 1.0, fov: 45 },
-    // Low Angle Wide - Heroic
-    { angle: 0.5, vert: -0.5, radius: 10, speedMult: 1.0, fov: 60 },
-    // High Angle Tight - Surveillance
-    { angle: -0.4, vert: 0.8, radius: 18, speedMult: 0.8, fov: 35 },
-    // Side Profile Left
-    { angle: 1.4, vert: 0, radius: 12, speedMult: 1.2, fov: 50 },
-    // Side Profile Right
-    { angle: -1.4, vert: 0.1, radius: 13, speedMult: 1.2, fov: 48 },
-    // Close Detail Focus
-    { angle: 0.2, vert: 0.1, radius: 7, speedMult: 0.8, fov: 40 },
-    // Extreme Wide - Fish eye look
-    { angle: 0, vert: 0.2, radius: 8, speedMult: 0.5, fov: 95 },
-    // Telephoto Compression - Far away but zoomed
-    { angle: 0.8, vert: 0.2, radius: 35, speedMult: 6.0, fov: 15 },
-    // Dynamic Low
-    { angle: -0.8, vert: -0.4, radius: 11, speedMult: 2.5, fov: 55 },
-    // Almost Top Down
-    { angle: 0.1, vert: 1.3, radius: 16, speedMult: 0.2, fov: 45 },
-    // Steep Fast Angle
-    { angle: -0.8, vert: 0.9, radius: 14, speedMult: 3.0, fov: 45 },
-    // Slight offset
-    { angle: 0.2, vert: -0.2, radius: 13, speedMult: 1.2, fov: 50 }
-];
+let lastInteractionTime = Date.now();
+let isInitialSequence = true;
+
+// Cinematic Camera State (Shots imported)
 let cinematicDollySpeed = 0; // Speed of radius change
 let currentShotSpeedMult = 0.2; // Speed of orbit
 
 // DOM Elements
 const container = document.getElementById('canvas-container');
-const loading = document.getElementById('loading');
+const loaderContainer = document.getElementById('loader-container');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-percentage');
+const statusText = document.getElementById('loading-text');
+
+// Loading State
+let loadState = {
+    assets: 0,
+    generation: 0
+};
+
+function updateProgress() {
+    const totalWeight = LOADER_CONFIG.phases.assets.weight + LOADER_CONFIG.phases.generation.weight;
+    const currentWeight = (loadState.assets * LOADER_CONFIG.phases.assets.weight / 100) +
+        (loadState.generation * LOADER_CONFIG.phases.generation.weight / 100);
+    const percentage = Math.round((currentWeight / totalWeight) * 100);
+
+    progressFill.style.width = `${percentage}%`;
+    progressText.innerText = `${percentage}%`;
+
+    if (loadState.assets < 100) {
+        statusText.innerText = LOADER_CONFIG.phases.assets.text;
+    } else if (loadState.generation < 100) {
+        statusText.innerText = LOADER_CONFIG.phases.generation.text;
+    } else {
+        statusText.innerText = "Ready!";
+    }
+}
 
 const clock = new THREE.Clock();
 
@@ -189,23 +180,38 @@ function init() {
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+    controls.minDistance = CONFIG.minZoom;
+    controls.maxDistance = CONFIG.maxZoom;
+    controls.zoomSpeed = CONFIG.freeCamZoomSpeed;
     controls.enabled = false; // Start disabled
 
     // Post-Processing
     const renderScene = new RenderPass(scene, camera);
 
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.2;
-    bloomPass.strength = 0.4; // Adjust for glow intensity
-    bloomPass.radius = 1;
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = SHADER_CONFIG.bloom.threshold;
+    bloomPass.strength = SHADER_CONFIG.bloom.strength; // Adjust for glow intensity
+    bloomPass.radius = SHADER_CONFIG.bloom.radius;
 
     const outputPass = new OutputPass();
 
     crtPass = new ShaderPass(CRTShader);
     crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
 
+    const saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
+    saoPass.params.saoBias = SHADER_CONFIG.sao.saoBias;
+    saoPass.params.saoIntensity = SHADER_CONFIG.sao.saoIntensity;
+    saoPass.params.saoScale = SHADER_CONFIG.sao.saoScale;
+    saoPass.params.saoKernelRadius = SHADER_CONFIG.sao.saoKernelRadius;
+    saoPass.params.saoMinResolution = SHADER_CONFIG.sao.saoMinResolution;
+    saoPass.params.saoBlur = SHADER_CONFIG.sao.saoBlur;
+    saoPass.params.saoBlurRadius = SHADER_CONFIG.sao.saoBlurRadius;
+    saoPass.params.saoBlurStdDev = SHADER_CONFIG.sao.saoBlurStdDev;
+    saoPass.params.saoBlurDepthCutoff = SHADER_CONFIG.sao.saoBlurDepthCutoff;
+
     composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
+    composer.addPass(saoPass);
     composer.addPass(bloomPass);
     composer.addPass(crtPass);
     composer.addPass(outputPass);
@@ -240,13 +246,40 @@ function init() {
     debugMesh = new THREE.Mesh(debugGeo, debugMat);
     scene.add(debugMesh);
 
-    // 5. Load Font and Generate Text
+    // 5. Load Fonts and Generate Text
     const loader = new FontLoader();
-    loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json', function (font) {
-        loadedFont = font;
-        generateParticles(font);
-        loading.classList.add('hidden');
+
+    // Load both fonts in parallel
+    const fontBoldPromise = new Promise((resolve, reject) => {
+        loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json', resolve, undefined, reject);
     });
+
+    const fontRegularPromise = new Promise((resolve, reject) => {
+        // Using helvetiker_regular for a thinner look
+        loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_regular.typeface.json', resolve, undefined, reject);
+    });
+
+    Promise.all([fontBoldPromise, fontRegularPromise])
+        .then(async ([fontBold, fontRegular]) => {
+            loadedFont = fontBold;
+            loadedFontRegular = fontRegular;
+            loadState.assets = 100; // Fonts loaded
+            updateProgress();
+
+            // Allow UI to update before heavy processing
+            await new Promise(resolve => requestAnimationFrame(resolve));
+
+            await generateParticles(fontBold, fontRegular); // Await async generation
+
+            loaderContainer.classList.add('hidden');
+            setTimeout(() => {
+                loaderContainer.style.display = 'none';
+            }, 500);
+        })
+        .catch(err => {
+            console.error("Error loading fonts:", err);
+            statusText.innerText = "Error Loading Fonts";
+        });
 
     // 6. Events
     window.addEventListener('resize', onWindowResize);
@@ -257,11 +290,23 @@ function init() {
         if (e.code === 'Space') {
             isAlternateMaterial = !isAlternateMaterial;
 
+            // Update Bloom Strength
+            if (bloomPass) {
+                bloomPass.strength = isAlternateMaterial ? SHADER_CONFIG.bloom.alternateStrength : SHADER_CONFIG.bloom.strength;
+            }
+
+
             // Iterate over registry to update materials
             Object.values(meshRegistry).forEach(entry => {
                 if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
                 if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
             });
+        }
+        if (e.code === 'Escape') {
+            if (!isCinematic || isFreeCam) {
+                setCameraMode('dynamic');
+                lastInteractionTime = Date.now();
+            }
         }
     });
 
@@ -269,6 +314,12 @@ function init() {
     window.addEventListener('touchstart', onTouchStart, { passive: false });
     window.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('touchend', onTouchEnd);
+    window.addEventListener('wheel', onWheel, { passive: false });
+
+    // Initial Camera Delay
+    setTimeout(() => {
+        isInitialSequence = false;
+    }, cinematicConfig.initialDelay);
 
     createUI();
 }
@@ -297,30 +348,65 @@ function createUI() {
     ui.appendChild(btn3);
     document.body.appendChild(ui);
 
-    // Camera UI
-    const camUI = document.createElement('div');
-    camUI.id = 'camera-ui-container';
-    camUI.style.position = 'absolute';
-    camUI.style.top = '20px';
-    camUI.style.left = '50%';
-    camUI.style.transform = 'translateX(-50%)';
-    camUI.style.display = 'flex';
-    camUI.style.gap = '10px';
-    camUI.style.zIndex = '100';
+    // --- NEW UI ELEMENTS ---
 
-    const btnDynamic = document.createElement('button');
-    btnDynamic.className = 'mode-btn active';
-    btnDynamic.innerText = 'Dynamic Cam';
-    btnDynamic.onclick = () => setCameraMode('dynamic', btnDynamic, btnFree);
+    // 1. Production Label (Left)
+    const label = document.createElement('div');
+    label.className = 'prod-label';
+    label.innerText = 'TOP KEK Productions ® - Handcrafted Games';
+    // Add trademark symbol replacement if needed, but text is fine
+    const tmSpan = document.createElement('sup');
+    tmSpan.innerText = 'R'; // Using 'R' as requested in brackets, or simple text
+    // User asked for "[znaczek R, reserved]", let's use standard ® symbol in text or styled
+    // Let's stick to simple text with the symbol
+    label.innerHTML = 'TOP KEK Productions &reg; - Handcrafted Games';
+    document.body.appendChild(label);
 
-    const btnFree = document.createElement('button');
-    btnFree.className = 'mode-btn';
-    btnFree.innerText = 'Free Cam';
-    btnFree.onclick = () => setCameraMode('free', btnFree, btnDynamic);
+    // 2. APPSTAIN Button (Right)
+    const btnAppstain = document.createElement('button');
+    btnAppstain.className = 'mode-btn'; // Same style
+    btnAppstain.style.position = 'absolute';
+    btnAppstain.style.bottom = '20px'; // Same level as UI container
+    btnAppstain.style.right = '20px'; // Position right
+    btnAppstain.innerText = 'APPSTAIN';
+    btnAppstain.onclick = () => {
+        document.getElementById('appstain-modal').classList.remove('hidden');
+    };
+    document.body.appendChild(btnAppstain);
 
-    camUI.appendChild(btnDynamic);
-    camUI.appendChild(btnFree);
-    document.body.appendChild(camUI);
+    // 3. Modal Logic
+    const modal = document.getElementById('appstain-modal');
+    const closeBtn = document.getElementById('appstain-close');
+    const submitBtn = document.getElementById('appstain-submit');
+    const passwordInput = document.getElementById('appstain-password');
+    const errorMsg = document.getElementById('appstain-error');
+
+    closeBtn.onclick = () => {
+        modal.classList.add('hidden');
+        errorMsg.style.display = 'none';
+        passwordInput.value = '';
+    };
+
+    const checkPassword = () => {
+        if (passwordInput.value === CONFIG.appstainPassword) {
+            window.location.href = 'http://xcwajdax.github.io';
+        } else {
+            errorMsg.style.display = 'block';
+            passwordInput.value = ''; // Clear input on error
+        }
+    };
+
+    submitBtn.onclick = checkPassword;
+
+    // Allow Enter key to submit
+    passwordInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            checkPassword();
+        }
+    });
+
+
+    // --- END NEW UI ELEMENTS ---
 
     if (isMobile) {
         const info = document.createElement('div');
@@ -344,8 +430,17 @@ function createUI() {
     }
 }
 
-function updateText(newText) {
+async function updateText(newText) {
     if (!loadedFont) return;
+
+    // Show loader again
+    loaderContainer.style.display = 'flex';
+    loaderContainer.classList.remove('hidden');
+    loadState.generation = 0;
+    updateProgress();
+
+    // Allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     // Cleanup existing
     Object.values(meshRegistry).forEach(entry => {
@@ -360,18 +455,24 @@ function updateText(newText) {
     });
     meshRegistry = {};
 
-    if (sphereInstancedMesh) {
-        scene.remove(sphereInstancedMesh);
-        sphereInstancedMesh.geometry.dispose();
-        sphereInstancedMesh.material.dispose();
+    if (innerCubeInstancedMesh) {
+        scene.remove(innerCubeInstancedMesh);
+        innerCubeInstancedMesh.geometry.dispose();
+        innerCubeInstancedMesh.material.dispose();
     }
 
     // Reset arrays
     cubeGroups = [];
-    sphereParticles = [];
+    innerCubeParticles = [];
 
     CONFIG.text = newText;
-    generateParticles(loadedFont);
+    CONFIG.text = newText;
+    await generateParticles(loadedFont, loadedFontRegular);
+
+    loaderContainer.classList.add('hidden');
+    setTimeout(() => {
+        loaderContainer.style.display = 'none';
+    }, 500);
 }
 
 function setMode(mode, activeBtn, inactiveBtns) {
@@ -384,16 +485,21 @@ function setMode(mode, activeBtn, inactiveBtns) {
     }
 }
 
-function setCameraMode(mode, activeBtn, inactiveBtn) {
+function setCameraMode(mode) {
     if (mode === 'free') {
         isFreeCam = true;
         controls.enabled = true;
+        controls.target.copy(cameraFocusPoint);
+        controls.update();
         isCinematic = false;
         isDragging = false; // Stop any custom dragging
     } else {
         isFreeCam = false;
         controls.enabled = false;
         isCinematic = true;
+
+        // Reset Focus Point so we look at the text again
+        cameraFocusPoint.set(0, 0, 0);
 
         // Sync internal state to current camera position (prevent jump)
         const pos = camera.position;
@@ -411,11 +517,8 @@ function setCameraMode(mode, activeBtn, inactiveBtn) {
         targetCameraVerticalAngle = cameraVerticalAngle;
         targetCameraRadius = cameraRadius;
 
-        cinematicSwitchTime = Date.now() + 5000; // Delay next cut
+        cinematicSwitchTime = Date.now() + 2000; // Small delay before next cut
     }
-
-    activeBtn.classList.add('active');
-    inactiveBtn.classList.remove('active');
 }
 
 // Helper to generate a robotic path that reconstructs the position
@@ -497,9 +600,26 @@ function generateReturnPath(startPos, startRot, endPos) {
 }
 
 function onMouseDown(event) {
+    // Ignore clicks on UI buttons
+    if (event.target.closest('button') || event.target.closest('.mode-btn') || event.target.closest('.letter-btn')) {
+        return;
+    }
+
+    lastInteractionTime = Date.now();
     if (isFreeCam) return;
-    isDragging = true;
-    isCinematic = false; // Disable cinematic mode on interaction
+
+    // Middle Mouse Button (Button 1) -> Pan
+    if (event.button === 1) {
+        isPanning = true;
+        isCinematic = false;
+        event.preventDefault(); // Prevent scroll cursor
+    }
+    // Left Mouse Button (Button 0) -> Rotate
+    else if (event.button === 0) {
+        isDragging = true;
+        isCinematic = false;
+    }
+
     previousMouseX = event.clientX;
     previousMouseY = event.clientY;
 }
@@ -507,9 +627,10 @@ function onMouseDown(event) {
 function onMouseUp(event) {
     if (isFreeCam) return;
     isDragging = false;
+    isPanning = false;
 }
 
-function generateParticles(font) {
+async function generateParticles(font, fontRegular) {
     // 1. Create separate geometries for each letter to handle spacing
     const geometries = [];
     let xOffset = 0;
@@ -554,40 +675,21 @@ function generateParticles(font) {
 
     // --- CUBES (Shell) ---
     // Initialize Materials
+    // Initialize Materials
     if (!defaultBoxMaterial) {
-        defaultBoxMaterial = new THREE.MeshStandardMaterial({
-            color: 0x0FFFF0,
-            roughness: 0.5,
-            metalness: 0.4,
-            envMapIntensity: 0.2
-        });
+        defaultBoxMaterial = new THREE.MeshStandardMaterial(MATERIALS.defaultBox);
     }
 
     if (!glassMaterial) {
-        glassMaterial = new THREE.MeshPhysicalMaterial({
-            color: 0xffffff,
-            metalness: 0.1,
-            roughness: 0.05,
-            transmission: 1.0, // Glass
-            thickness: 1.0,
-            envMapIntensity: 1.0,
-            ior: 1.5,
-            transparent: true,
-            opacity: 1.0
-        });
+        glassMaterial = new THREE.MeshPhysicalMaterial(MATERIALS.glass);
     }
 
     if (!goldMaterial) {
-        goldMaterial = new THREE.MeshStandardMaterial({
-            color: 0xFFD700,
-            metalness: 1.0,
-            roughness: 0.15,
-            envMapIntensity: 1.0
-        });
+        goldMaterial = new THREE.MeshStandardMaterial(MATERIALS.gold);
     }
 
     cubeGroups = [];
-    sphereParticles = [];
+    innerCubeParticles = [];
 
     // --- VOXEL COLLECTION FOR CUBES ---
     const voxelMap = new Map(); // Key: "x,y,z", Value: { gx, gy, gz, x, y, z, visited }
@@ -603,6 +705,10 @@ function generateParticles(font) {
 
     const scanRaycaster = new THREE.Raycaster();
     const scanDir = new THREE.Vector3(0, 0, -1); // Raycast backward towards text
+
+    // Async chunking variables
+    const chunkSize = 1000; // Process N iterations before yielding
+    let iterationCount = 0;
 
     for (let gx = minGx; gx <= maxGx; gx++) {
         for (let gy = minGy; gy <= maxGy; gy++) {
@@ -632,6 +738,14 @@ function generateParticles(font) {
                 }
             }
         }
+
+        // Progress update during voxelization (approx 30% of generation phase)
+        iterationCount++;
+        if (iterationCount % 50 === 0) { // Update every 50 columns
+            loadState.generation = Math.round((gx - minGx) / (maxGx - minGx) * 30);
+            updateProgress();
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
     }
 
     // Saturation loop
@@ -640,8 +754,17 @@ function generateParticles(font) {
     let consecutiveFailures = 0;
     const maxFailures = 2000;
     const targetCubeCount = CONFIG.targetCubeCount; // Target for saturation
+    const totalSaturationSteps = targetCubeCount * 20;
 
-    for (let i = 0; i < targetCubeCount * 20; i++) {
+    for (let i = 0; i < totalSaturationSteps; i++) {
+        // Progress update during saturation (30% to 90% of generation phase)
+        if (i % chunkSize === 0) {
+            const progress = 30 + (i / totalSaturationSteps) * 60;
+            loadState.generation = Math.min(90, Math.round(progress));
+            updateProgress();
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
         sampler.sample(tempPosition, tempNormal);
 
         const tryAddVoxel = (pX, pY, pZ, pNormal) => {
@@ -687,15 +810,107 @@ function generateParticles(font) {
         if (consecutiveFailures > maxFailures) break;
     }
 
+    // --- SUBTITLE: PRODUCTIONS (Deterministic Generation) ---
+    if (fontRegular && CONFIG.subtitle) {
+        // Generate separate geometries for each letter to handle spacing
+        const subGeometries = [];
+        let subXOffset = 0;
+        const subChars = CONFIG.subtitle.text.split('');
+
+        subChars.forEach(char => {
+            const charGeo = new TextGeometry(char, {
+                font: fontRegular,
+                size: CONFIG.subtitle.size,
+                height: CONFIG.subtitle.height,
+                curveSegments: 6,
+                bevelEnabled: false
+            });
+
+            charGeo.computeBoundingBox();
+            const width = charGeo.boundingBox.max.x - charGeo.boundingBox.min.x;
+
+            charGeo.translate(subXOffset, 0, 0);
+            subGeometries.push(charGeo);
+
+            subXOffset += width + CONFIG.subtitle.letterSpacing;
+        });
+
+        if (subGeometries.length === 0) return;
+
+        const subGeo = BufferGeometryUtils.mergeGeometries(subGeometries);
+
+
+        subGeo.computeBoundingBox();
+        const subWidth = subGeo.boundingBox.max.x - subGeo.boundingBox.min.x;
+        const subHeight = subGeo.boundingBox.max.y - subGeo.boundingBox.min.y;
+
+        // Center alignment calculation
+        // Main text center X is roughly 0 because geometry.center() was called on it.
+        // So we just center the subtitle at 0.
+        const subOffsetX = -subWidth / 2;
+        const subOffsetY = CONFIG.subtitle.offsetY;
+
+        subGeo.translate(subOffsetX, subOffsetY, 0);
+
+        // Deterministic Grid Scan for Subtitle
+        // We scan the bounding box of the subtitle
+        const startX = Math.floor(subGeo.boundingBox.min.x / CONFIG.particleSize);
+        const endX = Math.ceil(subGeo.boundingBox.max.x / CONFIG.particleSize);
+        const startY = Math.floor(subGeo.boundingBox.min.y / CONFIG.particleSize);
+        const endY = Math.ceil(subGeo.boundingBox.max.y / CONFIG.particleSize);
+
+        const subRaycaster = new THREE.Raycaster();
+        const subDirection = new THREE.Vector3(0, 0, -1);
+        const subtitleMesh = new THREE.Mesh(subGeo, new THREE.MeshBasicMaterial());
+        subtitleMesh.updateMatrixWorld(); // Ensure world matrix is up to date
+
+        for (let gx = startX; gx <= endX; gx++) {
+            for (let gy = startY; gy <= endY; gy++) {
+                const px = gx * CONFIG.particleSize;
+                const py = gy * CONFIG.particleSize;
+
+                // Raycast to check if point is inside text
+                // Start ray from z=10 looking back at text which is at z=0 (approximately)
+                // Actually the text geometry is extruded, but we only care about the shape in X/Y.
+                // Text is extruded by height.
+
+                subRaycaster.set(new THREE.Vector3(px, py, 10), subDirection);
+                const intersects = subRaycaster.intersectObject(subtitleMesh);
+
+                if (intersects.length > 0) {
+                    // It's a hit. Add voxels.
+                    // Requirement: "grubości 2 sześcianów" (thickness 2 cubes).
+                    // We add one at z=0 and one at z = -particleSize (or +particleSize).
+                    // Let's do 0 and -particleSize to align with front face.
+
+                    for (let zStep = 0; zStep < CONFIG.subtitle.thickness; zStep++) {
+                        const gz = -zStep; // 0, -1
+                        const pz = gz * CONFIG.particleSize;
+
+                        const key = `${gx},${gy},${gz}`;
+                        if (!voxelMap.has(key)) {
+                            voxelMap.set(key, {
+                                gx, gy, gz,
+                                x: px,
+                                y: py,
+                                z: pz,
+                                normal: new THREE.Vector3(0, 0, 1),
+                                visited: false,
+                                isSubtitle: true // Tag it if we want special logic later
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up
+        subGeo.dispose();
+    }
+
     // --- GROUPING ALGORITHM ---
-    const shapeDefinitions = [
-        { id: '2x2', w: 2, h: 2, d: 1, offsets: [[0, 0], [1, 0], [0, 1], [1, 1]] },
-        { id: '3x1', w: 3, h: 1, d: 1, offsets: [[0, 0], [1, 0], [2, 0]] },
-        { id: '1x3', w: 1, h: 3, d: 1, offsets: [[0, 0], [0, 1], [0, 2]] },
-        { id: '2x1', w: 2, h: 1, d: 1, offsets: [[0, 0], [1, 0]] },
-        { id: '1x2', w: 1, h: 2, d: 1, offsets: [[0, 0], [0, 1]] },
-        { id: '1x1', w: 1, h: 1, d: 1, offsets: [[0, 0]] }
-    ];
+    // --- GROUPING ALGORITHM ---
+    const shapeDefinitions = SHAPE_DEFINITIONS;
 
     const voxels = Array.from(voxelMap.values());
     // Shuffle voxels
@@ -802,6 +1017,10 @@ function generateParticles(font) {
         meshRegistry[shape.id] = entry;
     });
 
+    loadState.generation = 95;
+    updateProgress();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     // --- POPULATE MESHES ---
     proposedGroups.forEach(groupProps => {
         const { shapeId, centroid, isTop, normal } = groupProps;
@@ -811,7 +1030,7 @@ function generateParticles(font) {
 
         // Determine Scale based on Normal
         // We want a random scale > 1.0 to ensure overlap
-        const scaleMag = 1.0 + Math.random() * 1; // 1.0 to 1.5
+        const scaleMag = 1.0 + Math.random() * 0.8; // zmiana randomu scianek
         const scaleVec = new THREE.Vector3(1, 1, 1);
 
         const absX = Math.abs(normal.x);
@@ -870,21 +1089,16 @@ function generateParticles(font) {
         cubeGroups.push(groupLogic);
     });
 
-    // --- SPHERES (Core) ---
-    const sphereCount = 2000;
-    const sphereGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
-    const sphereMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0,
-        metalness: 0,
-        emissiveIntensity: 0.01
-    });
+    // --- INNER CUBES (Core) ---
+    const innerCubeCount = 2000;
+    const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
+    const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
 
-    sphereInstancedMesh = new THREE.InstancedMesh(sphereGeo, sphereMat, sphereCount);
+    innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCubeCount);
     const color = new THREE.Color();
     let sIdx = 0;
 
-    for (let i = 0; i < sphereCount; i++) {
+    for (let i = 0; i < innerCubeCount; i++) {
         sampler.sample(tempPosition, tempNormal);
         const innerOffset = 0.3;
         tempPosition.addScaledVector(tempNormal, -innerOffset);
@@ -893,13 +1107,13 @@ function generateParticles(font) {
         dummy.position.copy(tempPosition);
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
-        sphereInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
+        innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
 
         const hue = (tempPosition.x - minX) / textWidth;
         color.setHSL(hue, 1.0, 0.5);
-        sphereInstancedMesh.setColorAt(sIdx, color);
+        innerCubeInstancedMesh.setColorAt(sIdx, color);
 
-        sphereParticles.push({
+        innerCubeParticles.push({
             meshIndex: sIdx,
             originalPos: tempPosition.clone(),
             currentPos: tempPosition.clone(),
@@ -917,34 +1131,61 @@ function generateParticles(font) {
         });
         sIdx++;
     }
-    sphereInstancedMesh.count = sIdx;
-    sphereInstancedMesh.instanceMatrix.needsUpdate = true;
-    if (sphereInstancedMesh.instanceColor) sphereInstancedMesh.instanceColor.needsUpdate = true;
-    scene.add(sphereInstancedMesh);
+    innerCubeInstancedMesh.count = sIdx;
+    innerCubeInstancedMesh.instanceMatrix.needsUpdate = true;
+    if (innerCubeInstancedMesh.instanceColor) innerCubeInstancedMesh.instanceColor.needsUpdate = true;
+    scene.add(innerCubeInstancedMesh);
+
+    // Final progress update
+    loadState.generation = 100;
+    updateProgress();
 }
 
 function onMouseMove(event) {
+    if (isDragging || isPanning) lastInteractionTime = Date.now();
+
     // Normalize mouse coordinates (Always update)
     if (renderer) { // Safety check if called early
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     }
 
-    // Handle Camera Rotation
-    if (isDragging && !isFreeCam) {
-        const deltaX = event.clientX - previousMouseX;
-        const deltaY = event.clientY - previousMouseY;
+    // Handle Camera Rotation & Panning
+    if (!isFreeCam) {
+        if (isDragging || isPanning) {
+            const deltaX = event.clientX - previousMouseX;
+            const deltaY = event.clientY - previousMouseY;
 
-        previousMouseX = event.clientX;
-        previousMouseY = event.clientY;
+            previousMouseX = event.clientX;
+            previousMouseY = event.clientY;
 
-        // Sensitivity
-        targetCameraAngle -= deltaX * 0.005;
-        targetCameraVerticalAngle -= deltaY * 0.005;
+            if (isDragging) {
+                // Rotation
+                targetCameraAngle -= deltaX * 0.005;
+                targetCameraVerticalAngle -= deltaY * 0.005;
 
-        // Clamp angles
-        targetCameraAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraAngle));
-        targetCameraVerticalAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraVerticalAngle));
+                // Clamp angles
+                targetCameraAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraAngle));
+                targetCameraVerticalAngle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, targetCameraVerticalAngle));
+            }
+
+            if (isPanning) {
+                // Panning relative to camera view
+                // Get Camera Local Axes
+                const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0); // Local X
+                const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);    // Local Y
+
+                // Scaling factor can depend on radius for consistent feel
+                const panFactor = CONFIG.panSpeed * (cameraRadius / 15);
+
+                // Move focus point: Mouse moves Left -> Focus moves Left (Right Vector is negative) (Drag world)
+                // Actually, if I drag Left (negative deltaX), I want the world to move Left (negative X).
+                // If I drag Up (negative deltaY), I want world to move Up.
+
+                cameraFocusPoint.addScaledVector(camRight, -deltaX * panFactor);
+                cameraFocusPoint.addScaledVector(camUp, deltaY * panFactor);
+            }
+        }
     }
 }
 
@@ -964,65 +1205,89 @@ function animate() {
 
     if (isFreeCam && controls) {
         controls.update();
+
+        // Auto-switch back to dynamic if idle
+        if (Date.now() - lastInteractionTime > cinematicConfig.autoDynamicTimeout) {
+            setCameraMode('dynamic');
+        }
     } else {
         // Cinematic Mode Logic
         if (isCinematic) {
-            const now = Date.now();
-            if (now > cinematicSwitchTime) {
-                // Switch Shot
-                const shot = cinematicShots[Math.floor(Math.random() * cinematicShots.length)];
+            if (isInitialSequence) {
+                // Stay static
+            } else {
+                const now = Date.now();
+                if (now > cinematicSwitchTime) {
+                    // Procedurally Generate Shot
+                    const cfg = cinematicConfig;
 
-                // Set targets
-                targetCameraAngle = shot.angle;
-                targetCameraVerticalAngle = shot.vert;
-                targetCameraRadius = shot.radius;
-                currentShotSpeedMult = shot.speedMult || 1.0;
+                    // Helper for random in range
+                    const rand = (min, max) => min + Math.random() * (max - min);
 
-                // Instant cut for cinematic feel
-                cameraAngle = targetCameraAngle;
-                cameraVerticalAngle = targetCameraVerticalAngle;
-                cameraRadius = targetCameraRadius;
+                    // Generate Targets
+                    // Generate Targets
+                    // Constrain radius to [minZoom, maxZoom - 10]
+                    const minR = Math.max(cfg.radiusRange.min, CONFIG.minZoom);
+                    const maxR = Math.min(cfg.radiusRange.max, CONFIG.maxZoom - 10);
 
-                // Apply FOV Change
-                if (shot.fov) {
-                    camera.fov = shot.fov;
+                    targetCameraAngle = rand(cfg.angleRange.min, cfg.angleRange.max);
+                    targetCameraVerticalAngle = rand(cfg.vertRange.min, cfg.vertRange.max);
+                    targetCameraRadius = rand(minR, maxR);
+
+                    // Camera modifiers
+                    currentShotSpeedMult = rand(cfg.speedMultRange.min, cfg.speedMultRange.max);
+                    const newFov = rand(cfg.fovRange.min, cfg.fovRange.max);
+
+                    // Instant cut for cinematic feel
+                    cameraAngle = targetCameraAngle;
+                    cameraVerticalAngle = targetCameraVerticalAngle;
+                    cameraRadius = targetCameraRadius;
+
+                    // Apply FOV
+                    camera.fov = newFov;
                     camera.updateProjectionMatrix();
+
+                    // Set next duration
+                    const duration = rand(cfg.shotDurationRange.min, cfg.shotDurationRange.max);
+                    cinematicSwitchTime = now + duration;
+
+                    // Random Dolly Speed (Move in or out)
+                    // Speed: +/- 0.01 to 0.03 per frame roughly
+                    cinematicDollySpeed = (Math.random() - 0.5) * 0.04;
                 }
 
-                // Set next duration (7-10s)
-                cinematicSwitchTime = now + (7000 + Math.random() * 3000);
+                // Slow cinematic drift (modified by speedMult)
+                cameraAngle += 0.0002 * currentShotSpeedMult * Math.sin(now * 0.001);
+                cameraVerticalAngle += 0.0001 * currentShotSpeedMult * Math.cos(now * 0.001);
 
-                // Random Dolly Speed (Move in or out)
-                // Speed: +/- 0.01 to 0.03 per frame roughly
-                cinematicDollySpeed = (Math.random() - 0.5) * 0.04;
-            }
+                // Dolly movement
+                cameraRadius += cinematicDollySpeed;
 
-            // Slow cinematic drift (modified by speedMult)
-            cameraAngle += 0.0002 * currentShotSpeedMult * Math.sin(now * 0.001);
-            cameraVerticalAngle += 0.0001 * currentShotSpeedMult * Math.cos(now * 0.001);
-
-            // Dolly movement
-            cameraRadius += cinematicDollySpeed;
-
-            // Sync targets to current drift so no jump on exit
-            targetCameraAngle = cameraAngle;
-            targetCameraVerticalAngle = cameraVerticalAngle;
-            targetCameraRadius = cameraRadius;
+                // Sync targets to current drift so no jump on exit
+                targetCameraAngle = cameraAngle;
+                targetCameraVerticalAngle = cameraVerticalAngle;
+                targetCameraRadius = cameraRadius;
+            } // End else !isInitialSequence
 
         } else {
             // Smooth Camera Rotation (User Control)
             cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
             cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
             cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+
+            // Auto-switch back to dynamic if idle (for manual mode)
+            if (Date.now() - lastInteractionTime > cinematicConfig.autoDynamicTimeout) {
+                setCameraMode('dynamic');
+            }
         }
 
         const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
 
-        camera.position.x = Math.sin(cameraAngle) * horizontalRadius;
-        camera.position.z = Math.cos(cameraAngle) * horizontalRadius;
-        camera.position.y = Math.sin(cameraVerticalAngle) * cameraRadius;
+        camera.position.x = cameraFocusPoint.x + Math.sin(cameraAngle) * horizontalRadius;
+        camera.position.z = cameraFocusPoint.z + Math.cos(cameraAngle) * horizontalRadius;
+        camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
 
-        camera.lookAt(0, 0, 0);
+        camera.lookAt(cameraFocusPoint);
     }
 
     if (Object.keys(meshRegistry).length > 0) {
@@ -1247,13 +1512,13 @@ function animate() {
             }
         }
 
-        // --- SPHERE PARTICLES LOGIC ---
-        for (let i = 0; i < sphereParticles.length; i++) {
-            const data = sphereParticles[i];
+        // --- INNER CUBE PARTICLES LOGIC ---
+        for (let i = 0; i < innerCubeParticles.length; i++) {
+            const data = innerCubeParticles[i];
             const dist = data.currentPos.distanceTo(target);
 
             if (CONFIG.animationMode === 'repulsion') {
-                // --- SPHERE REPULSION ---
+                // --- INNER CUBE REPULSION ---
                 if (dist < CONFIG.repulsionRadius) {
                     const force = new THREE.Vector3().subVectors(data.currentPos, target);
                     if (force.length() > 0) {
@@ -1271,7 +1536,7 @@ function animate() {
                 data.currentPos.add(data.velocity);
 
             } else if (CONFIG.animationMode === 'grid') {
-                // Sphere Grid Mode (Mirroring Cubes)
+                // Inner Cube Grid Mode (Mirroring Cubes)
                 const speed = mouseVelocity.length();
                 const dynamicRadius = 0.3 + Math.min(speed * 0.02, 1.0);
                 const displacementScale = 0.05 + Math.min(speed * 0.01, 0.2);
@@ -1307,7 +1572,7 @@ function animate() {
 
                         const lerpSpeed = 10.0 * delta;
                         data.currentPos.lerp(targetStep.pos, lerpSpeed);
-                        // Spheres don't visually rotate much, but let's do it for consistency
+                        // Inner cubes don't visually rotate much, but let's do it for consistency
 
                         if (time > data.stepStartTime + stepDuration) {
                             data.currentStepIndex++;
@@ -1322,7 +1587,7 @@ function animate() {
                 }
 
             } else {
-                // --- SPHERE SCATTER ---
+                // --- INNER CUBE SCATTER ---
                 if (dist < 1.5 && mouseVelocity.length() > 2) {
                     data.isFlying = true;
                     // Reduced Power (0.001 vs 0.002)
@@ -1360,15 +1625,15 @@ function animate() {
             dummy.rotation.set(0, 0, 0);
             dummy.scale.setScalar(1);
             dummy.updateMatrix();
-            sphereInstancedMesh.setMatrixAt(data.meshIndex, dummy.matrix);
+            innerCubeInstancedMesh.setMatrixAt(data.meshIndex, dummy.matrix);
         }
 
         Object.values(meshRegistry).forEach(entry => {
             if (entry.top) entry.top.instanceMatrix.needsUpdate = true;
             if (entry.kek) entry.kek.instanceMatrix.needsUpdate = true;
         });
-        if (sphereInstancedMesh) {
-            sphereInstancedMesh.instanceMatrix.needsUpdate = true;
+        if (innerCubeInstancedMesh) {
+            innerCubeInstancedMesh.instanceMatrix.needsUpdate = true;
         }
     }
 
@@ -1380,6 +1645,7 @@ function animate() {
 }
 
 function onTouchStart(event) {
+    lastInteractionTime = Date.now();
     if (isFreeCam) return;
     if (event.touches.length > 0) {
         if (event.target === renderer.domElement) {
@@ -1432,4 +1698,21 @@ function onTouchEnd(event) {
     // Reset mouse offscreen
     mouse.x = -1000;
     mouse.y = -1000;
+}
+
+function onWheel(event) {
+    lastInteractionTime = Date.now();
+    if (isFreeCam) return;
+
+    // Prevent default scrolling of the page
+    event.preventDefault();
+
+    // Disable cinematic mode to take control
+    isCinematic = false;
+
+    // Apply zoom
+    targetCameraRadius += event.deltaY * CONFIG.zoomSensitivity;
+
+    // Clamp
+    targetCameraRadius = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, targetCameraRadius));
 }
