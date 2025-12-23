@@ -67,3 +67,38 @@ body {
     pointer-events: none;
     z-index: 99;
 }
+
+#mobile-letters-container {
+    position: absolute;
+    bottom: 80px;
+    /* Above the mode buttons */
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    z-index: 100;
+}
+
+.letter-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-family: sans-serif;
+    font-size: 16px;
+    font-weight: bold;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.letter-btn:active,
+.letter-btn:hover {
+    background: rgba(255, 255, 255, 0.8);
+    color: black;
+    border-color: white;
+}

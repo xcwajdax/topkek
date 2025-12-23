@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
@@ -92,17 +93,21 @@ const CONFIG = {
 
 // State
 let scene, camera, renderer, composer, crtPass;
-let instancedMesh, sphereInstancedMesh;
+let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
+let sphereInstancedMesh;
 let dummy = new THREE.Object3D();
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2(-1000, -1000); // Start off-screen
 let cubeGroups = []; // Stores rigid body groups
 let sphereParticles = []; // Stores individual sphere particles
+let defaultBoxMaterial, glassMaterial, goldMaterial;
+let isAlternateMaterial = false;
 let debugMesh; // Visual debug cursor
 let mouseVelocity = new THREE.Vector3();
 let lastMousePos = new THREE.Vector2();
 let lastMouseTime = 0;
 let lastTarget = new THREE.Vector3();
+let loadedFont = null; // Store loaded font globally
 
 // Camera Rotation State
 let isDragging = false;
@@ -112,7 +117,45 @@ let cameraAngle = 0;
 let targetCameraAngle = 0; // Target angle for smoothing
 let cameraVerticalAngle = 0;
 let targetCameraVerticalAngle = 0;
+let cameraRadius = 15;
+let targetCameraRadius = 15;
 const MAX_ANGLE = Math.PI / 4; // 45 degrees
+
+// Free Camera State
+let controls;
+let isFreeCam = false;
+
+// Cinematic Camera State
+let isCinematic = true;
+let cinematicSwitchTime = 0;
+const cinematicShots = [
+    // Front Standard
+    { angle: 0, vert: 0, radius: 15, speedMult: 1.0, fov: 45 },
+    // Low Angle Wide - Heroic
+    { angle: 0.5, vert: -0.5, radius: 10, speedMult: 1.0, fov: 60 },
+    // High Angle Tight - Surveillance
+    { angle: -0.4, vert: 0.8, radius: 18, speedMult: 0.8, fov: 35 },
+    // Side Profile Left
+    { angle: 1.4, vert: 0, radius: 12, speedMult: 1.2, fov: 50 },
+    // Side Profile Right
+    { angle: -1.4, vert: 0.1, radius: 13, speedMult: 1.2, fov: 48 },
+    // Close Detail Focus
+    { angle: 0.2, vert: 0.1, radius: 7, speedMult: 0.8, fov: 40 },
+    // Extreme Wide - Fish eye look
+    { angle: 0, vert: 0.2, radius: 8, speedMult: 0.5, fov: 95 },
+    // Telephoto Compression - Far away but zoomed
+    { angle: 0.8, vert: 0.2, radius: 35, speedMult: 6.0, fov: 15 },
+    // Dynamic Low
+    { angle: -0.8, vert: -0.4, radius: 11, speedMult: 2.5, fov: 55 },
+    // Almost Top Down
+    { angle: 0.1, vert: 1.3, radius: 16, speedMult: 0.2, fov: 45 },
+    // Steep Fast Angle
+    { angle: -0.8, vert: 0.9, radius: 14, speedMult: 3.0, fov: 45 },
+    // Slight offset
+    { angle: 0.2, vert: -0.2, radius: 13, speedMult: 1.2, fov: 50 }
+];
+let cinematicDollySpeed = 0; // Speed of radius change
+let currentShotSpeedMult = 0.2; // Speed of orbit
 
 // DOM Elements
 const container = document.getElementById('canvas-container');
@@ -141,6 +184,12 @@ function init() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+
+    // Orbit Controls (Free Cam)
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.enabled = false; // Start disabled
 
     // Post-Processing
     const renderScene = new RenderPass(scene, camera);
@@ -194,6 +243,7 @@ function init() {
     // 5. Load Font and Generate Text
     const loader = new FontLoader();
     loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json', function (font) {
+        loadedFont = font;
         generateParticles(font);
         loading.classList.add('hidden');
     });
@@ -203,6 +253,17 @@ function init() {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            isAlternateMaterial = !isAlternateMaterial;
+
+            // Iterate over registry to update materials
+            Object.values(meshRegistry).forEach(entry => {
+                if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
+                if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
+            });
+        }
+    });
 
     // Touch Events
     window.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -236,12 +297,81 @@ function createUI() {
     ui.appendChild(btn3);
     document.body.appendChild(ui);
 
+    // Camera UI
+    const camUI = document.createElement('div');
+    camUI.id = 'camera-ui-container';
+    camUI.style.position = 'absolute';
+    camUI.style.top = '20px';
+    camUI.style.left = '50%';
+    camUI.style.transform = 'translateX(-50%)';
+    camUI.style.display = 'flex';
+    camUI.style.gap = '10px';
+    camUI.style.zIndex = '100';
+
+    const btnDynamic = document.createElement('button');
+    btnDynamic.className = 'mode-btn active';
+    btnDynamic.innerText = 'Dynamic Cam';
+    btnDynamic.onclick = () => setCameraMode('dynamic', btnDynamic, btnFree);
+
+    const btnFree = document.createElement('button');
+    btnFree.className = 'mode-btn';
+    btnFree.innerText = 'Free Cam';
+    btnFree.onclick = () => setCameraMode('free', btnFree, btnDynamic);
+
+    camUI.appendChild(btnDynamic);
+    camUI.appendChild(btnFree);
+    document.body.appendChild(camUI);
+
     if (isMobile) {
         const info = document.createElement('div');
         info.className = 'mobile-info';
         info.innerText = 'Check out on Pc/MAC';
         document.body.appendChild(info);
+
+        // Letter selection UI
+        const letterContainer = document.createElement('div');
+        letterContainer.id = 'mobile-letters-container';
+
+        ['T', 'O', 'P', 'K', 'E', 'K'].forEach(letter => {
+            const btn = document.createElement('button');
+            btn.className = 'letter-btn';
+            btn.innerText = letter;
+            btn.onclick = () => updateText(letter);
+            letterContainer.appendChild(btn);
+        });
+
+        document.body.appendChild(letterContainer);
     }
+}
+
+function updateText(newText) {
+    if (!loadedFont) return;
+
+    // Cleanup existing
+    Object.values(meshRegistry).forEach(entry => {
+        if (entry.top) {
+            scene.remove(entry.top);
+            entry.top.geometry.dispose();
+        }
+        if (entry.kek) {
+            scene.remove(entry.kek);
+            entry.kek.geometry.dispose();
+        }
+    });
+    meshRegistry = {};
+
+    if (sphereInstancedMesh) {
+        scene.remove(sphereInstancedMesh);
+        sphereInstancedMesh.geometry.dispose();
+        sphereInstancedMesh.material.dispose();
+    }
+
+    // Reset arrays
+    cubeGroups = [];
+    sphereParticles = [];
+
+    CONFIG.text = newText;
+    generateParticles(loadedFont);
 }
 
 function setMode(mode, activeBtn, inactiveBtns) {
@@ -252,6 +382,40 @@ function setMode(mode, activeBtn, inactiveBtns) {
     } else {
         inactiveBtns.classList.remove('active');
     }
+}
+
+function setCameraMode(mode, activeBtn, inactiveBtn) {
+    if (mode === 'free') {
+        isFreeCam = true;
+        controls.enabled = true;
+        isCinematic = false;
+        isDragging = false; // Stop any custom dragging
+    } else {
+        isFreeCam = false;
+        controls.enabled = false;
+        isCinematic = true;
+
+        // Sync internal state to current camera position (prevent jump)
+        const pos = camera.position;
+        cameraRadius = pos.length();
+        // Avoid division by zero
+        if (cameraRadius > 0.1) {
+            cameraVerticalAngle = Math.asin(pos.y / cameraRadius);
+        } else {
+            cameraVerticalAngle = 0;
+        }
+        cameraAngle = Math.atan2(pos.x, pos.z);
+
+        // Update targets to match
+        targetCameraAngle = cameraAngle;
+        targetCameraVerticalAngle = cameraVerticalAngle;
+        targetCameraRadius = cameraRadius;
+
+        cinematicSwitchTime = Date.now() + 5000; // Delay next cut
+    }
+
+    activeBtn.classList.add('active');
+    inactiveBtn.classList.remove('active');
 }
 
 // Helper to generate a robotic path that reconstructs the position
@@ -333,12 +497,15 @@ function generateReturnPath(startPos, startRot, endPos) {
 }
 
 function onMouseDown(event) {
+    if (isFreeCam) return;
     isDragging = true;
+    isCinematic = false; // Disable cinematic mode on interaction
     previousMouseX = event.clientX;
     previousMouseY = event.clientY;
 }
 
 function onMouseUp(event) {
+    if (isFreeCam) return;
     isDragging = false;
 }
 
@@ -386,37 +553,38 @@ function generateParticles(font) {
     const sampler = new MeshSurfaceSampler(mesh).build();
 
     // --- CUBES (Shell) ---
-    const targetCubeCount = CONFIG.targetCubeCount;
+    // Initialize Materials
+    if (!defaultBoxMaterial) {
+        defaultBoxMaterial = new THREE.MeshStandardMaterial({
+            color: 0x0FFFF0,
+            roughness: 0.5,
+            metalness: 0.4,
+            envMapIntensity: 0.2
+        });
+    }
 
-    // Restore Bevel: size, size, size, segments, radius
-    const boxGeo = new RoundedBoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize, 2, CONFIG.particleSize * 0.05);
-    const boxMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.5, // Increased roughness (was 0.1)
-        metalness: 0.4,
-        envMapIntensity: 0.02
-    });
+    if (!glassMaterial) {
+        glassMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            metalness: 0.1,
+            roughness: 0.05,
+            transmission: 1.0, // Glass
+            thickness: 1.0,
+            envMapIntensity: 1.0,
+            ior: 1.5,
+            transparent: true,
+            opacity: 1.0
+        });
+    }
 
-    instancedMesh = new THREE.InstancedMesh(boxGeo, boxMat, targetCubeCount);
-    instancedMesh.castShadow = true;
-    instancedMesh.receiveShadow = true;
-
-    // --- SPHERES (Core) ---
-    const sphereCount = 2000;
-    const sphereGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1); // Changed to Box, no bevel
-    const sphereMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0,
-        metalness: 0,
-        emissiveIntensity: 0.01 // Glow!
-    });
-
-    sphereInstancedMesh = new THREE.InstancedMesh(sphereGeo, sphereMat, sphereCount);
-    sphereInstancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(sphereCount * 3), 3);
-
-    const tempPosition = new THREE.Vector3();
-    const tempNormal = new THREE.Vector3();
-    const color = new THREE.Color();
+    if (!goldMaterial) {
+        goldMaterial = new THREE.MeshStandardMaterial({
+            color: 0xFFD700,
+            metalness: 1.0,
+            roughness: 0.15,
+            envMapIntensity: 1.0
+        });
+    }
 
     cubeGroups = [];
     sphereParticles = [];
@@ -424,27 +592,70 @@ function generateParticles(font) {
     // --- VOXEL COLLECTION FOR CUBES ---
     const voxelMap = new Map(); // Key: "x,y,z", Value: { gx, gy, gz, x, y, z, visited }
 
-    // Saturation loop: keep trying until we fail to find new spots consistently
-    let consecutiveFailures = 0;
-    const maxFailures = 2000; // Stop if we can't find a new spot after this many tries
+    // --- PIXEL ART FRONT LAYER SCAN ---
+    const scanSize = CONFIG.particleSize;
 
-    // We loop safe max times, but rely on failures to break early
+    // Calculate grid bounds
+    const minGx = Math.floor(minX / scanSize);
+    const maxGx = Math.ceil(maxX / scanSize);
+    const minGy = Math.floor(geometry.boundingBox.min.y / scanSize);
+    const maxGy = Math.ceil(geometry.boundingBox.max.y / scanSize);
+
+    const scanRaycaster = new THREE.Raycaster();
+    const scanDir = new THREE.Vector3(0, 0, -1); // Raycast backward towards text
+
+    for (let gx = minGx; gx <= maxGx; gx++) {
+        for (let gy = minGy; gy <= maxGy; gy++) {
+            const scanX = gx * scanSize;
+            const scanY = gy * scanSize;
+
+            // Raycast from in front of the text
+            scanRaycaster.set(new THREE.Vector3(scanX, scanY, 20), scanDir);
+            const intersects = scanRaycaster.intersectObject(mesh);
+
+            if (intersects.length > 0) {
+                const frontHit = intersects[0];
+                const point = frontHit.point;
+                if (point.z > 0) {
+                    const gz = Math.round(point.z / scanSize);
+                    const key = `${gx},${gy},${gz}`;
+                    if (!voxelMap.has(key)) {
+                        voxelMap.set(key, {
+                            gx, gy, gz,
+                            x: gx * scanSize,
+                            y: gy * scanSize,
+                            z: gz * scanSize,
+                            normal: new THREE.Vector3(0, 0, 1), // Front facing
+                            visited: false
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Saturation loop
+    const tempPosition = new THREE.Vector3();
+    const tempNormal = new THREE.Vector3();
+    let consecutiveFailures = 0;
+    const maxFailures = 2000;
+    const targetCubeCount = CONFIG.targetCubeCount; // Target for saturation
+
     for (let i = 0; i < targetCubeCount * 20; i++) {
         sampler.sample(tempPosition, tempNormal);
 
-        // Helper to add voxel
-        const tryAddVoxel = (pX, pY, pZ) => {
+        const tryAddVoxel = (pX, pY, pZ, pNormal) => {
             const gx = Math.round(pX / CONFIG.particleSize);
             const gy = Math.round(pY / CONFIG.particleSize);
             const gz = Math.round(pZ / CONFIG.particleSize);
             const key = `${gx},${gy},${gz}`;
-
             if (!voxelMap.has(key)) {
                 voxelMap.set(key, {
                     gx, gy, gz,
                     x: gx * CONFIG.particleSize,
                     y: gy * CONFIG.particleSize,
                     z: gz * CONFIG.particleSize,
+                    normal: pNormal ? pNormal.clone() : new THREE.Vector3(0, 1, 0),
                     visited: false
                 });
                 return true;
@@ -452,22 +663,16 @@ function generateParticles(font) {
             return false;
         };
 
-        let added = tryAddVoxel(tempPosition.x, tempPosition.y, tempPosition.z);
+        let added = tryAddVoxel(tempPosition.x, tempPosition.y, tempPosition.z, tempNormal);
 
-        // Wall Extrusion (Noise Pattern)
-        // Check if normal is roughly horizontal (small Z component)
         if (Math.abs(tempNormal.z) < 0.5) {
-            // Noise pattern based on grid coordinates
             const gx = Math.round(tempPosition.x / CONFIG.particleSize);
             const gy = Math.round(tempPosition.y / CONFIG.particleSize);
-
-            // Simple deterministic noise (adjust freq for pattern scale)
             const noise = Math.sin(gx * 0.45) * Math.cos(gy * 0.45);
 
-            if (noise > 0.1) { // Threshold
-                // Extrude outward
+            if (noise > 0.1) {
                 const extPos = tempPosition.clone().addScaledVector(tempNormal, CONFIG.particleSize);
-                if (tryAddVoxel(extPos.x, extPos.y, extPos.z)) {
+                if (tryAddVoxel(extPos.x, extPos.y, extPos.z, tempNormal)) {
                     added = true;
                 }
             }
@@ -479,33 +684,36 @@ function generateParticles(font) {
         } else {
             consecutiveFailures++;
         }
-
-        if (consecutiveFailures > maxFailures) break; // We handled the surface
+        if (consecutiveFailures > maxFailures) break;
     }
 
     // --- GROUPING ALGORITHM ---
-    const shapes = [
-        { w: 2, h: 2, offsets: [[0, 0], [1, 0], [0, 1], [1, 1]] },
-        { w: 3, h: 1, offsets: [[0, 0], [1, 0], [2, 0]] },
-        { w: 1, h: 3, offsets: [[0, 0], [0, 1], [0, 2]] },
-        { w: 2, h: 1, offsets: [[0, 0], [1, 0]] },
-        { w: 1, h: 2, offsets: [[0, 0], [0, 1]] },
-        { w: 1, h: 1, offsets: [[0, 0]] }
+    const shapeDefinitions = [
+        { id: '2x2', w: 2, h: 2, d: 1, offsets: [[0, 0], [1, 0], [0, 1], [1, 1]] },
+        { id: '3x1', w: 3, h: 1, d: 1, offsets: [[0, 0], [1, 0], [2, 0]] },
+        { id: '1x3', w: 1, h: 3, d: 1, offsets: [[0, 0], [0, 1], [0, 2]] },
+        { id: '2x1', w: 2, h: 1, d: 1, offsets: [[0, 0], [1, 0]] },
+        { id: '1x2', w: 1, h: 2, d: 1, offsets: [[0, 0], [0, 1]] },
+        { id: '1x1', w: 1, h: 1, d: 1, offsets: [[0, 0]] }
     ];
 
-    let meshIndex = 0;
     const voxels = Array.from(voxelMap.values());
-
-    // Shuffle voxels to avoid directional bias
+    // Shuffle voxels
     for (let i = voxels.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [voxels[i], voxels[j]] = [voxels[j], voxels[i]];
     }
 
+    const proposedGroups = []; // { shapeId: '2x2', centroid: Vector3, isTop: boolean }
+    const groupCounts = {}; // { '2x2': { top: 0, kek: 0 } }
+
+    // Init counts
+    shapeDefinitions.forEach(s => groupCounts[s.id] = { top: 0, kek: 0 });
+
     for (const startVoxel of voxels) {
         if (startVoxel.visited) continue;
 
-        for (const shape of shapes) {
+        for (const shape of shapeDefinitions) {
             const shapeVoxels = [];
             let fits = true;
 
@@ -521,97 +729,124 @@ function generateParticles(font) {
             }
 
             if (fits) {
+                // Mark visited
+                shapeVoxels.forEach(v => v.visited = true);
+
                 // Determine Center
                 const centroid = new THREE.Vector3();
-                shapeVoxels.forEach(v => centroid.add(new THREE.Vector3(v.x, v.y, v.z)));
-                centroid.divideScalar(shapeVoxels.length);
-
-                // Initialize Group Object
-                const group = {
-                    originalPos: centroid.clone(),
-                    currentPos: centroid.clone(),
-                    // Physics State
-                    velocity: new THREE.Vector3(0, 0, 0),
-                    angularVelocity: new THREE.Vector3(0, 0, 0),
-                    rotation: new THREE.Quaternion(),
-                    isFlying: false,
-                    returnStartTime: 0,
-                    freezeTime: 0,
-                    // Existing props
-                    returnSpeed: CONFIG.returnSpeed * (0.5 + Math.random()),
-                    returnDelay: Math.random() * 2.0 + 0.5, // Random delay between 0.5s and 2.5s
-                    wobbleFreq: Math.random() * 0.1,
-                    wobbleAmp: Math.random() * 0.05,
-                    particles: [],
-                    // Grid Mode State
-                    // Grid Mode State
-                    // No pre-calc needed for local glitch
-                    gridState: 'IDLE',
-                    returnQueue: [],
-                    currentStepIndex: 0,
-                    stepStartTime: 0,
-                    glitchTarget: new THREE.Vector3(), // Target for fly-out
-                };
-                // Add Particles
-
-                // Add Particles
+                const normalSum = new THREE.Vector3();
                 shapeVoxels.forEach(v => {
-                    v.visited = true;
+                    centroid.add(new THREE.Vector3(v.x, v.y, v.z));
+                    if (v.normal) normalSum.add(v.normal);
+                });
+                centroid.divideScalar(shapeVoxels.length);
+                normalSum.normalize();
 
-                    const pos = new THREE.Vector3(v.x, v.y, v.z);
-                    const localOffset = new THREE.Vector3().subVectors(pos, centroid);
+                const isTop = startVoxel.x < 0; // Use start voxel to determine side
 
-                    dummy.position.copy(pos);
-                    dummy.scale.setScalar(1);
-                    dummy.rotation.set(0, 0, 0);
-                    dummy.updateMatrix();
-                    instancedMesh.setMatrixAt(meshIndex, dummy.matrix);
-
-                    group.particles.push({
-                        meshIndex: meshIndex,
-                        localOffset: localOffset
-                    });
-                    meshIndex++;
+                proposedGroups.push({
+                    shapeId: shape.id,
+                    centroid: centroid,
+                    originalPos: centroid.clone(),
+                    normal: normalSum,
+                    isTop: isTop
                 });
 
-                cubeGroups.push(group);
-                break; // Move to next unvisited voxel
+                if (isTop) groupCounts[shape.id].top++;
+                else groupCounts[shape.id].kek++;
+
+                break; // Shape found, move to next voxel
             }
         }
     }
 
-    CONFIG.cubeCount = meshIndex;
-    instancedMesh.count = meshIndex;
+    // --- MESH INITIALIZATION ---
+    meshRegistry = {};
+    const baseSize = CONFIG.particleSize;
 
-    // GENERATE SPHERES (Inside)
-    let sIdx = 0;
-    for (let i = 0; i < sphereCount; i++) {
-        sampler.sample(tempPosition, tempNormal);
+    shapeDefinitions.forEach(shape => {
+        // Create fused geometry
+        // Note: scaling dimensions. 
+        // For a 2x1 group, width is 2*size.
+        // We use RoundedBoxGeometry to get the bevels around the FUSED shape.
+        const geoW = shape.w * baseSize;
+        const geoH = shape.h * baseSize;
+        const geoD = shape.d * baseSize;
 
-        // Push particles inward from "skin" to "core"
-        // This moves them away from the outer edges (X/Y)
-        const innerOffset = 0.3;
-        tempPosition.addScaledVector(tempNormal, -innerOffset);
+        // Bevel radius: 0.05 * size (same as original proportion)
+        const radius = baseSize * 0.05;
 
-        // Randomize Z distribution to fill the volume
-        // Text height is 0.5, so [-0.25, 0.25] is the core.
-        // User increased range to 1.2
-        tempPosition.z = (Math.random() - 0.5) * 1.2;
+        const geometry = new RoundedBoxGeometry(geoW, geoH, geoD, 2, radius);
 
-        dummy.position.copy(tempPosition);
-        dummy.scale.setScalar(1);
+        // Create Meshes if count > 0
+        const entry = {};
+
+        if (groupCounts[shape.id].top > 0) {
+            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? glassMaterial : defaultBoxMaterial, groupCounts[shape.id].top);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            entry.top = mesh;
+            entry.topIndex = 0; // Counter for filling
+            scene.add(mesh);
+        }
+
+        if (groupCounts[shape.id].kek > 0) {
+            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? goldMaterial : defaultBoxMaterial, groupCounts[shape.id].kek);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            entry.kek = mesh;
+            entry.kekIndex = 0;
+            scene.add(mesh);
+        }
+
+        meshRegistry[shape.id] = entry;
+    });
+
+    // --- POPULATE MESHES ---
+    proposedGroups.forEach(groupProps => {
+        const { shapeId, centroid, isTop, normal } = groupProps;
+        const entry = meshRegistry[shapeId];
+        const mesh = isTop ? entry.top : entry.kek;
+        const index = isTop ? entry.topIndex++ : entry.kekIndex++;
+
+        // Determine Scale based on Normal
+        // We want a random scale > 1.0 to ensure overlap
+        const scaleMag = 1.0 + Math.random() * 1; // 1.0 to 1.5
+        const scaleVec = new THREE.Vector3(1, 1, 1);
+
+        const absX = Math.abs(normal.x);
+        const absY = Math.abs(normal.y);
+        const absZ = Math.abs(normal.z);
+
+        if (absZ > absX && absZ > absY) {
+            // Front/Back -> Scale Z
+            scaleVec.z = scaleMag;
+        } else if (absY > absX && absY > absZ) {
+            // Top/Bottom -> Scale Y
+            scaleVec.y = scaleMag;
+        } else {
+            // Side -> Scale X
+            scaleVec.x = scaleMag;
+        }
+
+        // Set initial matrix
+        dummy.position.copy(centroid);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.copy(scaleVec);
         dummy.updateMatrix();
-        sphereInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
+        mesh.setMatrixAt(index, dummy.matrix);
 
-        // Rainbow Color based on X
-        const hue = (tempPosition.x - minX) / textWidth;
-        color.setHSL(hue, 1.0, 0.5);
-        sphereInstancedMesh.setColorAt(sIdx, color);
+        // Create Group Logic Object
+        const groupLogic = {
+            originalPos: centroid.clone(),
+            currentPos: centroid.clone(),
+            baseScale: scaleVec,
 
-        sphereParticles.push({
-            meshIndex: sIdx, // Index within sphereInstancedMesh
-            originalPos: tempPosition.clone(),
-            currentPos: tempPosition.clone(),
+            // Rendering Links
+            shapeId: shapeId,
+            isTop: isTop,
+            meshIndex: index,
+
             // Physics State
             velocity: new THREE.Vector3(0, 0, 0),
             angularVelocity: new THREE.Vector3(0, 0, 0),
@@ -619,7 +854,7 @@ function generateParticles(font) {
             isFlying: false,
             returnStartTime: 0,
             freezeTime: 0,
-            // Existing
+            // Props
             returnSpeed: CONFIG.returnSpeed * (0.5 + Math.random()),
             wobbleFreq: Math.random() * 0.1,
             wobbleAmp: Math.random() * 0.05,
@@ -630,18 +865,61 @@ function generateParticles(font) {
             currentStepIndex: 0,
             stepStartTime: 0,
             glitchTarget: new THREE.Vector3(),
-        });
+        };
 
+        cubeGroups.push(groupLogic);
+    });
+
+    // --- SPHERES (Core) ---
+    const sphereCount = 2000;
+    const sphereGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
+    const sphereMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0,
+        metalness: 0,
+        emissiveIntensity: 0.01
+    });
+
+    sphereInstancedMesh = new THREE.InstancedMesh(sphereGeo, sphereMat, sphereCount);
+    const color = new THREE.Color();
+    let sIdx = 0;
+
+    for (let i = 0; i < sphereCount; i++) {
+        sampler.sample(tempPosition, tempNormal);
+        const innerOffset = 0.3;
+        tempPosition.addScaledVector(tempNormal, -innerOffset);
+        tempPosition.z = (Math.random() - 0.5) * 1.2;
+
+        dummy.position.copy(tempPosition);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        sphereInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
+
+        const hue = (tempPosition.x - minX) / textWidth;
+        color.setHSL(hue, 1.0, 0.5);
+        sphereInstancedMesh.setColorAt(sIdx, color);
+
+        sphereParticles.push({
+            meshIndex: sIdx,
+            originalPos: tempPosition.clone(),
+            currentPos: tempPosition.clone(),
+            velocity: new THREE.Vector3(0, 0, 0),
+            angularVelocity: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Quaternion(),
+            isFlying: false,
+            returnStartTime: 0,
+            returnSpeed: CONFIG.returnSpeed,
+            gridState: 'IDLE',
+            returnQueue: [],
+            currentStepIndex: 0,
+            stepStartTime: 0,
+            glitchTarget: new THREE.Vector3()
+        });
         sIdx++;
     }
-
     sphereInstancedMesh.count = sIdx;
-
-    instancedMesh.instanceMatrix.needsUpdate = true;
     sphereInstancedMesh.instanceMatrix.needsUpdate = true;
     if (sphereInstancedMesh.instanceColor) sphereInstancedMesh.instanceColor.needsUpdate = true;
-
-    scene.add(instancedMesh);
     scene.add(sphereInstancedMesh);
 }
 
@@ -653,7 +931,7 @@ function onMouseMove(event) {
     }
 
     // Handle Camera Rotation
-    if (isDragging) {
+    if (isDragging && !isFreeCam) {
         const deltaX = event.clientX - previousMouseX;
         const deltaY = event.clientY - previousMouseY;
 
@@ -684,20 +962,70 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
 
-    // Smooth Camera Rotation
-    cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
-    cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
+    if (isFreeCam && controls) {
+        controls.update();
+    } else {
+        // Cinematic Mode Logic
+        if (isCinematic) {
+            const now = Date.now();
+            if (now > cinematicSwitchTime) {
+                // Switch Shot
+                const shot = cinematicShots[Math.floor(Math.random() * cinematicShots.length)];
 
-    const radius = 15;
-    const horizontalRadius = radius * Math.cos(cameraVerticalAngle);
+                // Set targets
+                targetCameraAngle = shot.angle;
+                targetCameraVerticalAngle = shot.vert;
+                targetCameraRadius = shot.radius;
+                currentShotSpeedMult = shot.speedMult || 1.0;
 
-    camera.position.x = Math.sin(cameraAngle) * horizontalRadius;
-    camera.position.z = Math.cos(cameraAngle) * horizontalRadius;
-    camera.position.y = Math.sin(cameraVerticalAngle) * radius;
+                // Instant cut for cinematic feel
+                cameraAngle = targetCameraAngle;
+                cameraVerticalAngle = targetCameraVerticalAngle;
+                cameraRadius = targetCameraRadius;
 
-    camera.lookAt(0, 0, 0);
+                // Apply FOV Change
+                if (shot.fov) {
+                    camera.fov = shot.fov;
+                    camera.updateProjectionMatrix();
+                }
 
-    if (instancedMesh) {
+                // Set next duration (7-10s)
+                cinematicSwitchTime = now + (7000 + Math.random() * 3000);
+
+                // Random Dolly Speed (Move in or out)
+                // Speed: +/- 0.01 to 0.03 per frame roughly
+                cinematicDollySpeed = (Math.random() - 0.5) * 0.04;
+            }
+
+            // Slow cinematic drift (modified by speedMult)
+            cameraAngle += 0.0002 * currentShotSpeedMult * Math.sin(now * 0.001);
+            cameraVerticalAngle += 0.0001 * currentShotSpeedMult * Math.cos(now * 0.001);
+
+            // Dolly movement
+            cameraRadius += cinematicDollySpeed;
+
+            // Sync targets to current drift so no jump on exit
+            targetCameraAngle = cameraAngle;
+            targetCameraVerticalAngle = cameraVerticalAngle;
+            targetCameraRadius = cameraRadius;
+
+        } else {
+            // Smooth Camera Rotation (User Control)
+            cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
+            cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
+            cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+        }
+
+        const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
+
+        camera.position.x = Math.sin(cameraAngle) * horizontalRadius;
+        camera.position.z = Math.cos(cameraAngle) * horizontalRadius;
+        camera.position.y = Math.sin(cameraVerticalAngle) * cameraRadius;
+
+        camera.lookAt(0, 0, 0);
+    }
+
+    if (Object.keys(meshRegistry).length > 0) {
         raycaster.setFromCamera(mouse, camera);
 
         const target = new THREE.Vector3();
@@ -903,22 +1231,19 @@ function animate() {
                 finalQuat = group.rotation;
             }
 
-            const dummyPos = new THREE.Vector3();
-            // Scaling? Standard (1,1,1)
-            const dummyScale = new THREE.Vector3(1, 1, 1);
+            // Update Single Fused Mesh Instance
+            dummy.position.copy(group.currentPos);
+            dummy.rotation.setFromQuaternion(finalQuat);
+            dummy.scale.copy(group.baseScale);
+            dummy.updateMatrix();
 
-            for (const p of group.particles) {
-                // Apply rotation to local offset
-                const rotatedOffset = p.localOffset.clone().applyQuaternion(finalQuat);
-                dummyPos.addVectors(group.currentPos, rotatedOffset);
-
-                dummy.position.copy(dummyPos);
-                dummy.rotation.setFromQuaternion(finalQuat);
-                dummy.scale.copy(dummyScale);
-
-                dummy.updateMatrix();
-
-                instancedMesh.setMatrixAt(p.meshIndex, dummy.matrix);
+            // Find the correct mesh
+            const entry = meshRegistry[group.shapeId];
+            if (entry) {
+                const targetMesh = group.isTop ? entry.top : entry.kek;
+                if (targetMesh) {
+                    targetMesh.setMatrixAt(group.meshIndex, dummy.matrix);
+                }
             }
         }
 
@@ -1038,7 +1363,10 @@ function animate() {
             sphereInstancedMesh.setMatrixAt(data.meshIndex, dummy.matrix);
         }
 
-        if (instancedMesh) instancedMesh.instanceMatrix.needsUpdate = true;
+        Object.values(meshRegistry).forEach(entry => {
+            if (entry.top) entry.top.instanceMatrix.needsUpdate = true;
+            if (entry.kek) entry.kek.instanceMatrix.needsUpdate = true;
+        });
         if (sphereInstancedMesh) {
             sphereInstancedMesh.instanceMatrix.needsUpdate = true;
         }
@@ -1052,12 +1380,14 @@ function animate() {
 }
 
 function onTouchStart(event) {
+    if (isFreeCam) return;
     if (event.touches.length > 0) {
         if (event.target === renderer.domElement) {
             event.preventDefault();
         }
 
         isDragging = true;
+        isCinematic = false; // Disable cinematic mode on touch
         previousMouseX = event.touches[0].clientX;
         previousMouseY = event.touches[0].clientY;
 
@@ -1080,7 +1410,7 @@ function onTouchMove(event) {
         mouse.x = (clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(clientY / window.innerHeight) * 2 + 1;
 
-        if (isDragging) {
+        if (isDragging && !isFreeCam) {
             const deltaX = clientX - previousMouseX;
             const deltaY = clientY - previousMouseY;
 
