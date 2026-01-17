@@ -1791,6 +1791,13 @@ function onWheel(event) {
     lastInteractionTime = Date.now();
     if (isFreeCam) return;
 
+    // Check if Glitch Lab modal is open
+    const glitchModal = document.getElementById('glitch-modal');
+    if (glitchModal && !glitchModal.classList.contains('hidden')) {
+        // Allow default scrolling for the modal
+        return;
+    }
+
     // Prevent default scrolling of the page
     event.preventDefault();
 
@@ -1803,4 +1810,3 @@ function onWheel(event) {
     // Clamp
     targetCameraRadius = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, targetCameraRadius));
 }
-

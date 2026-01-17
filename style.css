@@ -300,6 +300,8 @@ body {
     flex-direction: column;
     position: relative;
     box-shadow: 0 0 15px rgba(76, 175, 80, 0.2);
+    overflow-y: auto;
+    /* Allow whole modal to scroll */
 }
 
 
@@ -335,15 +337,16 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    /* Hide overflow of container */
+    /* overflow: hidden; REMOVED to allow parent scroll */
     padding: 20px;
     gap: 20px;
 }
 
 #glitch-img-container {
-    height: 60%;
-    /* Increased from 40% */
+    height: 400px;
+    /* Fixed height instead of percentage */
+    flex-shrink: 0;
+    /* Prevent shrinking */
     width: 100%;
     overflow: hidden;
     border: 1px solid #222;
@@ -390,9 +393,9 @@ body {
 }
 
 #glitch-text-container {
-    height: 40%;
-    /* Decreased from 60% */
-    overflow-y: auto;
+    /* height: 40%; REMOVED */
+    /* overflow-y: auto; REMOVED */
+    color: #ccc;
     color: #ccc;
     font-size: 14px;
     line-height: 1.5;
