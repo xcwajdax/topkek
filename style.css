@@ -300,8 +300,8 @@ body {
     flex-direction: column;
     position: relative;
     box-shadow: 0 0 15px rgba(76, 175, 80, 0.2);
-    overflow-y: auto;
-    /* Allow whole modal to scroll */
+    /* overflow-y: auto; REMOVED to keep header fixed */
+    overflow: hidden;
 }
 
 
@@ -337,9 +337,32 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    /* overflow: hidden; REMOVED to allow parent scroll */
+    overflow-y: auto;
+    /* Enable internal scrolling */
     padding: 20px;
     gap: 20px;
+
+    /* Custom Scrollbar for Glitch Body */
+    scrollbar-width: thin;
+    scrollbar-color: #4CAF50 #111;
+}
+
+#glitch-body::-webkit-scrollbar {
+    width: 10px;
+}
+
+#glitch-body::-webkit-scrollbar-track {
+    background: #111;
+}
+
+#glitch-body::-webkit-scrollbar-thumb {
+    background: #4CAF50;
+    border: 1px solid #111;
+    /* Optional: adds a border to separate from track */
+}
+
+#glitch-body::-webkit-scrollbar-thumb:hover {
+    background: #66BB6A;
 }
 
 #glitch-img-container {
