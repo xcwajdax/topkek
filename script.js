@@ -353,57 +353,111 @@ function createUI() {
     // 1. Production Label (Left)
     const label = document.createElement('div');
     label.className = 'prod-label';
-    label.innerText = 'TOP KEK Productions ® - Handcrafted Games';
-    // Add trademark symbol replacement if needed, but text is fine
-    const tmSpan = document.createElement('sup');
-    tmSpan.innerText = 'R'; // Using 'R' as requested in brackets, or simple text
-    // User asked for "[znaczek R, reserved]", let's use standard ® symbol in text or styled
-    // Let's stick to simple text with the symbol
     label.innerHTML = 'TOP KEK Productions &reg; - Handcrafted Games';
     document.body.appendChild(label);
 
-    // 2. APPSTAIN Button (Right)
-    const btnAppstain = document.createElement('button');
-    btnAppstain.className = 'mode-btn'; // Same style
-    btnAppstain.style.position = 'absolute';
-    btnAppstain.style.bottom = '20px'; // Same level as UI container
-    btnAppstain.style.right = '20px'; // Position right
-    btnAppstain.innerText = 'APPSTAIN';
-    btnAppstain.onclick = () => {
-        document.getElementById('appstain-modal').classList.remove('hidden');
+    // 2. Terminal Menu Logic
+    const termAppstain = document.getElementById('term-appstain');
+    const termGlitch = document.getElementById('term-glitch');
+
+    if (termAppstain) {
+        termAppstain.onclick = () => {
+            document.getElementById('appstain-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termGlitch) {
+        termGlitch.onclick = () => {
+            document.getElementById('glitch-modal').classList.remove('hidden');
+            loadGlitchContent(); // Load content when opened
+        };
+    }
+
+    // 3. APPSTAIN Modal Logic
+    const initAppstainModal = () => {
+        const modal = document.getElementById('appstain-modal');
+        const closeBtn = document.getElementById('appstain-close');
+        const submitBtn = document.getElementById('appstain-submit');
+        const passwordInput = document.getElementById('appstain-password');
+        const errorMsg = document.getElementById('appstain-error');
+
+        closeBtn.onclick = () => {
+            modal.classList.add('hidden');
+            errorMsg.style.display = 'none';
+            passwordInput.value = '';
+        };
+
+        const checkPassword = () => {
+            if (passwordInput.value === CONFIG.appstainPassword) {
+                window.location.href = 'http://xcwajdax.github.io';
+            } else {
+                errorMsg.style.display = 'block';
+                passwordInput.value = ''; // Clear input on error
+            }
+        };
+
+        submitBtn.onclick = checkPassword;
+
+        // Allow Enter key to submit
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                checkPassword();
+            }
+        });
     };
-    document.body.appendChild(btnAppstain);
+    initAppstainModal();
 
-    // 3. Modal Logic
-    const modal = document.getElementById('appstain-modal');
-    const closeBtn = document.getElementById('appstain-close');
-    const submitBtn = document.getElementById('appstain-submit');
-    const passwordInput = document.getElementById('appstain-password');
-    const errorMsg = document.getElementById('appstain-error');
+    // 4. Glitch Lab Modal Logic
+    let currentLang = 'PL'; // Default language
 
-    closeBtn.onclick = () => {
-        modal.classList.add('hidden');
-        errorMsg.style.display = 'none';
-        passwordInput.value = '';
-    };
+    const initGlitchModal = () => {
+        const modal = document.getElementById('glitch-modal');
+        const closeBtn = document.getElementById('glitch-close');
+        const langPl = document.getElementById('lang-pl');
+        const langEng = document.getElementById('lang-eng');
 
-    const checkPassword = () => {
-        if (passwordInput.value === CONFIG.appstainPassword) {
-            window.location.href = 'http://xcwajdax.github.io';
-        } else {
-            errorMsg.style.display = 'block';
-            passwordInput.value = ''; // Clear input on error
+        closeBtn.onclick = () => {
+            modal.classList.add('hidden');
+        };
+
+        langPl.onclick = () => {
+            if (currentLang !== 'PL') {
+                currentLang = 'PL';
+                langPl.classList.add('active');
+                langEng.classList.remove('active');
+                loadGlitchContent();
+            }
+        };
+
+        langEng.onclick = () => {
+            if (currentLang !== 'ENG') {
+                currentLang = 'ENG';
+                langEng.classList.add('active');
+                langPl.classList.remove('active');
+                loadGlitchContent();
+            }
+        };
+
+        // Image Zoom Logic
+        const imgContainer = document.getElementById('glitch-img-container');
+        const viewer = document.getElementById('image-viewer');
+        const fullImg = document.getElementById('full-image');
+
+        if (imgContainer) {
+            const thumb = imgContainer.querySelector('img');
+            thumb.onclick = () => {
+                fullImg.src = thumb.src;
+                viewer.classList.remove('hidden');
+            };
+        }
+
+        if (viewer) {
+            viewer.onclick = () => {
+                viewer.classList.add('hidden');
+            };
         }
     };
-
-    submitBtn.onclick = checkPassword;
-
-    // Allow Enter key to submit
-    passwordInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            checkPassword();
-        }
-    });
+    initGlitchModal();
 
 
     // --- END NEW UI ELEMENTS ---
@@ -427,6 +481,34 @@ function createUI() {
         });
 
         document.body.appendChild(letterContainer);
+    }
+}
+
+// Helper to load and render markdown
+async function loadGlitchContent() {
+    const contentDiv = document.getElementById('glitch-md-content');
+    const filename = currentLang === 'PL' ? 'README_GL_PL.md' : 'README_GL_ENG.md';
+
+    try {
+        const response = await fetch(filename);
+        if (!response.ok) throw new Error('Failed to load file');
+        const text = await response.text();
+
+        // Simple Markdown Parsing
+        // 1. Headers
+        let html = text.replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            // 2. Bold
+            .replace(/\*\*(.*)\*\*/gim, '<b>$1</b>')
+            // 3. Line breaks
+            .replace(/\n/gim, '<br>');
+
+        contentDiv.innerHTML = html;
+
+    } catch (err) {
+        console.error("Error loading README:", err);
+        contentDiv.innerHTML = "Error loading content. Please check the file exists.";
     }
 }
 

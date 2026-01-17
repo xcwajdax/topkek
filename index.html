@@ -30,6 +30,17 @@
         </div>
     </div>
 
+    <!-- TERMINAL MENU (Bottom Right) -->
+    <div id="terminal-menu">
+        <div class="term-line">Under Development</div>
+        <div class="term-line">Games ></div>
+        <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v_0.63.21</div>
+        <div class="term-line">> floppy driver v_0.05.20</div>
+        <div class="term-line">Soft</div>
+        <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
+        <div class="term-line">> Frame Gen v_1.0</div>
+    </div>
+
     <!-- APPSTAIN MODAL -->
     <div id="appstain-modal" class="hidden">
         <div id="appstain-content">
@@ -40,6 +51,42 @@
             <p id="appstain-error" style="color: red; display: none;">Access Denied</p>
             <button id="appstain-close" class="close-btn">X</button>
         </div>
+    </div>
+
+    <!-- GLITCH LAB MODAL -->
+    <div id="glitch-modal" class="hidden">
+        <div id="glitch-content">
+            <button id="glitch-close" class="close-btn">X</button>
+
+            <div id="glitch-header">
+                <div id="lang-toggle">
+                    <span id="lang-pl" class="lang-opt active">PL</span> / <span id="lang-eng"
+                        class="lang-opt">ENG</span>
+                </div>
+            </div>
+
+            <div id="glitch-body">
+                <div id="glitch-img-container">
+                    <img src="GL.jpg" alt="Glitch Lab Preview">
+                </div>
+                <div id="glitch-text-container">
+                    <!-- Markdown content will be injected here -->
+                    <div id="glitch-md-content">Loading...</div>
+                </div>
+            </div>
+
+            <div id="glitch-footer">
+                <a href="https://github.com/xcwajdax/GlitchLabTKEK" target="_blank" id="glitch-repo-btn">
+                    CHECK REPO [GITHUB]
+                </a>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- IMAGE VIEWER -->
+    <div id="image-viewer" class="hidden">
+        <img id="full-image" src="" alt="Full Screen Preview">
     </div>
 
     <script type="module" src="script.js"></script>

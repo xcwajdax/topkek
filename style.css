@@ -236,6 +236,208 @@ body {
     font-size: 16px;
 }
 
-.close-btn:hover {
+
+/* Terminal Menu */
+#terminal-menu {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: left;
+    z-index: 100;
+    pointer-events: none;
+    /* Let text be clickable but container pass through */
+}
+
+.term-line {
+    margin-bottom: 2px;
+    pointer-events: auto;
+}
+
+.interactive-term-line {
+    color: #4CAF50;
+    /* Terminal Green */
+    cursor: pointer;
+    transition: color 0.2s, text-shadow 0.2s;
+}
+
+.interactive-term-line:hover {
+    color: #81C784;
+    text-shadow: 0 0 5px rgba(76, 175, 80, 0.5);
+    text-decoration: underline;
+}
+
+/* Glitch Lab Modal */
+#glitch-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    font-family: 'Courier New', monospace;
+}
+
+#glitch-modal.hidden {
+    display: none;
+}
+
+#glitch-content {
+    background: #111;
+    border: 1px solid #4CAF50;
+    width: 800px;
+    height: 600px;
+    /* Fixed height for consistent look */
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    box-shadow: 0 0 15px rgba(76, 175, 80, 0.2);
+}
+
+
+#glitch-header {
+    padding: 10px 20px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: flex-start;
+    /* Align lang toggle to left */
+}
+
+#lang-toggle {
+    color: white;
+    font-weight: bold;
+    cursor: default;
+}
+
+.lang-opt {
+    color: #555;
+    cursor: pointer;
+    transition: color 0.3s;
+}
+
+.lang-opt.active {
+    color: #4CAF50;
+}
+
+.lang-opt:hover {
+    color: white;
+}
+
+#glitch-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* Hide overflow of container */
+    padding: 20px;
+    gap: 20px;
+}
+
+#glitch-img-container {
+    height: 60%;
+    /* Increased from 40% */
+    width: 100%;
+    overflow: hidden;
+    border: 1px solid #222;
+    background: #000;
+}
+
+#glitch-img-container img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    /* Show full image */
+    opacity: 1.0;
+    cursor: zoom-in;
+    transition: opacity 0.3s;
+}
+
+#glitch-img-container img:hover {
+    opacity: 0.8;
+}
+
+/* Image Viewer (Lightbox) */
+#image-viewer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.95);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 3000;
+    cursor: zoom-out;
+}
+
+#image-viewer.hidden {
+    display: none;
+}
+
+#image-viewer img {
+    max-width: 95%;
+    max-height: 95%;
+    box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+}
+
+#glitch-text-container {
+    height: 40%;
+    /* Decreased from 60% */
+    overflow-y: auto;
+    color: #ccc;
+    font-size: 14px;
+    line-height: 1.5;
+    padding-right: 10px;
+    /* Space for scrollbar */
+}
+
+/* Custom Scrollbar */
+#glitch-text-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+#glitch-text-container::-webkit-scrollbar-track {
+    background: #111;
+}
+
+#glitch-text-container::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 4px;
+}
+
+#glitch-text-container::-webkit-scrollbar-thumb:hover {
+    background: #4CAF50;
+}
+
+#glitch-footer {
+    padding: 15px;
+    border-top: 1px solid #333;
+    text-align: center;
+}
+
+#glitch-repo-btn {
+    background: transparent;
+    border: 1px solid #4CAF50;
+    color: #4CAF50;
+    padding: 10px 20px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    text-decoration: none;
+    transition: all 0.3s;
+    display: inline-block;
+}
+
+#glitch-repo-btn:hover {
+    background: rgba(76, 175, 80, 0.1);
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.3);
     color: white;
 }
