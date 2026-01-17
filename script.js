@@ -393,7 +393,7 @@ function createUI() {
 
         const checkPassword = () => {
             if (passwordInput.value === CONFIG.appstainPassword) {
-                window.location.href = 'http://xcwajdax.github.io';
+                window.location.href = 'https://xcwajdax.github.io/appstain.github.io/';
             } else {
                 errorMsg.style.display = 'block';
                 passwordInput.value = ''; // Clear input on error
@@ -1803,3 +1803,4 @@ function onWheel(event) {
     // Clamp
     targetCameraRadius = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, targetCameraRadius));
 }
+
