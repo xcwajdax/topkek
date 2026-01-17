@@ -128,6 +128,10 @@ const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-percentage');
 const statusText = document.getElementById('loading-text');
 
+// Global State for UI
+let currentLang = 'PL';
+
+
 // Loading State
 let loadState = {
     assets: 0,
@@ -408,7 +412,8 @@ function createUI() {
     initAppstainModal();
 
     // 4. Glitch Lab Modal Logic
-    let currentLang = 'PL'; // Default language
+    // currentLang is now global
+
 
     const initGlitchModal = () => {
         const modal = document.getElementById('glitch-modal');
