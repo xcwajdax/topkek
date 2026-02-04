@@ -11,6 +11,7 @@ export const CONFIG = {
     particleSize: 0.1,
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: IS_MOBILE ? 15000 : 50000, // Reduced particle count for mobile
+    particlesFile: IS_MOBILE ? 'particles_mobile.json' : 'particles_pc.json', // File to load particles from
     repulsionRadius: 3, // Increased radius
     repulsionStrength: 4,
     returnSpeed: 0.2,
@@ -23,17 +24,145 @@ export const CONFIG = {
     zoomSensitivity: 0.005, // Speed of zoom via scroll
     freeCamZoomSpeed: 0.005, // Szybkość zoomu w trybie Free Cam (OrbitControls)
     minZoom: 3, // Minimum camera distance
-    maxZoom: 20, // Maximum camera distance
+    maxZoom: 50, // Maximum camera distance (increased for Vajbuj)
+    initialZoom: 20, // Default starting camera distance
     panSpeed: 0.02, // Speed of panning with middle mouse
     subtitle: {
         text: "PRODUCTIONS",
         size: 0.8, // Much smaller than main text
         height: 0.12, // Thickness for geometry (not used for particles directly if hardcoded)
-        offsetY: -4, // Position below main text
+        offsetY: -5, // Position below main text
         thickness: 2, // Voxel thickness
         letterSpacing: 0.7
     },
     appstainPassword: "LOL" // Password for APPSTAIN modal
+};
+
+// VAJBUJ SZMATO Mode Configuration
+export const VAJBUJ_CONFIG = {
+    enabled: true,
+    autoTrigger: false, // Disabled - use button instead
+    inactivityTimeout: 15000, // ms before Vajbuj activates (not used when autoTrigger=false)
+
+    // Audio settings
+    audioFile: 'VAJBUJ_TRIMMED.mp3',
+    audioStartTime: 0, // seconds - fragment start
+    audioEndTime: 29, // seconds - fragment end
+    fadeInDuration: 1.5, // seconds
+    fadeOutDuration: 1.5, // seconds
+
+    // Lyrics - each object can have custom properties
+    lyrics: [
+        { text: "Podchodzę", color: 0xffffff, offsetX: 0, offsetY: 0 },
+        { text: "se", color: 0xffffff, offsetX: 0 },
+        { text: "do", color: 0xffffff, offsetX: 0 },
+        { text: "ziomala", color: 0xffffff, offsetX: 0 },
+        { text: "mówię", color: 0xffffff, offsetX: 0 },
+        { text: "vajbuj", color: 0xffffff, offsetX: 0 },
+        { text: "Szmato.", color: 0xff0000, scale: 1.2, offsetX: 0 },
+        { lineBreak: true },
+
+        { text: "Co", color: 0xffffff, offsetX: 0 },
+        { text: "mi", color: 0xffffff, offsetX: 0 },
+        { text: "odpowiesz", color: 0xffffff, offsetX: 0 },
+        { text: "na", color: 0xffffff, offsetX: 0 },
+        { text: "to?", color: 0xffffff, offsetX: 0 },
+        { lineBreak: true },
+
+        { text: "Podchodzę", color: 0xffffff },
+        { text: "se", color: 0xffffff },
+        { text: "do", color: 0xffffff },
+        { text: "ziomala", color: 0xffffff },
+        { text: "mówię", color: 0xffffff },
+        { text: "vajbuj", color: 0xffffff },
+        { text: "Szmato.", color: 0xff0000, scale: 1.2 },
+        { lineBreak: true },
+
+        { text: "Co", color: 0xffffff },
+        { text: "mi", color: 0xffffff },
+        { text: "odpowiesz", color: 0xffffff },
+        { text: "na", color: 0xffffff },
+        { text: "to?", color: 0xffffff },
+        { lineBreak: true },
+
+        { text: "Podchodzę", color: 0xffffff },
+        { text: "se", color: 0xffffff },
+        { text: "do", color: 0xffffff },
+        { text: "ziomala", color: 0xffffff },
+        { text: "mówię", color: 0xffffff },
+        { text: "vajbuj", color: 0xffffff },
+        { text: "Szmato.", color: 0xff0000, scale: 1.2 },
+        { lineBreak: true },
+
+        { text: "Co", color: 0xffffff },
+        { text: "mi", color: 0xffffff },
+        { text: "odpowiesz", color: 0xffffff },
+        { text: "na", color: 0xffffff },
+        { text: "to?", color: 0xffffff },
+        { lineBreak: true },
+
+        { text: "Podchodzę", color: 0xffffff },
+        { text: "se", color: 0xffffff },
+        { text: "do", color: 0xffffff },
+        { text: "ziomala", color: 0xffffff },
+        { text: "mówię", color: 0xffffff },
+        { text: "vajbuj", color: 0xffffff },
+        { text: "Szmato.", color: 0xff0000, scale: 1.2 },
+        { lineBreak: true },
+
+        { text: "Co", color: 0xffffff },
+        { text: "mi", color: 0xffffff },
+        { text: "odpowiesz", color: 0xffffff },
+        { text: "na", color: 0xffffff },
+        { text: "to?", color: 0xffffff },
+        { lineBreak: true }
+    ],
+
+    // Default color for words
+    defaultWordColor: 0xffffff,
+
+    // Word timings in FRAMES (25 FPS) from fragment start (frame 0 = 0:41)
+    // When word should be FULLY ASSEMBLED
+    // Leave empty for auto-distribution, fill with frame numbers when ready
+    wordTimings: [13, 22, 29, 40, 54, 63, 76, 116, 123, 131, 145, 152, 177, 193, 199, 205, 218, 231, 242, 290, 300, 308, 316, 323, 349, 358, 365, 376, 390, 399, 412, 463, 470, 478, 492, 499, 523, 530, 537, 546, 558, 566, 578, 632, 638, 645, 657, 663], // e.g., [12, 25, 38, 50, ...] 
+
+    // Animation settings
+    wordAssemblyDuration: 1.8, // Krótszy czas składania dla lepszej dynamiki
+    lyricsStartDelay: 0, // Zmienione na 0, bo używamy manualnych keyframes
+    wordSize: 0.9, // Increased from 0.8 for better legibility
+    wordHeight: 0.12, // Increased from 0.12
+    wordThickness: 2, // voxel layers
+    lineSpacing: 2.0, // Zwiększone dla lepszej separacji
+    wordSpacing: 0.8, // Zwiększone dla lepszej czytelności
+    lyricsOffsetY: 4.2, // position above TOPKEK
+
+    // Scatter settings for word assembly
+    scatterRadius: 6, // how far cubes scatter before assembling
+
+    // Background cubes - blue to purple palette
+    bgCubeColors: [
+        0x00d4ff, // bright cyan
+        0x0099ff, // sky blue
+        0x0066ff, // royal blue
+        0x6600ff, // purple
+        0x9900ff, // violet
+        0xaa00ff  // magenta-purple
+    ],
+    bgCubeSize: 0.25, // smaller cubes
+    bgCubeCount: 100,
+    bgCubeMaterial: {
+        metalness: 0.2,
+        roughness: 0.8
+    },
+
+    // Tempo dynamics
+    slowPhaseEnd: 0.48, // 48% - when slow phase ends
+    slowPhaseSpeed: 0.15, // 15% speed during slow phase
+
+    // Final question mark
+    finalSymbol: "?",
+    finalSymbolColor: 0xff0000, // red
+    finalSymbolScale: 2.0
 };
 
 // Shader Configuration

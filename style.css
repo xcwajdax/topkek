@@ -151,15 +151,17 @@ body {
 /* Production Label */
 .prod-label {
     position: absolute;
-    bottom: 20px;
-    left: 20px;
+    bottom: 25px;
+    left: 25px;
     /* Position to the left */
     color: rgba(255, 255, 255, 0.7);
     font-family: 'Courier New', monospace;
-    font-size: 14px;
+    font-size: 13px;
     letter-spacing: 1px;
     pointer-events: none;
-    /* Non-interactive */
+    background: rgba(0, 0, 0, 0.3);
+    padding: 5px 10px;
+    border-radius: 4px;
 }
 
 /* APPSTAIN Modal */
@@ -240,15 +242,17 @@ body {
 /* Terminal Menu */
 #terminal-menu {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
+    bottom: 25px;
+    right: 25px;
     font-family: 'Courier New', monospace;
-    font-size: 14px;
+    font-size: 13px;
     color: rgba(255, 255, 255, 0.7);
     text-align: left;
     z-index: 100;
     pointer-events: none;
-    /* Let text be clickable but container pass through */
+    background: rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    border-radius: 4px;
 }
 
 .term-line {
@@ -466,4 +470,77 @@ body {
     background: rgba(76, 175, 80, 0.1);
     box-shadow: 0 0 10px rgba(76, 175, 80, 0.3);
     color: white;
+}
+
+/* Custom Text Modal */
+#custom-text-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+}
+
+#custom-text-modal.hidden {
+    display: none;
+}
+
+#custom-text-content {
+    background: #222;
+    padding: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    width: 350px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+#custom-text-content h2 {
+    color: white;
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    margin-top: 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 10px;
+}
+
+#custom-text-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    padding: 10px;
+    width: 100%;
+    border-radius: 4px;
+    font-family: monospace;
+    text-align: center;
+    font-size: 20px;
+    text-transform: uppercase;
+    box-sizing: border-box;
+    /* Ensure padding doesn't overflow width */
+}
+
+#custom-text-input:focus {
+    outline: none;
+    border-color: #4CAF50;
+    box-shadow: 0 0 5px rgba(76, 175, 80, 0.5);
+}
+
+.modal-buttons {
+    display: flex;
+    justify-content: center;
+}
+
+#custom-text-submit {
+    width: 100%;
+    margin-top: 10px;
 }

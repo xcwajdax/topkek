@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG } from './config.js';
+import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG } from './config.js';
 
 const CRTShader = {
     uniforms: {
@@ -93,6 +93,25 @@ let lastTarget = new THREE.Vector3();
 let loadedFont = null; // Store loaded font globally
 let loadedFontRegular = null; // Store loaded regular font globally
 
+// VAJBUJ Mode State
+let vajbujState = {
+    active: false,
+    audio: null,
+    startTime: 0,
+    words: [], // Array of word objects with mesh, timing, state
+    currentLineIndex: 0,
+    currentWordIndex: 0,
+    completedLines: 0, // Number of fully assembled lines
+    lineShiftY: 0, // Smooth vertical offset for shifting
+    displayedLines: [], // Lines currently on screen
+    bgCubes: [], // Background animated cubes
+    bgCubesMesh: null,
+    lastActivityTime: Date.now(),
+    isStopping: false,
+    voxelCache: {}, // Cache for pre-calculated voxel data
+    generationQueue: [] // Queue for background processing
+};
+
 // Camera Rotation & Pan State
 let isDragging = false;
 let isPanning = false;
@@ -103,8 +122,8 @@ let cameraFocusPoint = new THREE.Vector3(0, 0, 0);
 let targetCameraAngle = 0; // Target angle for smoothing
 let cameraVerticalAngle = 0;
 let targetCameraVerticalAngle = 0;
-let cameraRadius = 15;
-let targetCameraRadius = 15;
+let cameraRadius = CONFIG.initialZoom;
+let targetCameraRadius = CONFIG.initialZoom;
 const MAX_ANGLE = Math.PI / 4; // 45 degrees
 
 // Free Camera State
@@ -112,7 +131,7 @@ let controls;
 let isFreeCam = false;
 
 // Cinematic Camera State
-let isCinematic = true;
+let isCinematic = false;
 let cinematicSwitchTime = 0;
 let lastInteractionTime = Date.now();
 let isInitialSequence = true;
@@ -169,7 +188,7 @@ function init() {
 
     // 2. Camera
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-    camera.position.set(0, 0, 15);
+    camera.position.set(0, 0, CONFIG.initialZoom);
 
     // 3. Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -273,7 +292,28 @@ function init() {
             // Allow UI to update before heavy processing
             await new Promise(resolve => requestAnimationFrame(resolve));
 
-            await generateParticles(fontBold, fontRegular); // Await async generation
+            // Try to load particles from file
+            try {
+                const response = await fetch(CONFIG.particlesFile);
+                if (response.ok) {
+                    const data = await response.json();
+                    // Check if text matches (handle custom text logic later)
+                    if (data.text === CONFIG.text) {
+                        await loadParticles(data);
+                    } else {
+                        console.log("Particle file text mismatch, regenerating...");
+                        await generateParticles(fontBold, fontRegular);
+                    }
+                } else {
+                    throw new Error("File not found");
+                }
+            } catch (e) {
+                console.log("Generating particles (No cache found)...");
+                await generateParticles(fontBold, fontRegular);
+            }
+
+            // Initialize Vajbuj mode after particles are ready
+            initVajbujMode();
 
             loaderContainer.classList.add('hidden');
             setTimeout(() => {
@@ -307,8 +347,8 @@ function init() {
             });
         }
         if (e.code === 'Escape') {
-            if (!isCinematic || isFreeCam) {
-                setCameraMode('dynamic');
+            if (isCinematic || isFreeCam) {
+                setCameraMode('manual');
                 lastInteractionTime = Date.now();
             }
         }
@@ -350,6 +390,53 @@ function createUI() {
     ui.appendChild(btn1);
     ui.appendChild(btn2);
     ui.appendChild(btn3);
+
+    // Camera Mode Toggle
+    const btnCinematic = document.createElement('button');
+    btnCinematic.className = 'mode-btn';
+    btnCinematic.innerText = 'Dynamic Cam';
+    btnCinematic.onclick = () => {
+        if (!isCinematic) {
+            setCameraMode('dynamic');
+            btnCinematic.classList.add('active');
+        } else {
+            setCameraMode('manual');
+            btnCinematic.classList.remove('active');
+        }
+    };
+    ui.appendChild(btnCinematic);
+
+    // Custom Text Button
+    const btnCustomText = document.createElement('button');
+    btnCustomText.className = 'mode-btn';
+    btnCustomText.innerText = 'Change Text';
+    btnCustomText.onclick = () => {
+        document.getElementById('custom-text-modal').classList.remove('hidden');
+    };
+    ui.appendChild(btnCustomText);
+
+    // Store reference for status update
+    window.cinematicButton = btnCinematic;
+
+    // VAJBUJ Button
+    if (VAJBUJ_CONFIG.enabled) {
+        const btnVajbuj = document.createElement('button');
+        btnVajbuj.className = 'mode-btn vajbuj-btn';
+        btnVajbuj.innerText = '🎵 VAJBUJ';
+        btnVajbuj.onclick = () => {
+            if (!vajbujState.active) {
+                startVajbujMode();
+                btnVajbuj.classList.add('active');
+            } else {
+                stopVajbujMode();
+            }
+        };
+        ui.appendChild(btnVajbuj);
+
+        // Store reference for deactivation
+        window.vajbujButton = btnVajbuj;
+    }
+
     document.body.appendChild(ui);
 
     // --- NEW UI ELEMENTS ---
@@ -464,6 +551,36 @@ function createUI() {
     };
     initGlitchModal();
 
+    // 5. Custom Text Modal Logic
+    const initCustomTextModal = () => {
+        const modal = document.getElementById('custom-text-modal');
+        const closeBtn = document.getElementById('custom-text-close');
+        const submitBtn = document.getElementById('custom-text-submit');
+        const input = document.getElementById('custom-text-input');
+
+        const close = () => {
+            modal.classList.add('hidden');
+            input.value = '';
+        };
+
+        const submit = () => {
+            const text = input.value.trim().toUpperCase();
+            if (text.length > 0) {
+                updateText(text);
+                close();
+            }
+        };
+
+        closeBtn.onclick = close;
+        submitBtn.onclick = submit;
+
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                submit();
+            }
+        });
+    };
+    initCustomTextModal();
 
     // --- END NEW UI ELEMENTS ---
 
@@ -580,7 +697,7 @@ function setCameraMode(mode) {
         controls.update();
         isCinematic = false;
         isDragging = false; // Stop any custom dragging
-    } else {
+    } else if (mode === 'dynamic') {
         isFreeCam = false;
         controls.enabled = false;
         isCinematic = true;
@@ -605,6 +722,16 @@ function setCameraMode(mode) {
         targetCameraRadius = cameraRadius;
 
         cinematicSwitchTime = Date.now() + 2000; // Small delay before next cut
+    } else if (mode === 'manual') {
+        isFreeCam = false;
+        controls.enabled = false;
+        isCinematic = false;
+    }
+
+    // Sync UI Button
+    if (window.cinematicButton) {
+        if (isCinematic) window.cinematicButton.classList.add('active');
+        else window.cinematicButton.classList.remove('active');
     }
 }
 
@@ -693,18 +820,19 @@ function onMouseDown(event) {
     }
 
     lastInteractionTime = Date.now();
+    resetVajbujActivityTimer();
     if (isFreeCam) return;
 
     // Middle Mouse Button (Button 1) -> Pan
     if (event.button === 1) {
         isPanning = true;
-        isCinematic = false;
+        setCameraMode('manual');
         event.preventDefault(); // Prevent scroll cursor
     }
     // Left Mouse Button (Button 0) -> Rotate
     else if (event.button === 0) {
         isDragging = true;
-        isCinematic = false;
+        setCameraMode('manual');
     }
 
     previousMouseX = event.clientX;
@@ -1063,46 +1191,7 @@ async function generateParticles(font, fontRegular) {
     }
 
     // --- MESH INITIALIZATION ---
-    meshRegistry = {};
-    const baseSize = CONFIG.particleSize;
-
-    shapeDefinitions.forEach(shape => {
-        // Create fused geometry
-        // Note: scaling dimensions. 
-        // For a 2x1 group, width is 2*size.
-        // We use RoundedBoxGeometry to get the bevels around the FUSED shape.
-        const geoW = shape.w * baseSize;
-        const geoH = shape.h * baseSize;
-        const geoD = shape.d * baseSize;
-
-        // Bevel radius: 0.05 * size (same as original proportion)
-        const radius = baseSize * 0.05;
-
-        const geometry = new RoundedBoxGeometry(geoW, geoH, geoD, 2, radius);
-
-        // Create Meshes if count > 0
-        const entry = {};
-
-        if (groupCounts[shape.id].top > 0) {
-            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? glassMaterial : defaultBoxMaterial, groupCounts[shape.id].top);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            entry.top = mesh;
-            entry.topIndex = 0; // Counter for filling
-            scene.add(mesh);
-        }
-
-        if (groupCounts[shape.id].kek > 0) {
-            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? goldMaterial : defaultBoxMaterial, groupCounts[shape.id].kek);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            entry.kek = mesh;
-            entry.kekIndex = 0;
-            scene.add(mesh);
-        }
-
-        meshRegistry[shape.id] = entry;
-    });
+    initMeshes(groupCounts);
 
     loadState.generation = 95;
     updateProgress();
@@ -1263,7 +1352,7 @@ function onMouseMove(event) {
                 const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);    // Local Y
 
                 // Scaling factor can depend on radius for consistent feel
-                const panFactor = CONFIG.panSpeed * (cameraRadius / 15);
+                const panFactor = CONFIG.panSpeed * (cameraRadius / CONFIG.initialZoom);
 
                 // Move focus point: Mouse moves Left -> Focus moves Left (Right Vector is negative) (Drag world)
                 // Actually, if I drag Left (negative deltaX), I want the world to move Left (negative X).
@@ -1293,10 +1382,12 @@ function animate() {
     if (isFreeCam && controls) {
         controls.update();
 
-        // Auto-switch back to dynamic if idle
+        // Auto-switch back to dynamic if idle - DISABLED
+        /*
         if (Date.now() - lastInteractionTime > cinematicConfig.autoDynamicTimeout) {
             setCameraMode('dynamic');
         }
+        */
     } else {
         // Cinematic Mode Logic
         if (isCinematic) {
@@ -1362,10 +1453,12 @@ function animate() {
             cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
             cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
 
-            // Auto-switch back to dynamic if idle (for manual mode)
+            // Auto-switch back to dynamic if idle - DISABLED
+            /*
             if (Date.now() - lastInteractionTime > cinematicConfig.autoDynamicTimeout) {
                 setCameraMode('dynamic');
             }
+            */
         }
 
         const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
@@ -1404,12 +1497,59 @@ function animate() {
         const delta = clock.getDelta();
 
         // --- CUBE GROUPS LOGIC ---
+
+        // Pre-calculate Vajbuj Bounce State
+        let vajbujBounceActive = false;
+        let vajbujBounceAmplitude = 0;
+        if (vajbujState.active) {
+            const vElapsed = (Date.now() - vajbujState.startTime) / 1000;
+            const vDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+            const vProgress = vElapsed / vDuration;
+
+            if (vProgress > 0.52) {
+                vajbujBounceActive = true;
+
+                // Custom Waveform: "1 very fast change, 2 3 4 very slow bounce"
+                // Split cycle: 25% fast transition, 75% slow return
+                const freq = 3.75; // Radian/s approx
+                // Normalized Phase 0..1
+                const phase = (vElapsed * freq / (Math.PI * 2)) % 1;
+
+                let wave;
+                // Beat 1: Fast Rise (-1 to 1)
+                if (phase < 0.25) {
+                    // Map 0..0.25 -> -PI/2 .. PI/2
+                    wave = Math.sin((phase / 0.25) * Math.PI - Math.PI / 2);
+                } else {
+                    // Beats 2,3,4: Slow Fall (1 to -1)
+                    // Map 0.25..1.0 -> PI/2 .. 3PI/2
+                    const p2 = (phase - 0.25) / 0.75;
+                    wave = Math.sin(p2 * Math.PI + Math.PI / 2);
+                }
+
+                vajbujBounceAmplitude = wave * 0.8;
+            }
+        }
+
         for (let i = 0; i < cubeGroups.length; i++) {
             const group = cubeGroups[i];
             const dist = group.currentPos.distanceTo(target);
 
             if (CONFIG.animationMode === 'repulsion') {
                 // --- MODE 1: REPULSION (Original) ---
+                // --- DYNAMIC HOME POSITION FOR VAJBUJ MODE ---
+                let targetHome = group.originalPos.clone();
+                if (vajbujBounceActive) {
+                    // Quantized Alternating: Odd blocks UP, Even blocks DOWN
+                    // Period approx 3.5 units (covering letter + spacing)
+                    // T(-3) -> Odd, O(-2) -> Even, P(-1) -> Odd, K(0) -> Even...
+                    const bucket = Math.floor(group.originalPos.x / 3.5);
+                    const isOdd = Math.abs(bucket) % 2 === 1;
+                    const alternate = isOdd ? 1 : -1;
+
+                    targetHome.y += vajbujBounceAmplitude * alternate;
+                }
+
                 if (dist < CONFIG.repulsionRadius) {
                     const force = new THREE.Vector3().subVectors(group.currentPos, target);
                     const len = force.length();
@@ -1421,7 +1561,7 @@ function animate() {
                     }
                 }
 
-                const returnVec = new THREE.Vector3().subVectors(group.originalPos, group.currentPos);
+                const returnVec = new THREE.Vector3().subVectors(targetHome, group.currentPos);
 
                 // Overdamped Spring (EaseOut)
                 // Stronger pull, much stronger drag
@@ -1606,6 +1746,17 @@ function animate() {
 
             if (CONFIG.animationMode === 'repulsion') {
                 // --- INNER CUBE REPULSION ---
+
+                // --- DYNAMIC HOME POSITION FOR VAJBUJ MODE ---
+                let targetHome = data.originalPos.clone();
+                if (vajbujBounceActive) {
+                    const bucket = Math.floor(data.originalPos.x / 3.5);
+                    const isOdd = Math.abs(bucket) % 2 === 1;
+                    const alternate = isOdd ? 1 : -1;
+
+                    targetHome.y += vajbujBounceAmplitude * alternate;
+                }
+
                 if (dist < CONFIG.repulsionRadius) {
                     const force = new THREE.Vector3().subVectors(data.currentPos, target);
                     if (force.length() > 0) {
@@ -1615,7 +1766,7 @@ function animate() {
                         data.velocity.addScaledVector(force, strength * 0.05);
                     }
                 }
-                const returnVec = new THREE.Vector3().subVectors(data.originalPos, data.currentPos);
+                const returnVec = new THREE.Vector3().subVectors(targetHome, data.currentPos);
 
                 // Overdamped Return
                 data.velocity.add(returnVec.clone().multiplyScalar(0.05));
@@ -1729,10 +1880,28 @@ function animate() {
     }
 
     composer.render();
+
+    // Update Vajbuj mode
+    updateVajbujMode(clock.getDelta());
+
+    // Process Background Generation Queue (Fluid Loading)
+    if (vajbujState.generationQueue.length > 0) {
+        const queueStart = performance.now();
+        const maxFrameTime = 4; // Max ms per frame for background tasks
+
+        while (vajbujState.generationQueue.length > 0 && performance.now() - queueStart < maxFrameTime) {
+            const task = vajbujState.generationQueue[0];
+            const done = task(); // Execute chunk
+            if (done) {
+                vajbujState.generationQueue.shift();
+            }
+        }
+    }
 }
 
 function onTouchStart(event) {
     lastInteractionTime = Date.now();
+    resetVajbujActivityTimer();
     if (isFreeCam) return;
     if (event.touches.length > 0) {
         if (event.target === renderer.domElement) {
@@ -1740,7 +1909,7 @@ function onTouchStart(event) {
         }
 
         isDragging = true;
-        isCinematic = false; // Disable cinematic mode on touch
+        setCameraMode('manual'); // Disable cinematic mode on touch
         previousMouseX = event.touches[0].clientX;
         previousMouseY = event.touches[0].clientY;
 
@@ -1789,6 +1958,7 @@ function onTouchEnd(event) {
 
 function onWheel(event) {
     lastInteractionTime = Date.now();
+    resetVajbujActivityTimer();
     if (isFreeCam) return;
 
     // Check if Glitch Lab modal is open
@@ -1809,4 +1979,1078 @@ function onWheel(event) {
 
     // Clamp
     targetCameraRadius = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, targetCameraRadius));
+}
+
+// ============================================
+// VAJBUJ SZMATO MODE
+// ============================================
+
+function initVajbujMode() {
+    if (!VAJBUJ_CONFIG.enabled) return;
+
+    // Preload audio
+    vajbujState.audio = new Audio(VAJBUJ_CONFIG.audioFile);
+    vajbujState.audio.volume = 0;
+    vajbujState.audio.preload = 'auto';
+
+    // Create background cubes for Vajbuj
+    createVajbujBackgroundCubes();
+
+    console.log('[VAJBUJ] Mode initialized, waiting for inactivity...');
+
+    // Start background generation of lyrics voxels
+    if (loadedFontRegular) {
+        startBackgroundGeneration(loadedFontRegular);
+    }
+}
+
+function startBackgroundGeneration(font) {
+    const uniqueWords = new Set();
+    VAJBUJ_CONFIG.lyrics.forEach(item => {
+        if (!item.lineBreak) {
+            const word = item.text;
+            const scale = item.scale || 1.0;
+            uniqueWords.add(`${word}_${scale}`);
+        }
+    });
+
+    console.log(`[VAJBUJ] Queuing ${uniqueWords.size} unique words for background generation...`);
+
+    uniqueWords.forEach(key => {
+        const [word, scaleStr] = key.split('_');
+        const scale = parseFloat(scaleStr);
+
+        // Task Factory
+        const task = createVoxelGenerationTask(word, scale, font);
+        vajbujState.generationQueue.push(task);
+    });
+}
+
+function createVoxelGenerationTask(word, scale, font) {
+    // State for the task
+    let step = 0;
+    let width = 0;
+    let voxelMap = new Map();
+    let gx, gy, minX, maxX, minY, maxY;
+    let textGeo, mesh;
+    let scanRaycaster = new THREE.Raycaster();
+    const voxelSize = CONFIG.particleSize;
+
+    return () => {
+        // Step 0: Init Geometry
+        if (step === 0) {
+            // Check cache first
+            const cacheKey = `${word}_${scale}`;
+            if (vajbujState.voxelCache[cacheKey]) return true; // Already done
+
+            // Replacement map for Polish characters
+            const polishMap = {
+                'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+                'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
+                '.': '', ',': '', '!': '', '?': ''
+            };
+            const displayWord = word.split('').map(char => polishMap[char] || char).join('');
+
+            textGeo = new TextGeometry(displayWord, {
+                font: font,
+                size: VAJBUJ_CONFIG.wordSize * scale,
+                height: VAJBUJ_CONFIG.wordHeight * scale,
+                curveSegments: 4,
+                bevelEnabled: false
+            });
+            textGeo.computeBoundingBox();
+            width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+
+            mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
+            mesh.updateMatrixWorld(); // Important for raycaster
+
+            minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
+            maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
+            minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
+            maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
+
+            gx = minX;
+            gy = minY;
+            step = 1;
+            return false; // Not done
+        }
+
+        // Step 1: Voxelization Loop (Chunked)
+        if (step === 1) {
+            const scanDir = new THREE.Vector3(0, 0, -1);
+            let iterations = 0;
+            const maxIter = 50; // Check 50 columns per frame
+
+            while (gx <= maxX) {
+                while (gy <= maxY) {
+                    const px = gx * voxelSize;
+                    const py = gy * voxelSize;
+
+                    scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
+                    const intersects = scanRaycaster.intersectObject(mesh);
+
+                    if (intersects.length > 0) {
+                        for (let z = 0; z < VAJBUJ_CONFIG.wordThickness; z++) {
+                            const key = `${gx},${gy},${z}`;
+                            if (!voxelMap.has(key)) {
+                                voxelMap.set(key, { x: px, y: py, z: z * voxelSize });
+                            }
+                        }
+                    }
+                    gy++;
+                }
+                gy = minY; // Reset Y
+                gx++; // Next X
+
+                iterations++;
+                if (iterations > 10) { // Small chunk size inside loop, yielding to supervisor loop
+                    return false;
+                }
+            }
+
+            // Loop finished
+            step = 2;
+            return false; // Yield one last time before finalizing
+        }
+
+        // Step 2: Finalize
+        if (step === 2) {
+            const positions = Array.from(voxelMap.values()).map(v => new THREE.Vector3(v.x, v.y, v.z));
+
+            vajbujState.voxelCache[`${word}_${scale}`] = {
+                positions: positions,
+                width: width
+            };
+
+            // Cleanup
+            if (textGeo) textGeo.dispose();
+            // mesh doesn't own geometry in this scope, but textGeo is disposed.
+
+            return true; // DONE
+        }
+    };
+}
+
+function createVajbujBackgroundCubes() {
+    const count = VAJBUJ_CONFIG.bgCubeCount;
+    const size = VAJBUJ_CONFIG.bgCubeSize;
+
+    const geometry = new THREE.BoxGeometry(size, size, size);
+    const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        metalness: VAJBUJ_CONFIG.bgCubeMaterial.metalness,
+        roughness: VAJBUJ_CONFIG.bgCubeMaterial.roughness,
+        transparent: true,
+        opacity: 1
+    });
+
+    vajbujState.bgCubesMesh = new THREE.InstancedMesh(geometry, material, count);
+    vajbujState.bgCubesMesh.visible = false;
+
+    const colors = VAJBUJ_CONFIG.bgCubeColors;
+    const color = new THREE.Color();
+
+    for (let i = 0; i < count; i++) {
+        // Random position around the text
+        const pos = new THREE.Vector3(
+            (Math.random() - 0.5) * 20,
+            (Math.random() - 0.5) * 15 + 3,
+            (Math.random() - 0.5) * 10
+        );
+
+        dummy.position.copy(pos);
+        dummy.rotation.set(
+            Math.random() * Math.PI,
+            Math.random() * Math.PI,
+            Math.random() * Math.PI
+        );
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        vajbujState.bgCubesMesh.setMatrixAt(i, dummy.matrix);
+
+        // Random color from palette
+        color.setHex(colors[Math.floor(Math.random() * colors.length)]);
+        vajbujState.bgCubesMesh.setColorAt(i, color);
+
+        // Store cube data
+        vajbujState.bgCubes.push({
+            position: pos.clone(),
+            rotation: new THREE.Euler(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI,
+                Math.random() * Math.PI
+            ),
+            velocity: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.02,
+                (Math.random() - 0.5) * 0.02,
+                (Math.random() - 0.5) * 0.02
+            ),
+            spin: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.05,
+                (Math.random() - 0.5) * 0.05,
+                (Math.random() - 0.5) * 0.05
+            )
+        });
+    }
+
+    vajbujState.bgCubesMesh.instanceMatrix.needsUpdate = true;
+    if (vajbujState.bgCubesMesh.instanceColor) {
+        vajbujState.bgCubesMesh.instanceColor.needsUpdate = true;
+    }
+
+    scene.add(vajbujState.bgCubesMesh);
+}
+
+function startVajbujMode() {
+    if (vajbujState.active) return;
+
+    console.log('[VAJBUJ] Starting music video mode!');
+    vajbujState.active = true;
+    vajbujState.startTime = Date.now();
+    vajbujState.currentLineIndex = 0;
+    vajbujState.currentWordIndex = 0;
+    vajbujState.completedLines = 0;
+    vajbujState.displayedLines = [];
+
+    // Reset camera to starting position
+    CONFIG.animationMode = 'repulsion'; // Ensure we are in repulsion mode for the animation to work
+    isCinematic = false;
+    isFreeCam = false;
+    controls.enabled = false;
+    cameraAngle = 0;
+    cameraVerticalAngle = 0;
+    cameraRadius = CONFIG.initialZoom;
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = CONFIG.initialZoom;
+    cameraFocusPoint.set(0, 0, 0);
+    camera.fov = 45;
+    camera.updateProjectionMatrix();
+
+    // Clear any existing word meshes
+    cleanupVajbujWords();
+
+    // Prepare all words with timing
+    prepareVajbujWords();
+
+    // Show background cubes and reset opacity
+    if (vajbujState.bgCubesMesh) {
+        vajbujState.bgCubesMesh.visible = true;
+        vajbujState.bgCubesMesh.material.opacity = 1;
+    }
+
+    // Start audio
+    const audio = vajbujState.audio;
+    audio.pause();
+
+    // Reset volume and current time
+    audio.volume = 0;
+    audio.currentTime = VAJBUJ_CONFIG.audioStartTime;
+
+    // Play with a small delay or on seeked to ensure we are at 41s
+    const startPlay = () => {
+        audio.play().catch(e => console.warn('[VAJBUJ] Audio play failed:', e));
+        fadeAudio(audio, 0, 1, VAJBUJ_CONFIG.fadeInDuration);
+    };
+
+    // Remove old listeners to avoid duplicates
+    audio.onseeked = null;
+    audio.oncanplay = null;
+
+    audio.onseeked = () => {
+        startPlay();
+        audio.onseeked = null;
+        clearTimeout(seekFallback);
+    };
+
+    const seekFallback = setTimeout(() => {
+        if (vajbujState.active && audio.paused) {
+            console.log('[VAJBUJ] Seek fallback triggered');
+            startPlay();
+        }
+    }, 1000);
+
+    // If already seeked or doesn't need to
+    if (Math.abs(audio.currentTime - VAJBUJ_CONFIG.audioStartTime) < 0.1) {
+        startPlay();
+        clearTimeout(seekFallback);
+    }
+
+    // Schedule fade out and stop
+    const duration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+    setTimeout(() => {
+        fadeAudio(audio, 1, 0, VAJBUJ_CONFIG.fadeOutDuration);
+    }, (duration - VAJBUJ_CONFIG.fadeOutDuration) * 1000);
+
+    setTimeout(() => {
+        stopVajbujMode();
+    }, duration * 1000);
+}
+
+function fadeAudio(audio, fromVol, toVol, duration) {
+    const startTime = Date.now();
+    const durationMs = duration * 1000;
+
+    function tick() {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / durationMs, 1);
+        audio.volume = fromVol + (toVol - fromVol) * progress;
+
+        if (progress < 1) {
+            requestAnimationFrame(tick);
+        }
+    }
+    tick();
+}
+
+function fadeVisualOpacity(material, fromOpacity, toOpacity, duration) {
+    const startTime = Date.now();
+    const durationMs = duration * 1000;
+
+    function tick() {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / durationMs, 1);
+        material.opacity = fromOpacity + (toOpacity - fromOpacity) * progress;
+
+        if (progress < 1) {
+            requestAnimationFrame(tick);
+        }
+    }
+    tick();
+}
+
+function prepareVajbujWords() {
+    vajbujState.words = [];
+
+    const allWords = [];
+    let currentLineIdx = 0;
+    let wordInLineIdx = 0;
+
+    VAJBUJ_CONFIG.lyrics.forEach((item) => {
+        if (item.lineBreak) {
+            currentLineIdx++;
+            wordInLineIdx = 0;
+        } else {
+            allWords.push({
+                ...item,
+                lineIndex: currentLineIdx,
+                wordIndex: wordInLineIdx++
+            });
+        }
+    });
+
+    const totalWords = allWords.length;
+    const totalLines = currentLineIdx + 1;
+    const fragmentDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+    const fps = 25;
+
+    // Calculate timing and PRE-CALCULATE widths for centering
+    allWords.forEach((wordData, globalIdx) => {
+        // Measure word immediately to fix X alignment
+        if (loadedFontRegular) {
+            const textGeo = new TextGeometry(wordData.text, {
+                font: loadedFontRegular,
+                size: VAJBUJ_CONFIG.wordSize * (wordData.scale || 1.0),
+                height: VAJBUJ_CONFIG.wordHeight * (wordData.scale || 1.0),
+                curveSegments: 4,
+                bevelEnabled: false
+            });
+            textGeo.computeBoundingBox();
+            wordData.width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+            textGeo.dispose();
+        }
+
+        let targetFrame;
+        if (VAJBUJ_CONFIG.wordTimings.length >= totalWords) {
+            targetFrame = VAJBUJ_CONFIG.wordTimings[globalIdx];
+        } else {
+            // Distribution across the whole fragment
+            const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
+            const lineStartNormalized = wordData.lineIndex / lineCountCalc;
+            // Distribute lines over first 80% of duration
+            const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
+
+            const wordStagger = 12;
+            targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
+        }
+
+        // Apply global delay of 18 frames as requested (previously 25)
+        targetFrame += 18;
+
+        // Convert frame to seconds from fragment start + delay
+        const assembledAtSeconds = (targetFrame / fps) + (VAJBUJ_CONFIG.lyricsStartDelay || 0);
+        // Word should START assembling earlier
+        const startSeconds = Math.max(0, assembledAtSeconds - VAJBUJ_CONFIG.wordAssemblyDuration);
+
+        vajbujState.words.push({
+            ...wordData,
+            startTime: startSeconds,
+            assembledTime: assembledAtSeconds,
+            state: 'waiting', // waiting, assembling, assembled
+            mesh: null,
+            cubes: [], // Individual cube positions for scatter effect
+            progress: 0
+        });
+    });
+
+    console.log(`[VAJBUJ] Prepared ${vajbujState.words.length} words in ${totalLines} lines.`);
+}
+
+function createVoxelWord(wordData, font) {
+    const word = wordData.text;
+    // Replacement map for Polish characters missing in standard Three.js fonts (helvetiker)
+    const polishMap = {
+        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
+        '.': '', ',': '', '!': '', '?': '' // Remove punctuation from 3D geometry to prevent voxel clutter
+    };
+
+    // Clean word for 3D generation (fallback to ASCII-ish and remove punctuation)
+    const displayWord = word.split('').map(char => polishMap[char] || char).join('');
+
+    // Scale support
+    const wordScale = wordData.scale || 1.0;
+    const voxelSize = CONFIG.particleSize;
+
+    // Check Cache
+    const cacheKey = `${word}_${wordScale}`;
+    let cubePositions = [];
+    let width = 0;
+
+    if (vajbujState.voxelCache && vajbujState.voxelCache[cacheKey]) {
+        cubePositions = vajbujState.voxelCache[cacheKey].positions;
+        width = vajbujState.voxelCache[cacheKey].width;
+    } else {
+        // Create text geometry (Fallback)
+        const textGeo = new TextGeometry(displayWord, {
+            font: font,
+            size: VAJBUJ_CONFIG.wordSize * wordScale,
+            height: VAJBUJ_CONFIG.wordHeight * wordScale,
+            curveSegments: 4,
+            bevelEnabled: false
+        });
+
+        textGeo.computeBoundingBox();
+        width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+
+        // Sample points on the text surface
+        const mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
+
+        const voxelMap = new Map();
+
+        // Grid scan for deterministic voxelization
+        const minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
+        const maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
+        const minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
+        const maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
+
+        const scanRaycaster = new THREE.Raycaster();
+        const scanDir = new THREE.Vector3(0, 0, -1);
+
+        for (let gx = minX; gx <= maxX; gx++) {
+            for (let gy = minY; gy <= maxY; gy++) {
+                const px = gx * voxelSize;
+                const py = gy * voxelSize;
+
+                scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
+                const intersects = scanRaycaster.intersectObject(mesh);
+
+                if (intersects.length > 0) {
+                    for (let z = 0; z < VAJBUJ_CONFIG.wordThickness; z++) {
+                        const key = `${gx},${gy},${z}`;
+                        if (!voxelMap.has(key)) {
+                            voxelMap.set(key, {
+                                x: px,
+                                y: py,
+                                z: z * voxelSize
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        voxelMap.forEach(v => cubePositions.push(new THREE.Vector3(v.x, v.y, v.z)));
+
+        // Cache this result for next time
+        if (!vajbujState.voxelCache) vajbujState.voxelCache = {};
+        vajbujState.voxelCache[cacheKey] = {
+            positions: cubePositions,
+            width: width
+        };
+
+        textGeo.dispose();
+    }
+
+    // Create instanced mesh for word
+    const cubeGeo = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
+    const wordColor = wordData.color || VAJBUJ_CONFIG.defaultWordColor || 0xffffff;
+    // Force white material for the black-to-white transition effect
+    const cubeMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        metalness: 0.3,
+        roughness: 0.7,
+        emissive: new THREE.Color(0xffffff).multiplyScalar(0.2),
+        transparent: true,
+        opacity: 1
+    });
+
+    const instancedMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubePositions.length);
+    instancedMesh.visible = false;
+
+    // Initialize particles to dark color (almost black)
+    const initColor = new THREE.Color(0x050505);
+    for (let i = 0; i < cubePositions.length; i++) {
+        instancedMesh.setColorAt(i, initColor);
+    }
+
+    // Store cube data with scatter positions
+    const cubes = cubePositions.map((pos, i) => {
+        // Random scatter position
+        const scatterPos = new THREE.Vector3(
+            pos.x + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius * 2,
+            pos.y + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius * 2 - 5, // Start below
+            pos.z + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius
+        );
+
+        // Distribution: More particles appear at the start (lower delay), fewer at the end (higher delay)
+        // Power curve: x^3 pushes values towards 0 so more particles have small delay
+        const delay = Math.pow(Math.random(), 3) * 0.7; // Max 70% delay
+
+        return {
+            targetPos: pos.clone(),
+            scatterPos: scatterPos,
+            currentPos: scatterPos.clone(),
+            currentScale: 0,
+            delay: delay,
+            delay: delay,
+            shouldOvershoot: Math.random() < 0.3, // 30% chance for overshoot
+            overshootMagnitude: 0.3 + Math.random() * 0.4 // Random magnitude ~0.5 (was 1.5, so 3x smaller)
+        };
+    });
+
+    // Center the word
+    const centerX = width / 2;
+    cubes.forEach(cube => {
+        cube.targetPos.x -= centerX;
+        cube.scatterPos.x -= centerX;
+        cube.currentPos.x -= centerX;
+    });
+
+    // textGeo.dispose(); // Removed to fix ReferenceError
+
+    return {
+        mesh: instancedMesh,
+        cubes: cubes,
+        width: width
+    };
+}
+
+function updateVajbujMode(delta) {
+    if (!vajbujState.active) {
+        // Check for inactivity to trigger Vajbuj (only if autoTrigger enabled)
+        if (VAJBUJ_CONFIG.enabled && VAJBUJ_CONFIG.autoTrigger &&
+            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout) {
+            startVajbujMode();
+        }
+        return;
+    }
+
+    const tempColor = new THREE.Color();
+    const targetWhite = new THREE.Color(0xffffff);
+    const startDark = new THREE.Color(0x050505);
+
+    const elapsed = (Date.now() - vajbujState.startTime) / 1000;
+    const fragmentDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+    const progressNormalized = elapsed / fragmentDuration;
+
+    // Tempo multiplier (slow phase vs fast phase)
+    let tempoMultiplier = 1.0;
+    if (progressNormalized < VAJBUJ_CONFIG.slowPhaseEnd) {
+        tempoMultiplier = VAJBUJ_CONFIG.slowPhaseSpeed;
+    }
+
+    // Update words
+    vajbujState.words.forEach((wordData, idx) => {
+        if (wordData.state === 'waiting' && elapsed >= wordData.startTime) {
+            // Start assembling this word
+            wordData.state = 'assembling';
+
+            // Create the voxel word mesh
+            if (!wordData.mesh && loadedFontRegular) {
+                const voxelWord = createVoxelWord(wordData, loadedFontRegular);
+                wordData.mesh = voxelWord.mesh;
+                wordData.cubes = voxelWord.cubes;
+                wordData.width = voxelWord.width;
+
+                // Calculate X position based on word index in line
+                let lineX = 0;
+                const wordsInThisLine = vajbujState.words.filter(w => w.lineIndex === wordData.lineIndex);
+                const currentWordIdxInLine = wordsInThisLine.indexOf(wordData);
+
+                for (let i = 0; i < currentWordIdxInLine; i++) {
+                    const prevWord = wordsInThisLine[i];
+                    if (prevWord && prevWord.width) {
+                        lineX += prevWord.width + VAJBUJ_CONFIG.wordSpacing;
+                    } else {
+                        lineX += 1.5; // Default spacing if width unknown
+                    }
+                }
+
+                // Center the line
+                let totalLineWidth = 0;
+                wordsInThisLine.forEach(w => {
+                    totalLineWidth += (w.width || 1.5) + VAJBUJ_CONFIG.wordSpacing;
+                });
+                totalLineWidth -= VAJBUJ_CONFIG.wordSpacing;
+
+                const startX = -totalLineWidth / 2;
+                // Add half-width because the mesh is centered, but lineX is the left-edge cursor
+                wordData.posX = startX + lineX + (wordData.width / 2) + (wordData.offsetX || 0);
+                // Initial Y position (will be updated dynamically for shifting)
+                wordData.posY = VAJBUJ_CONFIG.lyricsOffsetY + (wordData.offsetY || 0);
+                wordData.posZ = 0;
+
+                scene.add(wordData.mesh);
+                wordData.mesh.visible = true;
+            }
+        }
+
+        if (wordData.state === 'assembling' || wordData.state === 'assembled') {
+            // Calculate target Y based on how many lines are completed
+            // Current line always appears at lyricsOffsetY.
+            // Completed lines move up by lineSpacing.
+            let shiftCount = vajbujState.completedLines - wordData.lineIndex;
+            if (shiftCount < 0) shiftCount = 0; // Future lines stay at base
+
+            const targetLineY = VAJBUJ_CONFIG.lyricsOffsetY + shiftCount * VAJBUJ_CONFIG.lineSpacing;
+
+            // Smoothly lerp the Y position
+            if (wordData.posY === undefined) wordData.posY = VAJBUJ_CONFIG.lyricsOffsetY;
+            wordData.posY += (targetLineY - wordData.posY) * 0.1;
+
+            if (wordData.state === 'assembling') {
+                // Calculate assembly progress
+                const assemblyElapsed = elapsed - wordData.startTime;
+                const assemblyDuration = VAJBUJ_CONFIG.wordAssemblyDuration;
+                wordData.progress = Math.min(assemblyElapsed / assemblyDuration, 1);
+
+                // Update each cube
+                if (wordData.mesh && wordData.cubes) {
+                    wordData.cubes.forEach((cube, i) => {
+                        // Calculate per-cube progress based on delay
+                        let effectiveProgress = 0;
+                        if (wordData.progress > cube.delay) {
+                            effectiveProgress = (wordData.progress - cube.delay) / (1 - cube.delay);
+                        }
+
+                        // EaseOut Expo for the specific cube (or Back for overshoot)
+                        let eased;
+                        if (cube.shouldOvershoot) {
+                            const t = effectiveProgress;
+                            if (t >= 1) {
+                                eased = 1;
+                            } else if (t <= 0) {
+                                eased = 0;
+                            } else {
+                                const c1 = cube.overshootMagnitude; // Random "Light" overshoot
+                                const c3 = c1 + 1;
+                                eased = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+                            }
+                        } else {
+                            eased = effectiveProgress >= 1 ? 1 : (effectiveProgress <= 0 ? 0 : 1 - Math.pow(2, -10 * effectiveProgress));
+                        }
+
+                        // Interpolate position
+                        cube.currentPos.lerpVectors(cube.scatterPos, cube.targetPos, eased);
+                        cube.currentScale = eased;
+
+                        // --- Particle Color Transition ---
+                        // Dark (almost black) until 2 frames before completion, then white
+                        if (wordData.mesh) {
+                            const assemblyDuration = VAJBUJ_CONFIG.wordAssemblyDuration;
+                            // Total active time for this specific particle
+                            const totalParticleTime = (1 - cube.delay) * assemblyDuration;
+                            // Time remaining for this particle
+                            const timeRemaining = (1 - effectiveProgress) * totalParticleTime;
+                            const transitionWindow = 0.5; // Extended to 0.5s as requested
+
+                            if (effectiveProgress >= 1) {
+                                tempColor.copy(targetWhite);
+                            } else if (timeRemaining <= transitionWindow && timeRemaining > 0) {
+                                // Interpolate from Dark to White
+                                const t = 1 - (timeRemaining / transitionWindow);
+                                tempColor.copy(startDark).lerp(targetWhite, t);
+                            } else {
+                                // Stay Dark
+                                tempColor.copy(startDark);
+                            }
+                            wordData.mesh.setColorAt(i, tempColor);
+                        }
+
+                        // Add word position offset
+                        dummy.position.set(
+                            cube.currentPos.x + (wordData.posX || 0),
+                            cube.currentPos.y + (wordData.posY || 0),
+                            cube.currentPos.z + (wordData.posZ || 0)
+                        );
+                        dummy.scale.setScalar(cube.currentScale);
+                        dummy.rotation.set(0, 0, 0);
+                        dummy.updateMatrix();
+                        wordData.mesh.setMatrixAt(i, dummy.matrix);
+                    });
+                    wordData.mesh.instanceMatrix.needsUpdate = true;
+                    if (wordData.mesh.instanceColor) wordData.mesh.instanceColor.needsUpdate = true;
+                }
+
+                if (wordData.progress >= 1) {
+                    wordData.state = 'assembled';
+
+                    // Check if this was the last word of the line to trigger global shift
+                    const lineWords = vajbujState.words.filter(w => w.lineIndex === wordData.lineIndex);
+                    const allAssembled = lineWords.every(w => w.state === 'assembled' || w.state === 'assembling' && w.progress >= 1);
+
+                    if (allAssembled && wordData.lineIndex >= vajbujState.completedLines) {
+                        vajbujState.completedLines = wordData.lineIndex + 1;
+                        console.log(`[VAJBUJ] Line ${wordData.lineIndex} completed. Shifting up!`);
+                    }
+                }
+            } else {
+                // state === 'assembled'
+                // Still need to update matrix for the vertical shift
+                if (wordData.mesh && wordData.cubes) {
+                    wordData.cubes.forEach((cube, i) => {
+                        dummy.position.set(
+                            cube.targetPos.x + (wordData.posX || 0),
+                            cube.targetPos.y + (wordData.posY || 0),
+                            cube.targetPos.z + (wordData.posZ || 0)
+                        );
+                        dummy.scale.setScalar(1);
+                        dummy.rotation.set(0, 0, 0);
+                        dummy.updateMatrix();
+                        wordData.mesh.setMatrixAt(i, dummy.matrix);
+                    });
+                    wordData.mesh.instanceMatrix.needsUpdate = true;
+                }
+            }
+        }
+    });
+
+    // Update background cubes
+    if (vajbujState.bgCubesMesh && vajbujState.bgCubesMesh.visible) {
+        vajbujState.bgCubes.forEach((cube, i) => {
+            // Apply velocity with tempo multiplier
+            cube.position.add(cube.velocity.clone().multiplyScalar(tempoMultiplier));
+
+            // Apply spin
+            cube.rotation.x += cube.spin.x * tempoMultiplier;
+            cube.rotation.y += cube.spin.y * tempoMultiplier;
+            cube.rotation.z += cube.spin.z * tempoMultiplier;
+
+            // Bounce off invisible walls
+            const bounds = 15;
+            ['x', 'y', 'z'].forEach(axis => {
+                if (Math.abs(cube.position[axis]) > bounds) {
+                    cube.velocity[axis] *= -1;
+                    cube.position[axis] = Math.sign(cube.position[axis]) * bounds;
+                }
+            });
+
+            dummy.position.copy(cube.position);
+            dummy.rotation.copy(cube.rotation);
+            dummy.scale.setScalar(1);
+            dummy.updateMatrix();
+            vajbujState.bgCubesMesh.setMatrixAt(i, dummy.matrix);
+        });
+        vajbujState.bgCubesMesh.instanceMatrix.needsUpdate = true;
+    }
+}
+
+function stopVajbujMode() {
+    if (vajbujState.isStopping) return;
+    if (!vajbujState.active) return;
+
+    console.log('[VAJBUJ] Initiating smooth shutdown');
+    vajbujState.isStopping = true;
+
+    // 1. Mute / Fade out audio and visuals
+    if (vajbujState.audio) {
+        // Fade out over 2 seconds
+        fadeAudio(vajbujState.audio, vajbujState.audio.volume, 0, 2);
+    }
+
+    // Fade out background cubes
+    if (vajbujState.bgCubesMesh) {
+        fadeVisualOpacity(vajbujState.bgCubesMesh.material, 1, 0, 2);
+    }
+
+    // Fade out active words
+    vajbujState.words.forEach(word => {
+        if (word.mesh && word.mesh.material) {
+            fadeVisualOpacity(word.mesh.material, 1, 0, 2);
+        }
+    });
+
+    // 2. Return camera to start position
+    setCameraMode('manual');
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = CONFIG.initialZoom;
+    cameraFocusPoint.set(0, 0, 0);
+
+    // Sync UI Button immediately
+    if (window.vajbujButton) {
+        window.vajbujButton.classList.remove('active');
+    }
+
+    // 3. Final cleanup after ~2s
+    setTimeout(() => {
+        console.log('[VAJBUJ] Final shutdown cleanup');
+
+        // Stop and reset audio
+        if (vajbujState.audio) {
+            vajbujState.audio.pause();
+            vajbujState.audio.currentTime = 0;
+            vajbujState.audio.volume = 0;
+        }
+
+        // Hide background cubes
+        if (vajbujState.bgCubesMesh) {
+            vajbujState.bgCubesMesh.visible = false;
+        }
+
+        // Clean up all words
+        cleanupVajbujWords();
+
+        // Reset state
+        vajbujState.active = false;
+        vajbujState.isStopping = false;
+        vajbujState.lastActivityTime = Date.now();
+    }, 2000);
+}
+
+function cleanupVajbujWords() {
+    vajbujState.words.forEach(wordData => {
+        if (wordData.mesh) {
+            scene.remove(wordData.mesh);
+            wordData.mesh.geometry.dispose();
+            wordData.mesh.material.dispose();
+            wordData.mesh = null;
+        }
+    });
+    vajbujState.words = [];
+}
+
+function resetVajbujActivityTimer() {
+    vajbujState.lastActivityTime = Date.now();
+
+    // If Vajbuj is active and user interacts, don't stop - let them control camera
+    // Only reset timer for triggering new Vajbuj after it ends
+}
+
+// --- PARTICLE SERIALIZATION & LOADING ---
+
+function initMeshes(groupCounts) {
+    meshRegistry = {};
+    const baseSize = CONFIG.particleSize;
+
+    // Ensure materials are initialized
+    if (!defaultBoxMaterial) defaultBoxMaterial = new THREE.MeshStandardMaterial(MATERIALS.defaultBox);
+    if (!glassMaterial) glassMaterial = new THREE.MeshPhysicalMaterial(MATERIALS.glass);
+    if (!goldMaterial) goldMaterial = new THREE.MeshStandardMaterial(MATERIALS.gold);
+
+    SHAPE_DEFINITIONS.forEach(shape => {
+        const geoW = shape.w * baseSize;
+        const geoH = shape.h * baseSize;
+        const geoD = shape.d * baseSize;
+        const radius = baseSize * 0.05;
+
+        const geometry = new RoundedBoxGeometry(geoW, geoH, geoD, 2, radius);
+        const entry = {};
+
+        if (groupCounts[shape.id].top > 0) {
+            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? glassMaterial : defaultBoxMaterial, groupCounts[shape.id].top);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            entry.top = mesh;
+            entry.topIndex = 0;
+            scene.add(mesh);
+        }
+
+        if (groupCounts[shape.id].kek > 0) {
+            const mesh = new THREE.InstancedMesh(geometry, isAlternateMaterial ? goldMaterial : defaultBoxMaterial, groupCounts[shape.id].kek);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            entry.kek = mesh;
+            entry.kekIndex = 0;
+            scene.add(mesh);
+        }
+
+        meshRegistry[shape.id] = entry;
+    });
+}
+function exportParticles() {
+    const data = {
+        cubeGroups: cubeGroups.map(g => ({
+            p: [Number(g.originalPos.x.toFixed(3)), Number(g.originalPos.y.toFixed(3)), Number(g.originalPos.z.toFixed(3))],
+            s: [Number(g.baseScale.x.toFixed(3)), Number(g.baseScale.y.toFixed(3)), Number(g.baseScale.z.toFixed(3))],
+            id: g.shapeId,
+            t: g.isTop ? 1 : 0
+        })),
+        inner: innerCubeParticles.map(p => ({
+            p: [Number(p.originalPos.x.toFixed(3)), Number(p.originalPos.y.toFixed(3)), Number(p.originalPos.z.toFixed(3))]
+        })),
+        text: CONFIG.text
+    };
+
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = CONFIG.particlesFile;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+async function loadParticles(data) {
+    console.log("Loading particles from file...");
+    loadState.generation = 10;
+    updateProgress();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // 1. Reconstruct Counts
+    const groupCounts = {};
+    SHAPE_DEFINITIONS.forEach(s => groupCounts[s.id] = { top: 0, kek: 0 });
+
+    data.cubeGroups.forEach(g => {
+        if (g.t) groupCounts[g.id].top++;
+        else groupCounts[g.id].kek++;
+    });
+
+    // 2. Init Meshes
+    initMeshes(groupCounts);
+
+    loadState.generation = 50;
+    updateProgress();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // 3. Populate Cubes
+    cubeGroups = [];
+    dummy.rotation.set(0, 0, 0);
+
+    data.cubeGroups.forEach(g => {
+        const entry = meshRegistry[g.id];
+        const mesh = g.t ? entry.top : entry.kek;
+        const index = g.t ? entry.topIndex++ : entry.kekIndex++;
+
+        const pos = new THREE.Vector3(g.p[0], g.p[1], g.p[2]);
+        const scale = new THREE.Vector3(g.s[0], g.s[1], g.s[2]);
+
+        dummy.position.copy(pos);
+        dummy.scale.copy(scale);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+
+        cubeGroups.push({
+            originalPos: pos.clone(),
+            currentPos: pos.clone(),
+            baseScale: scale.clone(),
+            shapeId: g.id,
+            isTop: Boolean(g.t),
+            meshIndex: index,
+            velocity: new THREE.Vector3(0, 0, 0),
+            angularVelocity: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Quaternion(),
+            isFlying: false,
+            returnStartTime: 0,
+            freezeTime: 0,
+            returnSpeed: CONFIG.returnSpeed * (0.5 + Math.random()),
+            wobbleFreq: Math.random() * 0.1,
+            wobbleAmp: Math.random() * 0.05,
+            gridState: 'IDLE',
+            returnQueue: [],
+            currentStepIndex: 0,
+            stepStartTime: 0,
+            glitchTarget: new THREE.Vector3()
+        });
+    });
+
+    // Notify Three.js to update
+    Object.values(meshRegistry).forEach(e => {
+        if (e.top) e.top.instanceMatrix.needsUpdate = true;
+        if (e.kek) e.kek.instanceMatrix.needsUpdate = true;
+    });
+
+    loadState.generation = 80;
+    updateProgress();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // 4. Inner Cubes
+    innerCubeParticles = [];
+
+    // Check if inner data exists
+    if (!data.inner) data.inner = [];
+
+    const innerCount = data.inner.length;
+    const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize);
+    const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
+
+    innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCount);
+    const color = new THREE.Color();
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    if (innerCount > 0) {
+        data.inner.forEach(p => {
+            if (p.p[0] < minX) minX = p.p[0];
+            if (p.p[0] > maxX) maxX = p.p[0];
+        });
+    }
+    const textWidth = maxX - minX || 1;
+
+    let sIdx = 0;
+    data.inner.forEach(p => {
+        const pos = new THREE.Vector3(p.p[0], p.p[1], p.p[2]);
+
+        dummy.position.copy(pos);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
+
+        const hue = (pos.x - minX) / textWidth;
+        color.setHSL(hue, 1.0, 0.5);
+        innerCubeInstancedMesh.setColorAt(sIdx, color);
+
+        innerCubeParticles.push({
+            meshIndex: sIdx,
+            originalPos: pos.clone(),
+            currentPos: pos.clone(),
+            velocity: new THREE.Vector3(0, 0, 0),
+            angularVelocity: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Quaternion(),
+            isFlying: false,
+            returnStartTime: 0,
+            returnSpeed: CONFIG.returnSpeed,
+            gridState: 'IDLE',
+            returnQueue: [],
+            currentStepIndex: 0,
+            stepStartTime: 0,
+            glitchTarget: new THREE.Vector3()
+        });
+        sIdx++;
+    });
+
+    innerCubeInstancedMesh.count = sIdx;
+    innerCubeInstancedMesh.instanceMatrix.needsUpdate = true;
+    if (innerCubeInstancedMesh.instanceColor) innerCubeInstancedMesh.instanceColor.needsUpdate = true;
+    scene.add(innerCubeInstancedMesh);
+
+    loadState.generation = 100;
+    updateProgress();
+
+    // Hide Loader
+    loaderContainer.classList.add('hidden');
+    setTimeout(() => {
+        loaderContainer.style.display = 'none';
+    }, 500);
 }
