@@ -450,10 +450,20 @@ function createUI() {
     // 2. Terminal Menu Logic
     const termAppstain = document.getElementById('term-appstain');
     const termGlitch = document.getElementById('term-glitch');
+    const termGenimg = document.getElementById('term-genimg');
 
     if (termAppstain) {
         termAppstain.onclick = () => {
-            document.getElementById('appstain-modal').classList.remove('hidden');
+            const modal = document.getElementById('appstain-modal');
+            modal.classList.remove('hidden');
+            modal.classList.remove('appstain-modal-closing');
+            if (typeof TopkekTrumpHead !== 'undefined' && document.getElementById('topkek-trump-head')) {
+                TopkekTrumpHead.init({
+                    imagePath: 'ASSETS/APPSTAIN/character_head.png',
+                    minInterval: 20000,
+                    maxInterval: 45000
+                });
+            }
         };
     }
 
@@ -461,6 +471,12 @@ function createUI() {
         termGlitch.onclick = () => {
             document.getElementById('glitch-modal').classList.remove('hidden');
             loadGlitchContent(); // Load content when opened
+        };
+    }
+
+    if (termGenimg) {
+        termGenimg.onclick = () => {
+            document.getElementById('genimg-modal').classList.remove('hidden');
         };
     }
 
@@ -473,17 +489,24 @@ function createUI() {
         const errorMsg = document.getElementById('appstain-error');
 
         closeBtn.onclick = () => {
-            modal.classList.add('hidden');
-            errorMsg.style.display = 'none';
-            passwordInput.value = '';
+            modal.classList.add('appstain-modal-closing');
+            const onCloseEnd = (e) => {
+                if (e.target !== modal) return;
+                modal.removeEventListener('animationend', onCloseEnd);
+                modal.classList.add('hidden');
+                modal.classList.remove('appstain-modal-closing');
+                errorMsg.classList.remove('visible');
+                passwordInput.value = '';
+            };
+            modal.addEventListener('animationend', onCloseEnd);
         };
 
         const checkPassword = () => {
             if (passwordInput.value === CONFIG.appstainPassword) {
-                window.location.href = 'https://xcwajdax.github.io/appstain.github.io/';
+                window.location.href = CONFIG.appstainRedirectUrl || 'https://xcwajdax.github.io/appstainsaga/';
             } else {
-                errorMsg.style.display = 'block';
-                passwordInput.value = ''; // Clear input on error
+                errorMsg.classList.add('visible');
+                passwordInput.value = '';
             }
         };
 
@@ -495,8 +518,101 @@ function createUI() {
                 checkPassword();
             }
         });
+
+        // Image viewer: click any APPSTAIN screenshot/quest image to open full size
+        const content = document.getElementById('appstain-content');
+        const viewer = document.getElementById('image-viewer');
+        const fullImg = document.getElementById('full-image');
+        if (content && viewer && fullImg) {
+            content.querySelectorAll('.appstain-screenshot').forEach((img) => {
+                img.addEventListener('click', () => {
+                    fullImg.src = img.src;
+                    viewer.classList.remove('hidden');
+                });
+            });
+        }
+
+        // Custom audio player for APPSTAIN modal
+        const audioEl = document.getElementById('appstain-audio-el');
+        const playBtn = document.getElementById('appstain-audio-play');
+        const seekInput = document.getElementById('appstain-audio-seek');
+        const progressFill = document.getElementById('appstain-audio-progress-fill');
+        const timeEl = document.getElementById('appstain-audio-time');
+        if (audioEl && playBtn && seekInput && progressFill && timeEl) {
+            const formatTime = (s) => {
+                if (!isFinite(s) || s < 0) return '0:00';
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return m + ':' + (sec < 10 ? '0' : '') + sec;
+            };
+            const updateTime = () => {
+                const cur = audioEl.currentTime;
+                const dur = audioEl.duration;
+                timeEl.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+                const pct = dur > 0 ? (cur / dur) * 100 : 0;
+                seekInput.value = pct;
+                progressFill.style.width = pct + '%';
+            };
+            playBtn.addEventListener('click', () => {
+                if (audioEl.paused) {
+                    audioEl.play();
+                    playBtn.textContent = 'Pause';
+                    playBtn.classList.add('playing');
+                    playBtn.setAttribute('aria-label', 'Pause');
+                } else {
+                    audioEl.pause();
+                    playBtn.textContent = 'Play';
+                    playBtn.classList.remove('playing');
+                    playBtn.setAttribute('aria-label', 'Play');
+                }
+            });
+            audioEl.addEventListener('play', () => {
+                playBtn.textContent = 'Pause';
+                playBtn.classList.add('playing');
+            });
+            audioEl.addEventListener('pause', () => {
+                playBtn.textContent = 'Play';
+                playBtn.classList.remove('playing');
+            });
+            audioEl.addEventListener('timeupdate', updateTime);
+            audioEl.addEventListener('durationchange', updateTime);
+            audioEl.addEventListener('ended', () => {
+                playBtn.textContent = 'Play';
+                playBtn.classList.remove('playing');
+                updateTime();
+            });
+            seekInput.addEventListener('input', () => {
+                const pct = parseFloat(seekInput.value);
+                if (audioEl.duration) {
+                    audioEl.currentTime = (pct / 100) * audioEl.duration;
+                }
+                progressFill.style.width = pct + '%';
+            });
+            updateTime();
+        }
     };
     initAppstainModal();
+
+    // GENIMG Modal – open/close
+    const genimgModal = document.getElementById('genimg-modal');
+    const genimgClose = document.getElementById('genimg-close');
+    const genimgBackdrop = document.getElementById('genimg-backdrop');
+    if (genimgModal && genimgClose) {
+        genimgClose.onclick = () => genimgModal.classList.add('hidden');
+        if (genimgBackdrop) genimgBackdrop.onclick = () => genimgModal.classList.add('hidden');
+    }
+    // GENIMG gallery: click thumb to open in image-viewer (same as APPSTAIN)
+    const genimgContent = document.getElementById('genimg-content');
+    const imageViewer = document.getElementById('image-viewer');
+    const fullImageEl = document.getElementById('full-image');
+    if (genimgContent && imageViewer && fullImageEl) {
+        genimgContent.querySelectorAll('.genimg-thumb').forEach((img) => {
+            img.addEventListener('click', () => {
+                fullImageEl.src = img.src;
+                imageViewer.classList.remove('hidden');
+            });
+        });
+    }
 
     // 4. Glitch Lab Modal Logic
     // currentLang is now global

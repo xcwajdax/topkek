@@ -1,0 +1,22 @@
+<!--
+  TOPKEK – snippet do wklejenia na stronę (gadająca głowa Trumpa).
+  Zastąp ŚCIEŻKA_DO_* rzeczywistymi ścieżkami do plików na serwerze TOPKEK.
+-->
+<link rel="stylesheet" href="ŚCIEŻKA_DO_trump-head.css">
+
+<div id="topkek-character-container" class="topkek-character-container">
+    <div class="topkek-character-heads-row">
+        <img id="topkek-trump-head" class="topkek-character-head" src="ŚCIEŻKA_DO_character_head.png" alt="Ronald Dump">
+    </div>
+    <div id="topkek-speech-bubble" class="topkek-speech-bubble hidden">
+        <div class="topkek-speech-text"></div>
+        <div class="topkek-speech-tail"></div>
+    </div>
+</div>
+
+<script src="ŚCIEŻKA_DO_trump-quotes.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    TopkekTrumpHead.init({ imagePath: 'ŚCIEŻKA_DO_character_head.png' });
+});
+</script>

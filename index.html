@@ -8,6 +8,7 @@
     <link rel="icon"
         href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="ASSETS/APPSTAIN/topkek_trump_head/trump-head.css">
     <script type="importmap">
         {
             "imports": {
@@ -34,22 +35,102 @@
     <div id="terminal-menu">
         <div class="term-line">Under Development</div>
         <div class="term-line">Games ></div>
-        <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v_0.63.21</div>
+        <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
         <div class="term-line">> floppy driver v_0.05.20</div>
         <div class="term-line">Soft</div>
+        <div class="term-line">> pixelgen v 0.2</div>
+        <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
         <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
         <div class="term-line">> Frame Gen v_1.0</div>
     </div>
 
     <!-- APPSTAIN MODAL -->
     <div id="appstain-modal" class="hidden">
+        <div id="appstain-backdrop"></div>
+        <div id="appstain-overlay"></div>
         <div id="appstain-content">
-            <h2>APPSTAIN alpha v0.63.21</h2>
-            <p>Enter Password to Access Files</p>
-            <input type="password" id="appstain-password" placeholder="Password">
-            <button id="appstain-submit" class="mode-btn">Take me to the Files</button>
-            <p id="appstain-error" style="color: red; display: none;">Access Denied</p>
             <button id="appstain-close" class="close-btn">X</button>
+
+            <!-- Logo + banners -->
+            <img src="ASSETS/APPSTAIN/AA2.png" alt="APPSTAIN ACTS" class="appstain-logo">
+            <div class="appstain-banners">
+                <img src="ASSETS/APPSTAIN/handcraft_napis.png" alt="100% Hand Crafted = 100% AI Coded" class="appstain-banner">
+                <img src="ASSETS/APPSTAIN/slop_napis.png" alt="200% SLOP" class="appstain-banner">
+            </div>
+
+            <!-- Trump head above intro card -->
+            <div id="topkek-character-container" class="topkek-character-container appstain-trump-widget">
+                <div class="topkek-character-heads-row">
+                    <img id="topkek-trump-head" class="topkek-character-head" src="ASSETS/APPSTAIN/character_head.png" alt="Ronald Dump">
+                </div>
+                <div id="topkek-speech-bubble" class="topkek-speech-bubble hidden">
+                    <div class="topkek-speech-text"></div>
+                    <div class="topkek-speech-tail"></div>
+                </div>
+            </div>
+            <div class="appstain-card appstain-intro-card">
+                <p class="appstain-intro">Satirical clicker game in development since December 2025, featuring deep mechanics and layered gameplay. Your goal: secure Trump's re-election by accumulating Acts, building infrastructure, and managing public support.</p>
+            </div>
+
+            <!-- Tutorial section: quest preview + one-line info -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Tutorial – In-game quests</h3>
+                <p class="appstain-quest-intro">The game features an elaborate quest system that introduces the player to the game.</p>
+                <div class="appstain-quest-thumbs">
+                    <img src="ASSETS/APPSTAIN/quest_01.jpg" alt="Quest 1 – First Redactions" class="appstain-quest-img appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/quest_02.jpg" alt="Quest 2 – Troll Army" class="appstain-quest-img appstain-screenshot">
+                </div>
+            </section>
+
+            <!-- Concept video -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Concept Trailer</h3>
+                <div class="appstain-video-wrap">
+                    <video class="appstain-video" src="ASSETS/APPSTAIN/tak02_1_smoll.mp4" controls preload="metadata"></video>
+                    <div class="appstain-card appstain-caption-card">
+                        <p class="appstain-video-caption">This is a concept video — not final in-game footage.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Music: custom player -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Listen: Akta i Pętle</h3>
+                <div class="appstain-card appstain-audio-card">
+                    <audio id="appstain-audio-el" src="ASSETS/APPSTAIN/Appstain Clicker - Akta i Petle.mp3" preload="metadata"></audio>
+                    <div class="appstain-audio-player">
+                        <button type="button" id="appstain-audio-play" class="appstain-audio-btn" aria-label="Play">Play</button>
+                        <div class="appstain-audio-progress-wrap">
+                            <input type="range" id="appstain-audio-seek" class="appstain-audio-seek" min="0" max="100" value="0" aria-label="Seek">
+                            <div class="appstain-audio-progress-fill" id="appstain-audio-progress-fill"></div>
+                        </div>
+                        <span class="appstain-audio-time" id="appstain-audio-time">0:00 / 0:00</span>
+                    </div>
+                    <p class="appstain-audio-caption">Theme from APPSTAIN Clicker.</p>
+                </div>
+            </section>
+
+            <!-- Screenshots -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Screenshots</h3>
+                <div class="appstain-screenshots">
+                    <img src="ASSETS/APPSTAIN/game_01.jpg" alt="Game screenshot" class="appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/game_02.jpg" alt="Game screenshot" class="appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/game_03.jpg" alt="Game screenshot" class="appstain-screenshot">
+                </div>
+            </section>
+
+            <!-- Alpha info + riddle -->
+            <div class="appstain-riddle">
+                <div class="appstain-card appstain-alpha-card">
+                    <p class="appstain-alpha-badge">Closed Alpha</p>
+                    <p class="appstain-alpha-detail">Current version: <strong>v0.101.0</strong> &nbsp;·&nbsp; Public Alpha planned for <strong>May 2026</strong></p>
+                </div>
+                <p class="appstain-riddle-question">What does KEK mean?</p>
+                <input type="text" id="appstain-password" placeholder="Your answer" autocomplete="off">
+                <button id="appstain-submit" class="mode-btn">Take me to the Files</button>
+                <p id="appstain-error" class="appstain-error">Access Denied</p>
+            </div>
         </div>
     </div>
 
@@ -83,6 +164,46 @@
         </div>
     </div>
 
+    <!-- GENIMG MODAL -->
+    <div id="genimg-modal" class="hidden">
+        <div id="genimg-backdrop"></div>
+        <div id="genimg-content">
+            <button id="genimg-close" class="close-btn">X</button>
+            <h2 id="genimg-title">GENIMG v 1.3</h2>
+
+            <div class="genimg-gallery">
+                <img src="ASSETS/GENIMG/01.jpg" alt="GENIMG 01" class="genimg-thumb">
+                <img src="ASSETS/GENIMG/02.jpg" alt="GENIMG 02" class="genimg-thumb">
+                <img src="ASSETS/GENIMG/03.jpg" alt="GENIMG 03" class="genimg-thumb">
+            </div>
+
+            <div id="genimg-md-content" class="genimg-md">
+                <h3>GENIMG – System &amp; UI Overview</h3>
+                <h4>1. Core System Architecture &amp; Workflow</h4>
+                <p>GENIMG is a local workspace designed for the structured generation, management, and versioning of AI-generated images and videos.</p>
+                <p><strong>How it works:</strong></p>
+                <ul>
+                    <li><strong>Strict Project Structure:</strong> Work is organized into numbered folders (e.g. <code>PROJECT_001</code>), initialized from a <code>_template</code>. Each project contains a <code>PROJECT.md</code> file that dictates the style, color palette, and context, serving as the absolute source of truth for generation.</li>
+                    <li><strong>Milestone Tracking:</strong> The system relies heavily on files—both at the workspace root and within individual projects—to log major changes, new versions, and project history.</li>
+                    <li><strong>Generation Engine:</strong> The actual asset creation is handled by Python scripts (<code>generate.py</code>, <code>generate_video.py</code>) that communicate with Google's Vertex AI APIs (Imagen for images, Veo for videos) via OAuth2 authentication.</li>
+                    <li><strong>Meticulous Prompt Logging:</strong> Every generated asset (in <code>generated/</code>) is versioned (e.g. <code>v1_asset.jpg</code>) and never overwritten. A Markdown file in <code>logs/</code> stores the exact prompt, parameters, timestamp, and link to the output file.</li>
+                </ul>
+                <hr>
+                <h4>2. Graphical User Interface (GENIMG UI)</h4>
+                <p>The <code>genimg-ui</code> is a local Next.js web application on <code>localhost:3000</code>. It is the visual frontend and control center for the GENIMG workspace.</p>
+                <p><strong>Key Features &amp; Functions:</strong></p>
+                <ul>
+                    <li><strong>Project Dashboard:</strong> Overview of all <code>PROJECT_XXX</code> directories, project details, visual timeline (from CHANGELOG.md), and new project creation.</li>
+                    <li><strong>Asset Gallery:</strong> Customizable gallery for images and videos—Grid/List views, resizing, filtering by type.</li>
+                    <li><strong>Interactive Generation Forms:</strong> Forms for images (Imagen) and videos (Veo): prompts, target project, parameters (e.g. first frame for video). Backend spawns Python scripts via API routes.</li>
+                    <li><strong>Real-Time Streaming (SSE):</strong> Terminal logs and script progress streamed live; inline preview when the asset is ready.</li>
+                    <li><strong>Advanced Asset Interaction:</strong> Lightbox on click; copy prompts, view prompt log inline, compare versions side-by-side.</li>
+                    <li><strong>Workspace Navigation:</strong> Batch View for related collections, source badges (standard vs. fine-tuned), prompt search across all log files.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
     <!-- CUSTOM TEXT MODAL -->
     <div id="custom-text-modal" class="hidden">
         <div id="custom-text-content">
@@ -101,6 +222,7 @@
         <img id="full-image" src="" alt="Full Screen Preview">
     </div>
 
+    <script src="ASSETS/APPSTAIN/topkek_trump_head/trump-quotes.js"></script>
     <script type="module" src="script.js"></script>
 </body>
 

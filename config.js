@@ -35,7 +35,8 @@ export const CONFIG = {
         thickness: 2, // Voxel thickness
         letterSpacing: 0.7
     },
-    appstainPassword: "LOL" // Password for APPSTAIN modal
+    appstainPassword: "lol",
+    appstainRedirectUrl: "https://xcwajdax.github.io/appstainsaga/"
 };
 
 // VAJBUJ SZMATO Mode Configuration

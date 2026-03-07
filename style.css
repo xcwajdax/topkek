@@ -164,67 +164,501 @@ body {
     border-radius: 4px;
 }
 
-/* APPSTAIN Modal */
+/* APPSTAIN Modal – tło tlo.jpg */
 #appstain-modal {
     position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
     height: 100vh;
-    background: rgba(0, 0, 0, 0.85);
     display: flex;
     justify-content: center;
     align-items: center;
     z-index: 2000;
-    /* Top most */
 }
 
 #appstain-modal.hidden {
     display: none;
 }
 
+/* Pojawianie się modalu */
+#appstain-modal:not(.hidden) {
+    animation: appstain-modal-fadeIn 0.35s ease-out forwards;
+}
+
+#appstain-modal.appstain-modal-closing {
+    animation: appstain-modal-fadeOut 0.25s ease-in forwards;
+}
+
+@keyframes appstain-modal-fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes appstain-modal-fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+#appstain-backdrop {
+    position: absolute;
+    inset: 0;
+    background: url('ASSETS/APPSTAIN/tlo.jpg') center / cover no-repeat;
+}
+
+#appstain-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+}
+
 #appstain-content {
-    background: #222;
-    padding: 30px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 8px;
-    text-align: center;
     position: relative;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-    width: 350px;
+    z-index: 1;
+    background: rgba(20, 22, 30, 0.95);
+    padding: 28px 32px 32px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 14px;
+    text-align: center;
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.7);
+    width: 58.5%;
+    max-width: 598px;
+    max-height: 90vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(212, 175, 55, 0.6) rgba(255, 255, 255, 0.06);
 }
 
-#appstain-content h2 {
-    color: white;
-    font-family: 'Courier New', monospace;
+#appstain-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+#appstain-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 3px;
+}
+
+#appstain-content::-webkit-scrollbar-thumb {
+    background: rgba(212, 175, 55, 0.55);
+    border-radius: 3px;
+}
+
+#appstain-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(212, 175, 55, 0.85);
+}
+
+#appstain-content .close-btn {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
     font-size: 18px;
-    margin-top: 0;
+}
+
+#appstain-content .close-btn:hover {
+    color: white;
+}
+
+/* Logo & banners */
+.appstain-logo {
+    display: block;
+    max-width: 80%;
+    height: auto;
+    margin: 0 auto 12px;
+}
+
+.appstain-banners {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 20px;
     margin-bottom: 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    padding-bottom: 10px;
 }
 
-#appstain-content p {
-    color: rgba(255, 255, 255, 0.8);
+.appstain-banner {
+    max-width: 100%;
+    height: auto;
+    max-height: 48px;
+    object-fit: contain;
+}
+
+/* Generic card box */
+.appstain-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 14px 16px;
+}
+
+/* Section wrapper with heading + card interior */
+.appstain-section-box {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    text-align: left;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.appstain-section-title {
+    color: rgba(212, 175, 55, 0.95);
     font-size: 14px;
-    margin-bottom: 15px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin: 0 0 14px;
+    text-align: left;
 }
 
-#appstain-password {
-    background: rgba(0, 0, 0, 0.3);
+/* Trump head above intro card – centered, slightly larger */
+#appstain-content .appstain-trump-widget.topkek-character-container {
+    position: relative;
+    top: auto;
+    left: auto;
+    transform: none;
+    margin: 0 auto 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100px;
+    overflow: visible;
+}
+
+#appstain-content .appstain-trump-widget .topkek-character-head {
+    width: 100px;
+    height: 100px;
+}
+
+/* Speech bubble directly below head, centered, floats over modal content */
+#appstain-content .appstain-trump-widget .topkek-speech-bubble {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 8px;
+    width: 260px;
+    z-index: 50;
+    animation: appstain-bubbleAppear 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+}
+
+@keyframes appstain-bubbleAppear {
+    from {
+        opacity: 0;
+        transform: scale(0.7) translateX(-50%);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateX(-50%);
+    }
+}
+
+.appstain-intro-card {
+    margin-bottom: 16px;
+    text-align: center;
+}
+
+.appstain-intro {
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
+}
+
+/* Tutorial: one-line info + two quest thumbnails */
+.appstain-quest-intro {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0 0 12px;
+}
+
+.appstain-quest-thumbs {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+.appstain-quest-thumbs .appstain-quest-img {
+    flex-shrink: 0;
+    width: 160px;
+    max-width: 160px;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    object-fit: cover;
+}
+
+/* Video */
+.appstain-video-wrap {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.appstain-video {
+    flex-shrink: 0;
+    width: 55%;
+    max-width: 440px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    display: block;
+}
+
+.appstain-caption-card {
+    flex: 1;
+    min-width: 0;
+}
+
+.appstain-video-caption {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 12px;
+    font-style: italic;
+    margin: 0;
+    line-height: 1.5;
+}
+
+/* Audio – custom player (native audio hidden) */
+#appstain-audio-el {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.appstain-audio-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.appstain-audio-player {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.appstain-audio-btn {
+    flex-shrink: 0;
+    background: rgba(212, 175, 55, 0.25);
+    border: 1px solid rgba(212, 175, 55, 0.5);
+    color: rgba(255, 255, 255, 0.95);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.appstain-audio-btn:hover {
+    background: rgba(212, 175, 55, 0.4);
+    border-color: rgba(212, 175, 55, 0.7);
+}
+
+.appstain-audio-btn.playing {
+    background: rgba(212, 175, 55, 0.35);
+}
+
+.appstain-audio-progress-wrap {
+    flex: 1;
+    min-width: 120px;
+    position: relative;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.appstain-audio-seek {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.appstain-audio-progress-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    background: rgba(212, 175, 55, 0.7);
+    border-radius: 3px;
+    pointer-events: none;
+}
+
+.appstain-audio-time {
+    flex-shrink: 0;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.appstain-audio-caption {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 12px;
+    margin: 0;
+}
+
+/* Range input styling for Firefox (thumb visible when used) */
+.appstain-audio-seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgba(212, 175, 55, 0.9);
+    cursor: pointer;
+}
+.appstain-audio-seek::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgba(212, 175, 55, 0.9);
+    border: none;
+    cursor: pointer;
+}
+
+/* Screenshots grid */
+.appstain-screenshots {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.appstain-screenshot {
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    display: block;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.appstain-screenshot:hover {
+    border-color: rgba(212, 175, 55, 0.6);
+}
+
+/* Alpha / version card */
+.appstain-alpha-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    background: rgba(212, 175, 55, 0.08);
+    border-color: rgba(212, 175, 55, 0.3);
+}
+
+.appstain-alpha-badge {
+    color: rgba(212, 175, 55, 0.95);
+    font-size: 13px;
+    font-weight: 700;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.appstain-alpha-detail {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 12px;
+    margin: 0;
+    line-height: 1.4;
+}
+
+/* Riddle / password section */
+.appstain-riddle {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.appstain-riddle-question {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+}
+
+#appstain-content #appstain-password {
+    background: rgba(0, 0, 0, 0.35);
     border: 1px solid rgba(255, 255, 255, 0.3);
     color: white;
-    padding: 10px;
-    width: 80%;
-    margin-bottom: 15px;
-    border-radius: 4px;
+    padding: 10px 14px;
+    width: 100%;
+    max-width: 260px;
+    margin-bottom: 12px;
+    border-radius: 6px;
     font-family: monospace;
     text-align: center;
+    box-sizing: border-box;
 }
 
-#appstain-password:focus {
+#appstain-content #appstain-password:focus {
     outline: none;
-    border-color: white;
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+#appstain-content #appstain-submit {
+    margin-bottom: 8px;
+}
+
+.appstain-error {
+    color: #e57373;
+    font-size: 13px;
+    margin: 0;
+    display: none;
+}
+
+.appstain-error.visible {
+    display: block;
+}
+
+@media (max-width: 640px) {
+    .appstain-quest-thumbs {
+        flex-direction: column;
+        align-items: center;
+    }
+    .appstain-quest-thumbs .appstain-quest-img {
+        max-width: 100%;
+        width: 100%;
+    }
+    .appstain-section-title {
+        text-align: center;
+    }
+    .appstain-video-wrap {
+        flex-direction: column;
+    }
+    .appstain-video {
+        width: 100%;
+        max-width: 100%;
+    }
+    .appstain-audio-player {
+        flex-wrap: wrap;
+    }
+    .appstain-alpha-card {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+    }
+    .appstain-screenshots {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 .close-btn {
@@ -470,6 +904,146 @@ body {
     background: rgba(76, 175, 80, 0.1);
     box-shadow: 0 0 10px rgba(76, 175, 80, 0.3);
     color: white;
+}
+
+/* GENIMG Modal */
+#genimg-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    font-family: 'Courier New', monospace;
+}
+
+#genimg-modal.hidden {
+    display: none;
+}
+
+#genimg-backdrop {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+}
+
+#genimg-content {
+    position: relative;
+    background: #0d0d0f;
+    border: 1px solid rgba(186, 104, 200, 0.4);
+    width: 90vw;
+    max-width: 900px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 24px;
+    box-shadow: 0 0 24px rgba(186, 104, 200, 0.2);
+    border-radius: 6px;
+}
+
+#genimg-content .close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+}
+
+#genimg-title {
+    margin: 0 0 20px 0;
+    font-size: 22px;
+    color: #fff;
+    background: linear-gradient(90deg, #e91e63, #9c27b0);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.genimg-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.genimg-thumb {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border: 1px solid rgba(186, 104, 200, 0.3);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.genimg-thumb:hover {
+    border-color: #ba68c8;
+    box-shadow: 0 0 12px rgba(186, 104, 200, 0.3);
+}
+
+.genimg-md {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.genimg-md h3 {
+    color: #e91e63;
+    font-size: 18px;
+    margin: 0 0 12px 0;
+    border-bottom: 1px solid rgba(186, 104, 200, 0.3);
+    padding-bottom: 8px;
+}
+
+.genimg-md h4 {
+    color: #ba68c8;
+    font-size: 15px;
+    margin: 16px 0 8px 0;
+}
+
+.genimg-md p {
+    margin: 0 0 10px 0;
+}
+
+.genimg-md ul {
+    margin: 0 0 12px 0;
+    padding-left: 22px;
+}
+
+.genimg-md li {
+    margin-bottom: 6px;
+}
+
+.genimg-md code {
+    background: rgba(186, 104, 200, 0.15);
+    color: #ce93d8;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+.genimg-md hr {
+    border: none;
+    border-top: 1px solid rgba(186, 104, 200, 0.25);
+    margin: 20px 0;
+}
+
+#genimg-content::-webkit-scrollbar {
+    width: 10px;
+}
+
+#genimg-content::-webkit-scrollbar-track {
+    background: #111;
+}
+
+#genimg-content::-webkit-scrollbar-thumb {
+    background: #6a1b9a;
+    border-radius: 4px;
+}
+
+#genimg-content::-webkit-scrollbar-thumb:hover {
+    background: #9c27b0;
 }
 
 /* Custom Text Modal */
