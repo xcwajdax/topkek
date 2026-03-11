@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG } from './config.js';
+import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG } from './config.js';
 
 const CRTShader = {
     uniforms: {
@@ -92,6 +92,16 @@ let lastMouseTime = 0;
 let lastTarget = new THREE.Vector3();
 let loadedFont = null; // Store loaded font globally
 let loadedFontRegular = null; // Store loaded regular font globally
+
+// Portfolio (video thumbnails below PRODUCTIONS)
+let portfolioState = {
+    frameCubes: [],
+    frameMesh: null,
+    planeMeshes: [],
+    items: [],
+    hoveredIndex: -1,
+    group: null
+};
 
 // VAJBUJ Mode State
 let vajbujState = {
@@ -174,11 +184,6 @@ function updateProgress() {
         statusText.innerText = "Ready!";
     }
 }
-
-const clock = new THREE.Clock();
-
-init();
-animate();
 
 function init() {
     // 1. Scene Setup
@@ -314,6 +319,7 @@ function init() {
 
             // Initialize Vajbuj mode after particles are ready
             initVajbujMode();
+            initPortfolio();
 
             loaderContainer.classList.add('hidden');
             setTimeout(() => {
@@ -367,6 +373,38 @@ function init() {
 
     createUI();
 }
+
+// --- Portfolio Vimeo helpers ---
+function openPortfolioModal(rawUrl) {
+    const modal = document.getElementById('portfolio-vimeo-modal');
+    const iframe = document.getElementById('portfolio-vimeo-iframe');
+    if (!modal || !iframe) return;
+
+    let url = rawUrl || '';
+    if (!url) return;
+
+    // Normalize regular Vimeo URL to player.vimeo.com/video/ID
+    if (!url.includes('player.vimeo.com')) {
+        const match = url.match(/vimeo\.com\/(\d+)/);
+        if (match && match[1]) {
+            url = `https://player.vimeo.com/video/${match[1]}`;
+        }
+    }
+
+    // Add autoplay if missing
+    if (!url.includes('autoplay=')) {
+        const sep = url.includes('?') ? '&' : '?';
+        url += `${sep}autoplay=1`;
+    }
+
+    iframe.src = url;
+    modal.classList.remove('hidden');
+}
+
+const clock = new THREE.Clock();
+
+init();
+animate();
 
 function createUI() {
     const ui = document.createElement('div');
@@ -451,6 +489,7 @@ function createUI() {
     const termAppstain = document.getElementById('term-appstain');
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
+    const termPortfolio = document.getElementById('term-portfolio');
 
     if (termAppstain) {
         termAppstain.onclick = () => {
@@ -477,6 +516,12 @@ function createUI() {
     if (termGenimg) {
         termGenimg.onclick = () => {
             document.getElementById('genimg-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termPortfolio) {
+        termPortfolio.onclick = () => {
+            openPortfolioModal(CONFIG.portfolio?.sampleVimeoUrl || "https://player.vimeo.com/video/1170695269");
         };
     }
 
@@ -697,6 +742,25 @@ function createUI() {
         });
     };
     initCustomTextModal();
+
+    // 6. Portfolio Vimeo Modal Logic
+    const initPortfolioVimeoModal = () => {
+        const modal = document.getElementById('portfolio-vimeo-modal');
+        const closeBtn = document.getElementById('portfolio-vimeo-close');
+        const backdrop = document.getElementById('portfolio-vimeo-backdrop');
+        const iframe = document.getElementById('portfolio-vimeo-iframe');
+
+        if (!modal || !closeBtn || !backdrop || !iframe) return;
+
+        const close = () => {
+            iframe.src = '';
+            modal.classList.add('hidden');
+        };
+
+        closeBtn.onclick = close;
+        backdrop.onclick = close;
+    };
+    initPortfolioVimeoModal();
 
     // --- END NEW UI ELEMENTS ---
 
@@ -938,6 +1002,12 @@ function onMouseDown(event) {
     lastInteractionTime = Date.now();
     resetVajbujActivityTimer();
     if (isFreeCam) return;
+
+    // Left click on portfolio thumbnail -> open Vimeo modal, do not rotate
+    if (event.button === 0 && portfolioState.hoveredIndex >= 0 && portfolioState.items[portfolioState.hoveredIndex]) {
+        openPortfolioModal(portfolioState.items[portfolioState.hoveredIndex].vimeoUrl);
+        return;
+    }
 
     // Middle Mouse Button (Button 1) -> Pan
     if (event.button === 1) {
@@ -1431,6 +1501,101 @@ async function generateParticles(font, fontRegular) {
     // Final progress update
     loadState.generation = 100;
     updateProgress();
+}
+
+function initPortfolio() {
+    if (!PORTFOLIO_CONFIG || !PORTFOLIO_CONFIG.items || PORTFOLIO_CONFIG.items.length === 0) return;
+    const cfg = PORTFOLIO_CONFIG;
+    const items = cfg.items;
+    const cubeSize = cfg.cubeSize;
+    const slotW = cfg.slotWidth;
+    const slotH = cfg.slotHeight;
+    const thickness = cfg.frameThickness;
+    const nX = Math.ceil(slotW / cubeSize);
+    const nY = Math.ceil(slotH / cubeSize);
+    const borderCount = 2 * nX + 2 * (nY - 2);
+    const cubesPerSlot = borderCount * thickness;
+    const totalCubes = items.length * cubesPerSlot;
+    if (totalCubes <= 0) return;
+
+    const group = new THREE.Group();
+    portfolioState.group = group;
+
+    if (!defaultBoxMaterial) defaultBoxMaterial = new THREE.MeshStandardMaterial(MATERIALS.defaultBox);
+    const boxGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+    const frameMesh = new THREE.InstancedMesh(boxGeo, defaultBoxMaterial, totalCubes);
+    frameMesh.castShadow = true;
+    frameMesh.receiveShadow = true;
+    portfolioState.frameMesh = frameMesh;
+    group.add(frameMesh);
+
+    const frameCubes = [];
+    let cubeIndex = 0;
+    const borderSet = new Set();
+    for (let gx = 0; gx < nX; gx++) {
+        borderSet.add(`${gx},0`);
+        borderSet.add(`${gx},${nY - 1}`);
+    }
+    for (let gy = 0; gy < nY; gy++) {
+        borderSet.add(`0,${gy}`);
+        borderSet.add(`${nX - 1},${gy}`);
+    }
+
+    const cols = 3;
+    for (let i = 0; i < items.length; i++) {
+        const rowIndex = Math.floor(i / cols);
+        const colIndex = i % cols;
+        const centerX = (colIndex - (cols - 1) / 2) * cfg.slotSpacing;
+        const centerY = cfg.offsetYTop - rowIndex * cfg.rowSpacing;
+
+        for (const key of borderSet) {
+            const [gx, gy] = key.split(',').map(Number);
+            const px = centerX + (gx - (nX - 1) / 2) * cubeSize;
+            const py = centerY + (gy - (nY - 1) / 2) * cubeSize;
+            for (let zLayer = 0; zLayer < thickness; zLayer++) {
+                const pz = -zLayer * cubeSize;
+                const pos = new THREE.Vector3(px, py, pz);
+                frameCubes.push({
+                    originalPos: pos.clone(),
+                    currentPos: pos.clone(),
+                    velocity: new THREE.Vector3(0, 0, 0),
+                    meshIndex: cubeIndex
+                });
+                dummy.position.copy(pos);
+                dummy.rotation.set(0, 0, 0);
+                dummy.scale.setScalar(1);
+                dummy.updateMatrix();
+                frameMesh.setMatrixAt(cubeIndex, dummy.matrix);
+                cubeIndex++;
+            }
+        }
+
+        const item = items[i];
+        const video = document.createElement('video');
+        video.src = item.thumbnailVideo || '';
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        video.crossOrigin = 'anonymous';
+        const texture = new THREE.VideoTexture(video);
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        const planeW = slotW * 0.92;
+        const planeH = slotH * 0.92;
+        const planeGeo = new THREE.PlaneGeometry(planeW, planeH);
+        const planeMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+        const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+        planeMesh.position.set(centerX, centerY, cfg.planeZOffset);
+        planeMesh.userData.portfolioIndex = i;
+        group.add(planeMesh);
+        portfolioState.planeMeshes.push(planeMesh);
+        portfolioState.items.push({ vimeoUrl: item.vimeoUrl, video, texture, mesh: planeMesh });
+    }
+
+    portfolioState.frameCubes = frameCubes;
+    frameMesh.instanceMatrix.needsUpdate = true;
+    scene.add(group);
 }
 
 function onMouseMove(event) {
@@ -1989,6 +2154,54 @@ function animate() {
         if (innerCubeInstancedMesh) {
             innerCubeInstancedMesh.instanceMatrix.needsUpdate = true;
         }
+    }
+
+    // --- Portfolio: frame repulsion, hover (play/pause video), update matrices ---
+    if (portfolioState.frameMesh && portfolioState.frameCubes.length > 0) {
+        const portfolioTarget = new THREE.Vector3(1000, 1000, 1000);
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), portfolioTarget);
+        const forceScale = PORTFOLIO_CONFIG.forceScale ?? 0.25;
+        for (let i = 0; i < portfolioState.frameCubes.length; i++) {
+            const data = portfolioState.frameCubes[i];
+            const dist = data.currentPos.distanceTo(portfolioTarget);
+
+            if (CONFIG.animationMode === 'repulsion' && dist < CONFIG.repulsionRadius) {
+                const force = new THREE.Vector3().subVectors(data.currentPos, portfolioTarget);
+                if (force.length() > 0) {
+                    force.normalize();
+                    const strength = (1 - dist / CONFIG.repulsionRadius) * CONFIG.repulsionStrength;
+                    data.velocity.addScaledVector(force, strength * 0.05 * forceScale);
+                }
+            }
+
+            const returnVec = new THREE.Vector3().subVectors(data.originalPos, data.currentPos);
+            data.velocity.add(returnVec.clone().multiplyScalar(0.05));
+            data.velocity.multiplyScalar(0.85);
+            data.currentPos.add(data.velocity);
+            dummy.position.copy(data.currentPos);
+            dummy.rotation.set(0, 0, 0);
+            dummy.scale.setScalar(1);
+            dummy.updateMatrix();
+            portfolioState.frameMesh.setMatrixAt(data.meshIndex, dummy.matrix);
+        }
+        portfolioState.frameMesh.instanceMatrix.needsUpdate = true;
+    }
+    if (portfolioState.planeMeshes.length > 0) {
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(portfolioState.planeMeshes);
+        portfolioState.hoveredIndex = hits.length > 0 && hits[0].object.userData.portfolioIndex !== undefined
+            ? hits[0].object.userData.portfolioIndex
+            : -1;
+        portfolioState.items.forEach((item, idx) => {
+            if (idx === portfolioState.hoveredIndex) {
+                if (item.video.paused) item.video.play().catch(() => {});
+                item.texture.needsUpdate = true;
+            } else {
+                if (!item.video.paused) item.video.pause();
+                item.video.currentTime = 0;
+            }
+        });
     }
 
     if (crtPass) {
