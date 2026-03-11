@@ -177,6 +177,11 @@ We welcome contributions! The project is open to:
 - Interface translations
 - Documentation
 
+## 📋 TODO and Changelog
+
+- **[TODO.md](TODO.md)** – Task list (to do, in progress, done). Usage instructions are in the file.
+- **[CHANGELOG.md](CHANGELOG.md)** – Version history. Maintenance rules (Keep a Changelog) are described at the top of the file.
+
 ## 📄 License
 
 Open Source - details in LICENSE file

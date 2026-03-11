@@ -177,6 +177,11 @@ Zapraszamy do współpracy! Projekt jest otwarty na:
 - Tłumaczenia interfejsu
 - Dokumentację
 
+## 📋 TODO i Changelog
+
+- **[TODO.md](TODO.md)** – lista zadań (do zrobienia, w toku, zrobione). Instrukcja użytkowania jest w pliku.
+- **[CHANGELOG.md](CHANGELOG.md)** – historia zmian wersji. Zasady prowadzenia (Keep a Changelog) są opisane na początku pliku.
+
 ## 📄 Licencja
 
 Open Source - szczegóły w pliku LICENSE
