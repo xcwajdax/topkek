@@ -1,0 +1,194 @@
+---
+alwaysApply: true
+---
+
+---
+description: Zasady dla projektu TOPKEK – vanilla HTML/CSS/JS + Three.js 0.160.0, bez bundlerów i frameworków. Dotyczy tylko tego projektu.
+globs:
+  - /**/*.*
+---
+
+## 1. Ogólne założenia projektu
+
+- **Stack**: HTML5, CSS3, JavaScript ES modules (vanilla) + Three.js 0.160.0 z CDN (unpkg).
+- **Brak bundlerów / frameworków**:
+  - Nie wprowadzamy React/Vue/Angular/Svelte.
+  - Nie wprowadzamy Vite/Webpack/Parcel/rollup itp.
+  - Nie dodajemy `package.json` i nie instalujemy `node_modules` dla frontendu.
+- **Statyczne pliki**:
+  - Projekt działa jako statyczne pliki serwowane przez `python -m http.server 8002` (lub równoważny static server, bez backendu).
+- **Three.js i import map**:
+  - Zawsze używamy Three.js **0.160.0** z `unpkg`.
+  - Import odbywa się przez **import map w `index.html`**.
+  - Zmiana wersji Three.js wymaga:
+    - Świadomej decyzji.
+    - Aktualizacji wszystkich importów.
+    - Przetestowania sceny i postprocessingu pod kątem regresji.
+
+## 2. Struktura plików i odpowiedzialności
+
+- **`index.html`**
+  - Punkt wejścia aplikacji, definicja import map dla Three.js.
+  - Preferowany jeden główny `<script type="module" src="script.js"></script>`.
+  - Tylko minimalna logika inline (np. `data-*`, prosty snippet typu „fallback”).
+  - Zawiera strukturę layoutu, modale (APPSTAIN, Glitch Lab, GENIMG, custom text, image viewer) i mount pointy dla sceny 3D (np. `#canvas-container`).
+
+- **`script.js`**
+  - Główny moduł ES odpowiedzialny za:
+    - Inicjalizację sceny 3D (kamera, renderer, światła, obiekty).
+    - System cząsteczek / voxeli dla napisu „TOPKEK”.
+    - Tryby animacji (repulsion/scatter/grid, VAJBUJ, cinematic kamera).
+    - Postprocessing (bloom, SAO, CRT, itp.).
+    - Obsługę UI: zdarzenia, modale, loader, reakcje na resize.
+  - Może importować inne moduły (np. `vajbuj.js`, `postprocessing.js`, `ui.js`) dla większych, wydzielonych funkcjonalności.
+  - **Nie trzymamy tu danych konfiguracyjnych** – te należą do `config.js` (lub modułów `*-config.js`, jeśli się rozrosną, ale nadal bez logiki).
+
+- **`config.js`**
+  - Zawiera wyłącznie:
+    - Stałe konfiguracyjne: `CONFIG`, `VAJBUJ_CONFIG`, `SHADER_CONFIG`, `MATERIALS`, `SHAPE_DEFINITIONS`, `CINEMATIC_CONFIG`, `LOADER_CONFIG`, ewentualnie `DEBUG_FLAGS`.
+    - Flagi środowiska, np. `IS_MOBILE` (np. łącząc user agent + `window.innerWidth < 800`).
+  - **Brak logiki wykonawczej**:
+    - Dozwolone są tylko dane, obiekty, tablice, mapy wartości.
+    - Dopuszczalne są ewentualnie proste funkcje „czysto pomocnicze” (np. mapy kolorów) pod warunkiem, że nie zawierają efektów ubocznych i nie dotykają DOM / Three / window.
+  - Nowe parametry najpierw trafiają tutaj, dopiero potem są konsumowane w `script.js` lub innych modułach.
+
+- **`style.css`**
+  - Główny plik styli dla strony:
+    - Layout, typografia, kolory, responsywność.
+    - Loader, menu terminala, modale, przyciski, stany hover/focus.
+  - Dodatkowe, silnie specyficzne style (np. gadająca głowa Trumpa) mogą być w osobnych plikach w `ASSETS/` lub `ASSETS/css/`, importowanych z `index.html`.
+
+- **`ASSETS/`**
+  - Assety (obrazy, audio, wideo, fonty, MD z treściami).
+  - Podprojekty (np. APPSTAIN, GENIMG, topkek_trump_head) trzymane w swoich podfolderach, ze swoim README jeśli potrzeba.
+  - Logika JS dla podprojektów:
+    - Jeśli jest ściśle powiązana z TOPKEK sceną, importujemy ją jako moduł.
+    - Jeśli jest odrębnym „mini-projektem”, może mieć własne `index.html`/`script.js` w swoim podfolderze.
+
+## 3. Zasady dla JavaScript (vanilla, ES modules)
+
+- **Moduły ES**
+  - Używamy `type="module"` w `index.html` i `import/export` między plikami.
+  - Nowe funkcjonalności 3D/UX:
+    - Jeśli są duże, wydzielamy do osobnych modułów (np. `vajbuj.js`, `postprocessing.js`, `ui.js`, `particles-loader.js`), ale nadal bez bundlera.
+
+- **Styl i struktura kodu**
+  - Preferujemy funkcje i małe moduły zamiast ogromnych „god functions”.
+  - Nazewnictwo:
+    - Stałe konfiguracyjne: `UPPER_SNAKE_CASE`.
+    - Zmienne runtime i funkcje: `camelCase`.
+    - Moduły plików: `kebab-case` (`vajbuj.js`, `cinematic-camera.js`).
+  - Używamy `const` zawsze, gdy wartość się nie zmienia; `let` tylko gdy musi.
+  - Nie używamy `var`.
+  - Unikamy globali:
+    - Eksportujemy funkcje/obiekty z modułów i importujemy tam, gdzie są potrzebne.
+
+- **Logika vs konfiguracja**
+  - Jeśli coś jest „parametrem” (np. liczba cząsteczek, zakres FOV, siła repulsion, intensywność bloom):
+    - Trafia do `config.js`.
+    - W `script.js` tylko konsumujemy tę konfigurację.
+  - Zmiana zachowania = modyfikacja kodu w `script.js`/modułach; zmiana „tuningu” = modyfikacja `config.js`.
+
+- **Obsługa zdarzeń / DOM**
+  - Selekcja elementów przez `document.querySelector` / `querySelectorAll` z sensownymi klasami/ID.
+  - Nie wprowadzamy bibliotek DOM (jQuery, Alpine, itp.).
+  - Zdarzenia:
+    - Rejestrujemy na starcie aplikacji (`initUI`/`attachEventListeners`).
+    - Czyścimy/detachujemy tylko jeśli naprawdę tworzymy/destroyujemy całe fragmenty UI.
+
+## 4. Zasady dla Three.js i 3D
+
+- **Wersja i import**
+  - Zawsze używamy Three.js **0.160.0** z `unpkg`, zgodnie z import map w `index.html`.
+  - Dodatki (OrbitControls, FontLoader, TextGeometry, RoundedBoxGeometry, MeshSurfaceSampler, BufferGeometryUtils, postprocessing) importujemy z `three/addons/`.
+  - Nie mieszamy różnych wersji Three.js w jednym projekcie.
+
+- **Struktura sceny**
+  - Jedna główna scena, jedna główna kamera (plus ewentualne alternatywne kamery, ale utrzymane w tej samej architekturze).
+  - Inicjalizacja sceny, kamer, rendererów i postprocessingu w wyraźnie wydzielonych funkcjach (np. `initScene`, `initCamera`, `initRenderer`, `initPostprocessing`).
+
+- **Zarządzanie zasobami**
+  - Tekstury, fonty, HDRI itp. ładowane przez odpowiednie loadery Three.js, z kontrolą lifecycle.
+  - Po usuwaniu obiektów z pamięci:
+    - Zwalniamy geometrie / materiały (`geometry.dispose()`, `material.dispose()`), jeśli przestają być potrzebne.
+    - Zwalniamy render targety używane w postprocessingu, jeśli wymieniamy pipeline.
+
+- **Efekty i postprocessing**
+  - Nowe efekty (np. dodatkowe passy) dodajemy jako konfigurowalne:
+    - Parametry w `config.js` (`POSTPROCESSING_CONFIG`).
+    - Logika w `script.js` lub `postprocessing.js`.
+  - Nie dublujemy logiki:
+    - Jeśli istnieje podobny efekt, refaktorujemy do wspólnych helperów.
+  - Na mobile możemy używać uproszczonego pipeline’u (mniej passów, niższe rozdzielczości), sterowanego przez `IS_MOBILE` i konfigurację.
+
+## 5. CSS, UI i responsywność
+
+- **Jeden główny plik styli**
+  - `style.css` jest źródłem prawdy dla globalnych styli; dodatkowe style tylko gdy naprawdę specyficzne (np. „Trump head”, eksperymentalne subprojekty).
+
+- **Czytelność i hierarchia**
+  - Używamy klas opisowych (`.modal`, `.modal-header`, `.button-primary`) zamiast mocno zagnieżdżonych selektorów.
+  - Unikamy nadmiernego `!important` – stosujemy tylko, kiedy naprawdę brak innej opcji (np. nadpisywanie stylu z 3rd party, jeśli się kiedyś pojawi).
+
+- **Responsywność**
+  - TOPKEK musi działać na desktopie i mobile.
+  - `IS_MOBILE` z `config.js` wpływa na:
+    - Liczbę cząsteczek / poziom detali.
+    - Rozmiary fontów i UI.
+    - Ewentualne wyłączenie cięższych efektów (SAO, złożone shadery, wysokie rozdzielczości render targetów).
+  - Używamy media queries w `style.css` dla kluczowych breakpointów (np. `< 800px`, `< 480px`).
+
+- **Dostępność (a11y)**
+  - Elementy interaktywne (przyciski, linki) muszą być focusowalne z klawiatury.
+  - Tekst ma mieć sensowny kontrast; nie chowamy informacji tylko w kolorze.
+  - Modale:
+    - Mają czytelne nagłówki.
+    - Są zamykalne z klawiatury (np. `Esc`).
+    - Po otwarciu focus przenosi się do modala (np. na pierwszy sensowny element).
+    - Focus jest uwięziony w modalu (focus trap) do czasu zamknięcia.
+    - Tło nie jest scrollowalne, gdy modal jest otwarty.
+
+## 6. Performance i debug
+
+- **Performance**
+  - Ograniczamy liczbę draw calli i rozmiar geometrii, szczególnie na mobile.
+  - Używamy `requestAnimationFrame`, nie `setInterval` do renderowania.
+  - Efekty ciężkie obliczeniowo (np. SAO, złożone shadery, kosztowne postprocessy) redukujemy/wyłączamy na mobile przez `config.js`.
+  - Dbamy o:
+    - Reuse materiałów i geometrii, jeśli to możliwe.
+    - Ustawienie odpowiednich `pixelRatio` na rendererze na mobile.
+
+- **Pliki cząsteczek**
+  - `particles_pc.json` i `particles_mobile.json` są jedynym źródłem prawdy dla danych cząsteczek.
+  - Przy zmianie formatu tych plików:
+    - Aktualizujemy zarówno generator danych, jak i kod ładujący w `script.js` (lub dedykowanym module, np. `particles-loader.js`).
+    - Dopisujemy wyjaśnienie w dokumentacji (np. w `WYTYCZNE_PROJEKTU.md`).
+
+- **Debug / logi**
+  - Do szybkiego debugowania dopuszczalne jest `console.log`, ale:
+    - W finalnym kodzie produkcyjnym staramy się usuwać zbędne logi lub guardować je flagą `DEBUG` w `config.js`.
+  - Nie commitujemy masowego spamowania logów w pętli renderującej.
+
+## 7. Zasady dla zmian w projekcie
+
+- **Dodawanie nowych funkcjonalności 3D / UI**
+  - Najpierw ustalamy, czy dana rzecz to:
+    - Nowa konfiguracja → trafia do `config.js` (lub odpowiedniego modułu konfiguracyjnego).
+    - Nowa logika / interakcja → trafia do `script.js` (lub nowego modułu JS).
+  - Nie wprowadzamy nowego frameworka ani bundlera „dla jednej funkcji”.
+
+- **Nowe zależności**
+  - Przed dodaniem jakiejkolwiek nowej biblioteki JS/CSS:
+    - Najpierw próbujemy rozwiązać to w vanilla JS / CSS / Three.js.
+    - Jeśli naprawdę jest konieczna:
+      - Dodajemy ją z CDN (bez npm).
+      - Aktualizujemy import w `index.html`.
+      - Dopisujemy ją do `WYTYCZNE_PROJEKTU.md` w sekcji „Zależności zewnętrzne” (nazwa, wersja, cel użycia, link do dokumentacji).
+
+- **Języki treści**
+  - Domyślnie `lang="en"` dla strony.
+  - Możliwy mix PL/ENG w modalach zależnie od kontekstu, ale:
+    - Tekst powinien być spójny w obrębie jednego modułu/sekcji (np. opis Glitch Lab PL/ENG z przełącznikiem).
+  - Jeśli treść jest ściśle humorystyczna/memiczna, dopuszczamy celowe „złamania językowe”, ale nadal utrzymujemy spójność w ramach danej sekcji.
+
+---
