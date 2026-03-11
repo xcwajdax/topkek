@@ -42,17 +42,17 @@ export const CONFIG = {
     }
 };
 
-// Portfolio thumbnails (max 6) – below PRODUCTIONS, 2×3 grid
+// Portfolio thumbnails (max 6) – below PRODUCTIONS, 2×3 grid (spaced out)
 export const PORTFOLIO_CONFIG = {
     offsetYTop: -7.0,
-    rowSpacing: 2.2,
+    rowSpacing: 3.2,
     slotWidth: 4.0,
     slotHeight: 2.1,
-    slotSpacing: 3.8,
+    slotSpacing: 5.5,
     cubeSize: 0.12,
     frameThickness: 2,
     planeZOffset: 0.02,
-    forceScale: 0.25,
+    forceScale: 1.0,
     items: [
         { id: "zorza", title: "ZORZA 2025", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
         { id: "p2", title: "Project 2", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },

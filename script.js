@@ -100,7 +100,9 @@ let portfolioState = {
     planeMeshes: [],
     items: [],
     hoveredIndex: -1,
-    group: null
+    group: null,
+    initialized: false,
+    visible: false
 };
 
 // VAJBUJ Mode State
@@ -319,7 +321,7 @@ function init() {
 
             // Initialize Vajbuj mode after particles are ready
             initVajbujMode();
-            initPortfolio();
+            // Portfolio is lazy-initialized on first hover over "Animation portfolio" in terminal
 
             loaderContainer.classList.add('hidden');
             setTimeout(() => {
@@ -490,6 +492,16 @@ function createUI() {
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
     const termPortfolio = document.getElementById('term-portfolio');
+    const termAnimPortfolio = document.getElementById('term-anim-portfolio');
+
+    if (termAnimPortfolio) {
+        termAnimPortfolio.addEventListener('mouseenter', () => {
+            if (!portfolioState.initialized) {
+                initPortfolio();
+                portfolioState.initialized = true;
+            }
+        });
+    }
 
     if (termAppstain) {
         termAppstain.onclick = () => {
@@ -1545,8 +1557,10 @@ function initPortfolio() {
     for (let i = 0; i < items.length; i++) {
         const rowIndex = Math.floor(i / cols);
         const colIndex = i % cols;
-        const centerX = (colIndex - (cols - 1) / 2) * cfg.slotSpacing;
-        const centerY = cfg.offsetYTop - rowIndex * cfg.rowSpacing;
+        const jitterX = (Math.random() - 0.5) * 0.5;
+        const jitterY = (Math.random() - 0.5) * 0.3;
+        const centerX = (colIndex - (cols - 1) / 2) * cfg.slotSpacing + jitterX;
+        const centerY = cfg.offsetYTop - rowIndex * cfg.rowSpacing + jitterY;
 
         for (const key of borderSet) {
             const [gx, gy] = key.split(',').map(Number);
@@ -2161,12 +2175,12 @@ function animate() {
         const portfolioTarget = new THREE.Vector3(1000, 1000, 1000);
         raycaster.setFromCamera(mouse, camera);
         raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), portfolioTarget);
-        const forceScale = PORTFOLIO_CONFIG.forceScale ?? 0.25;
+        const forceScale = PORTFOLIO_CONFIG.forceScale ?? 1.0;
         for (let i = 0; i < portfolioState.frameCubes.length; i++) {
             const data = portfolioState.frameCubes[i];
             const dist = data.currentPos.distanceTo(portfolioTarget);
 
-            if (CONFIG.animationMode === 'repulsion' && dist < CONFIG.repulsionRadius) {
+            if ((CONFIG.animationMode === 'repulsion' || CONFIG.animationMode === 'scatter') && dist < CONFIG.repulsionRadius) {
                 const force = new THREE.Vector3().subVectors(data.currentPos, portfolioTarget);
                 if (force.length() > 0) {
                     force.normalize();
