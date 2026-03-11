@@ -36,7 +36,31 @@ export const CONFIG = {
         letterSpacing: 0.7
     },
     appstainPassword: "lol",
-    appstainRedirectUrl: "https://xcwajdax.github.io/appstainsaga/"
+    appstainRedirectUrl: "https://xcwajdax.github.io/appstainsaga/",
+    portfolio: {
+        sampleVimeoUrl: "https://player.vimeo.com/video/1170695269"
+    }
+};
+
+// Portfolio thumbnails (max 6) – below PRODUCTIONS, 2×3 grid
+export const PORTFOLIO_CONFIG = {
+    offsetYTop: -7.0,
+    rowSpacing: 2.2,
+    slotWidth: 4.0,
+    slotHeight: 2.1,
+    slotSpacing: 3.8,
+    cubeSize: 0.12,
+    frameThickness: 2,
+    planeZOffset: 0.02,
+    forceScale: 0.25,
+    items: [
+        { id: "zorza", title: "ZORZA 2025", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
+        { id: "p2", title: "Project 2", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
+        { id: "p3", title: "Project 3", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
+        { id: "p4", title: "Project 4", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
+        { id: "p5", title: "Project 5", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
+        { id: "p6", title: "Project 6", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" }
+    ]
 };
 
 // VAJBUJ SZMATO Mode Configuration

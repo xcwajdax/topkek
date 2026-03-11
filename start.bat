@@ -26,5 +26,5 @@ echo.
 :: Wrapping in quotes is safer, and the empty title "" is necessary for 'start' with paths/URLs.
 start "" "http://localhost:8002"
 
-:: Start Python HTTP Server
-python -m http.server 8002
+:: Start Python HTTP Server (server.py suppresses client disconnect errors)
+python server.py 8002
