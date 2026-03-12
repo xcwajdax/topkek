@@ -65,13 +65,41 @@ export const PORTFOLIO_CONFIG = {
     planeZOffset: 0.02,
     forceScale: 1.0,
     items: [
-        { id: "zorza", title: "ZORZA 2025", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
-        { id: "p2", title: "Project 2", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
-        { id: "p3", title: "Project 3", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
-        { id: "p4", title: "Project 4", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
-        { id: "p5", title: "Project 5", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" },
-        { id: "p6", title: "Project 6", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269" }
+        { id: "zorza", title: "ZORZA 2025", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] },
+        { id: "p2", title: "Project 2", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] },
+        { id: "p3", title: "Project 3", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] },
+        { id: "p4", title: "Project 4", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] },
+        { id: "p5", title: "Project 5", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] },
+        { id: "p6", title: "Project 6", thumbnailVideo: "ASSETS/PORTFOLIO/test_miniatura.mp4", vimeoUrl: "https://player.vimeo.com/video/1170695269", description: "Motion design project.", images: [], typography: [] }
     ]
+};
+
+// Portfolio scene transition (camera, phases, MOTION DESIGN)
+export const PORTFOLIO_SCENE_CONFIG = {
+    cameraMoveDuration: 2.5,
+    cameraFocusTarget: { x: 0, y: -4, z: 0 },
+    cameraRadiusTarget: 30,
+    cameraAngleTarget: 0,
+    cameraVerticalAngleTarget: -0.35,
+    subtitleTransformDuration: 1.5,
+    motionDesignLineOffset: 1.2,
+    heartFlyDuration: 1.2,
+    flashDuration: 0.15,
+    windowsFlyInDuration: 1.0,
+    bgVideoOffsetY: -4,
+    bgVideoMoveDuration: 2.8
+};
+
+// Glitch volumetryczne – blokowe przeskoki fragmentów napisu TOPKEK
+export const GLITCH_VOLUME_CONFIG = {
+    enabled: false,
+    intervalMin: 2000,   // ms – min odstęp auto-triggera
+    intervalMax: 5000,  // ms – max odstęp auto-triggera
+    duration: 0.12,     // s – jak długo offset jest widoczny
+    maxOffset: 0.4,     // maks. przesunięcie na oś
+    bandCount: 8,       // na ile pasów (X) dzielimy napis
+    bandsPerGlitch: 2,  // ile pasów jednocześnie glitchować
+    includeInnerCubes: true
 };
 
 // VAJBUJ SZMATO Mode Configuration

@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG } from './config.js';
+import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG } from './config.js';
 
 const CRTShader = {
     uniforms: {
@@ -146,6 +146,30 @@ let portfolioState = {
     initialized: false,
     visible: false
 };
+
+// Portfolio scene transition state (after click "> Animation portfolio")
+let portfolioSceneActive = false;
+let portfolioScenePhase = 'idle'; // 'idle' | 'camera_move' | 'subtitle_transform' | 'windows_fly_in' | 'floating' | 'flash'
+let portfolioScenePhaseStartTime = 0;
+let portfolioCameraStart = null; // { focus: Vector3, radius, angle, verticalAngle } set when entering camera_move
+
+let motionDesignState = null; // { targets: Vector3[], heartCenter: Vector3, productionsAssignments: Map, extraGroups: [], heartCubes: [], recyclingDone, spawnDone, heartDone }
+let motionDesignExtraMesh = null;
+let motionDesignHeartMesh = null;
+let motionDesignFlashStart = 0;
+
+const HEART_PIXEL_MASK = [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 1, 0, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1, 1, 0, 0],
+    [0, 0, 0, 1, 1, 1, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0]
+];
+let portfolioWindowsFlyInInitDone = false;
+let portfolioSceneStartTime = 0;
 
 // VAJBUJ Mode State
 let vajbujState = {
@@ -514,7 +538,23 @@ function openPortfolioModal(rawUrl) {
     modal.classList.remove('hidden');
 }
 
+function openPortfolioDetailModal(item) {
+    const modal = document.getElementById('portfolio-detail-modal');
+    if (!modal) {
+        openPortfolioModal(item?.vimeoUrl);
+        return;
+    }
+    const titleEl = document.getElementById('portfolio-detail-title');
+    const descEl = document.getElementById('portfolio-detail-description');
+    if (titleEl) titleEl.textContent = item?.title || '';
+    if (descEl) descEl.textContent = item?.description || '';
+    const playBtn = document.getElementById('portfolio-detail-play-video');
+    if (playBtn) playBtn.onclick = () => openPortfolioModal(item?.vimeoUrl);
+    modal.classList.remove('hidden');
+}
+
 const clock = new THREE.Clock();
+let glitchVolumeNextTrigger = 0; // next time (s) to auto-trigger volumetric glitch
 
 init();
 animate();
@@ -616,6 +656,37 @@ function createUI() {
         ui.appendChild(sectionBg);
     }
 
+    // --- Glitch volumetryczne ---
+    const sectionGlitchVol = document.createElement('div');
+    sectionGlitchVol.className = 'controls-section';
+    const titleGlitchVol = document.createElement('div');
+    titleGlitchVol.className = 'controls-category-title';
+    titleGlitchVol.textContent = 'Glitch volumetryczne';
+    sectionGlitchVol.appendChild(titleGlitchVol);
+    const itemsGlitchVol = document.createElement('div');
+    itemsGlitchVol.className = 'controls-category-items';
+
+    const btnGlitchToggle = document.createElement('button');
+    btnGlitchToggle.className = 'mode-btn' + (GLITCH_VOLUME_CONFIG.enabled ? ' active' : '');
+    btnGlitchToggle.innerText = '> Glitch volumetryczne';
+    btnGlitchToggle.title = 'Włącz/wyłącz blokowe przeskoki fragmentów napisu';
+    btnGlitchToggle.onclick = () => {
+        GLITCH_VOLUME_CONFIG.enabled = !GLITCH_VOLUME_CONFIG.enabled;
+        btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
+        if (!GLITCH_VOLUME_CONFIG.enabled) glitchVolumeNextTrigger = 0;
+    };
+
+    const btnGlitchTrigger = document.createElement('button');
+    btnGlitchTrigger.className = 'mode-btn';
+    btnGlitchTrigger.innerText = 'Trigger';
+    btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
+    btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(clock.getElapsedTime());
+
+    itemsGlitchVol.appendChild(btnGlitchToggle);
+    itemsGlitchVol.appendChild(btnGlitchTrigger);
+    sectionGlitchVol.appendChild(itemsGlitchVol);
+    ui.appendChild(sectionGlitchVol);
+
     window.cinematicButton = btnCinematic;
     window.freeCamButton = btnFreeCam;
 
@@ -628,7 +699,7 @@ function createUI() {
     // 1. Production Label (Left)
     const label = document.createElement('div');
     label.className = 'prod-label';
-    label.innerHTML = 'TOP KEK Productions &reg; - Handcrafted Games';
+    label.innerHTML = 'TOP KEK Productions &reg; - Handcrafted Experiences';
     document.body.appendChild(label);
 
     // 2. Terminal Menu Logic
@@ -639,11 +710,22 @@ function createUI() {
     const termAnimPortfolio = document.getElementById('term-anim-portfolio');
 
     if (termAnimPortfolio) {
-        termAnimPortfolio.addEventListener('mouseenter', () => {
+        termAnimPortfolio.addEventListener('click', () => {
+            if (portfolioSceneActive) {
+                exitPortfolioScene();
+                termAnimPortfolio.classList.remove('portfolio-active');
+                return;
+            }
+            portfolioSceneActive = true;
+            termAnimPortfolio.classList.add('portfolio-active');
             if (!portfolioState.initialized) {
-                initPortfolio();
+                initPortfolio(true);
                 portfolioState.initialized = true;
             }
+            controls.enabled = false;
+            portfolioScenePhase = 'camera_move';
+            portfolioScenePhaseStartTime = Date.now();
+            portfolioSceneStartTime = Date.now();
         });
     }
 
@@ -918,6 +1000,17 @@ function createUI() {
     };
     initPortfolioVimeoModal();
 
+    const initPortfolioDetailModal = () => {
+        const modal = document.getElementById('portfolio-detail-modal');
+        const closeBtn = document.getElementById('portfolio-detail-close');
+        const backdrop = modal?.querySelector('.portfolio-detail-backdrop');
+        if (!modal || !closeBtn || !backdrop) return;
+        const close = () => modal.classList.add('hidden');
+        closeBtn.onclick = close;
+        backdrop.onclick = close;
+    };
+    initPortfolioDetailModal();
+
     // --- END NEW UI ELEMENTS ---
 
     if (isMobile) {
@@ -1025,6 +1118,78 @@ function setMode(mode, activeBtn, inactiveBtns) {
     }
 }
 
+function triggerVolumetricGlitch(time) {
+    const cfg = GLITCH_VOLUME_CONFIG;
+    if (!cubeGroups.length) return;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (let i = 0; i < cubeGroups.length; i++) {
+        const x = cubeGroups[i].originalPos.x;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+    }
+    const spanX = maxX - minX;
+    if (spanX <= 0) return;
+
+    const bandCount = Math.max(1, cfg.bandCount);
+    const bandsPerGlitch = Math.min(cfg.bandsPerGlitch, bandCount);
+    const selectedBands = new Set();
+    while (selectedBands.size < bandsPerGlitch) {
+        selectedBands.add(Math.floor(Math.random() * bandCount));
+    }
+
+    const maxOffset = cfg.maxOffset;
+    const duration = cfg.duration;
+    const endTime = time + duration;
+
+    for (let i = 0; i < cubeGroups.length; i++) {
+        const group = cubeGroups[i];
+        const bandIdx = Math.min(
+            bandCount - 1,
+            Math.floor(((group.originalPos.x - minX) / spanX) * bandCount)
+        );
+        if (!selectedBands.has(bandIdx)) continue;
+
+        if (!group.glitchDisplayOffset) group.glitchDisplayOffset = new THREE.Vector3(0, 0, 0);
+        group.glitchDisplayOffset.set(
+            (Math.random() - 0.5) * 2 * maxOffset,
+            (Math.random() - 0.5) * 2 * maxOffset,
+            (Math.random() - 0.5) * 2 * maxOffset
+        );
+        group.glitchEndTime = endTime;
+    }
+
+    if (cfg.includeInnerCubes && innerCubeParticles.length > 0) {
+        let innerMinX = Infinity;
+        let innerMaxX = -Infinity;
+        for (let i = 0; i < innerCubeParticles.length; i++) {
+            const x = innerCubeParticles[i].originalPos.x;
+            if (x < innerMinX) innerMinX = x;
+            if (x > innerMaxX) innerMaxX = x;
+        }
+        const innerSpanX = innerMaxX - innerMinX;
+        if (innerSpanX > 0) {
+            for (let i = 0; i < innerCubeParticles.length; i++) {
+                const data = innerCubeParticles[i];
+                const bandIdx = Math.min(
+                    bandCount - 1,
+                    Math.floor(((data.originalPos.x - innerMinX) / innerSpanX) * bandCount)
+                );
+                if (!selectedBands.has(bandIdx)) continue;
+
+                if (!data.glitchDisplayOffset) data.glitchDisplayOffset = new THREE.Vector3(0, 0, 0);
+                data.glitchDisplayOffset.set(
+                    (Math.random() - 0.5) * 2 * maxOffset,
+                    (Math.random() - 0.5) * 2 * maxOffset,
+                    (Math.random() - 0.5) * 2 * maxOffset
+                );
+                data.glitchEndTime = endTime;
+            }
+        }
+    }
+}
+
 function setCameraMode(mode) {
     if (mode === 'free') {
         isFreeCam = true;
@@ -1074,6 +1239,178 @@ function setCameraMode(mode) {
             if (window.freeCamButton) window.freeCamButton.classList.add('active');
         }
     }
+}
+
+function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function computeMotionDesignTargets(font) {
+    if (!font || !CONFIG.subtitle || !PORTFOLIO_SCENE_CONFIG) return null;
+    const lineOffset = PORTFOLIO_SCENE_CONFIG.motionDesignLineOffset || 1.2;
+    const offsetY = CONFIG.subtitle.offsetY + lineOffset;
+    const opts = { font, size: CONFIG.subtitle.size, height: CONFIG.subtitle.height, curveSegments: 6, bevelEnabled: false };
+    const letterSpacing = CONFIG.subtitle.letterSpacing;
+
+    const buildWord = (word) => {
+        const geos = [];
+        let xOff = 0;
+        for (const char of word) {
+            const g = new TextGeometry(char, opts);
+            g.computeBoundingBox();
+            const w = g.boundingBox.max.x - g.boundingBox.min.x;
+            g.translate(xOff, 0, 0);
+            geos.push(g);
+            xOff += w + letterSpacing;
+        }
+        return geos.length ? BufferGeometryUtils.mergeGeometries(geos) : null;
+    };
+
+    const g1 = buildWord('MOTION ');
+    const gHeart = buildWord(' ');
+    const g2 = buildWord(' DESIGN');
+    if (!g1 || !g2) return null;
+
+    g1.computeBoundingBox();
+    const w1 = g1.boundingBox.max.x - g1.boundingBox.min.x;
+    let heartCenterX = w1 + letterSpacing;
+    let wHeart = 0;
+    if (gHeart) {
+        gHeart.computeBoundingBox();
+        wHeart = (gHeart.boundingBox.max.x - gHeart.boundingBox.min.x) + letterSpacing;
+        const hw = wHeart - letterSpacing;
+        heartCenterX += hw * 0.5;
+        gHeart.translate(w1 + letterSpacing, 0, 0);
+    }
+    g2.computeBoundingBox();
+    g2.translate(w1 + letterSpacing + wHeart, 0, 0);
+
+    const geos = [g1];
+    if (gHeart) geos.push(gHeart);
+    geos.push(g2);
+    const merged = BufferGeometryUtils.mergeGeometries(geos);
+    merged.computeBoundingBox();
+    const totalW = merged.boundingBox.max.x - merged.boundingBox.min.x;
+    const subOffsetX = -totalW / 2;
+    merged.translate(subOffsetX, offsetY, 0);
+    heartCenterX += subOffsetX;
+
+    const mdVoxelMap = new Map();
+    const startX = Math.floor(merged.boundingBox.min.x / CONFIG.particleSize);
+    const endX = Math.ceil(merged.boundingBox.max.x / CONFIG.particleSize);
+    const startY = Math.floor(merged.boundingBox.min.y / CONFIG.particleSize);
+    const endY = Math.ceil(merged.boundingBox.max.y / CONFIG.particleSize);
+    const subRaycaster = new THREE.Raycaster();
+    const subDirection = new THREE.Vector3(0, 0, -1);
+    const subMesh = new THREE.Mesh(merged, new THREE.MeshBasicMaterial());
+    subMesh.updateMatrixWorld(true);
+
+    for (let gx = startX; gx <= endX; gx++) {
+        for (let gy = startY; gy <= endY; gy++) {
+            const px = gx * CONFIG.particleSize;
+            const py = gy * CONFIG.particleSize;
+            subRaycaster.set(new THREE.Vector3(px, py, 10), subDirection);
+            const hits = subRaycaster.intersectObject(subMesh);
+            if (hits.length > 0) {
+                for (let zStep = 0; zStep < CONFIG.subtitle.thickness; zStep++) {
+                    const gz = -zStep;
+                    const pz = gz * CONFIG.particleSize;
+                    const key = `${gx},${gy},${gz}`;
+                    if (!mdVoxelMap.has(key)) {
+                        mdVoxelMap.set(key, { gx, gy, gz, x: px, y: py, z: pz, normal: new THREE.Vector3(0, 0, 1), visited: false });
+                    }
+                }
+            }
+        }
+    }
+    merged.dispose();
+    if (gHeart) gHeart.dispose();
+    g1.dispose();
+    g2.dispose();
+
+    const mdVoxels = Array.from(mdVoxelMap.values());
+    const shapeDefinitions = SHAPE_DEFINITIONS;
+    const proposedGroups = [];
+    for (const startVoxel of mdVoxels) {
+        if (startVoxel.visited) continue;
+        for (const shape of shapeDefinitions) {
+            const shapeVoxels = [];
+            let fits = true;
+            for (const offset of shape.offsets) {
+                const key = `${startVoxel.gx + offset[0]},${startVoxel.gy + offset[1]},${startVoxel.gz}`;
+                const v = mdVoxelMap.get(key);
+                if (v && !v.visited) shapeVoxels.push(v);
+                else { fits = false; break; }
+            }
+            if (fits) {
+                shapeVoxels.forEach(v => v.visited = true);
+                const centroid = new THREE.Vector3();
+                shapeVoxels.forEach(v => centroid.add(new THREE.Vector3(v.x, v.y, v.z)));
+                centroid.divideScalar(shapeVoxels.length);
+                proposedGroups.push(centroid);
+                break;
+            }
+        }
+    }
+
+    const heartCenter = new THREE.Vector3(heartCenterX, offsetY, -CONFIG.particleSize * 0.5);
+    return { targets: proposedGroups, heartCenter };
+}
+
+function createHeartMesh(heartCenter) {
+    const cellSize = CONFIG.particleSize * 1.2;
+    const rows = HEART_PIXEL_MASK.length;
+    const cols = HEART_PIXEL_MASK[0].length;
+    const cx = (cols - 1) / 2;
+    const cy = (rows - 1) / 2;
+    const positions = [];
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            if (HEART_PIXEL_MASK[row][col]) {
+                const px = (col - cx) * cellSize;
+                const py = (rows - 1 - row - cy) * cellSize;
+                positions.push(new THREE.Vector3(heartCenter.x + px, heartCenter.y + py, heartCenter.z));
+            }
+        }
+    }
+    const count = positions.length;
+    if (count === 0) return { mesh: null, heartCubes: [] };
+    const boxGeo = new THREE.BoxGeometry(cellSize * 0.95, cellSize * 0.95, cellSize * 0.6);
+    const heartMat = new THREE.MeshStandardMaterial({
+        color: 0xcc2222,
+        metalness: 0.75,
+        roughness: 0.25,
+        emissive: 0xff2222,
+        emissiveIntensity: 0
+    });
+    const mesh = new THREE.InstancedMesh(boxGeo, heartMat, count);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const heartCubes = [];
+    const dummyHeart = new THREE.Object3D();
+    const offDist = 18;
+    for (let i = 0; i < count; i++) {
+        const targetPos = positions[i];
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI * 0.8 + Math.PI * 0.1;
+        const startPos = targetPos.clone().add(new THREE.Vector3(
+            Math.sin(phi) * Math.cos(theta) * offDist,
+            Math.sin(phi) * Math.sin(theta) * offDist,
+            Math.cos(phi) * offDist * 0.5
+        ));
+        heartCubes.push({
+            currentPos: startPos.clone(),
+            targetPos,
+            startPos,
+            meshIndex: i
+        });
+        dummyHeart.position.copy(startPos);
+        dummyHeart.scale.setScalar(1);
+        dummyHeart.updateMatrix();
+        mesh.setMatrixAt(i, dummyHeart.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    return { mesh, heartCubes };
 }
 
 // Helper to generate a robotic path that reconstructs the position
@@ -1164,11 +1501,17 @@ function onMouseDown(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Left click on portfolio thumbnail -> open Vimeo modal, do not rotate
+    // Left click on portfolio thumbnail -> open detail modal (or Vimeo when in portfolio scene)
     if (event.button === 0 && portfolioState.hoveredIndex >= 0 && portfolioState.items[portfolioState.hoveredIndex]) {
-        openPortfolioModal(portfolioState.items[portfolioState.hoveredIndex].vimeoUrl);
+        if (portfolioSceneActive && portfolioScenePhase === 'floating') {
+            openPortfolioDetailModal(PORTFOLIO_CONFIG.items[portfolioState.hoveredIndex]);
+        } else {
+            openPortfolioModal(portfolioState.items[portfolioState.hoveredIndex].vimeoUrl);
+        }
         return;
     }
+
+    if (portfolioSceneActive) return;
 
     // Middle Mouse Button (Button 1) -> Pan
     if (event.button === 1) {
@@ -1607,6 +1950,10 @@ async function generateParticles(font, fontRegular) {
             currentStepIndex: 0,
             stepStartTime: 0,
             glitchTarget: new THREE.Vector3(),
+
+            // Glitch volumetryczne (nakładka wizualna)
+            glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
+            glitchEndTime: 0,
         };
 
         cubeGroups.push(groupLogic);
@@ -1650,7 +1997,9 @@ async function generateParticles(font, fontRegular) {
             returnQueue: [],
             currentStepIndex: 0,
             stepStartTime: 0,
-            glitchTarget: new THREE.Vector3()
+            glitchTarget: new THREE.Vector3(),
+            glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
+            glitchEndTime: 0,
         });
         sIdx++;
     }
@@ -1664,74 +2013,71 @@ async function generateParticles(font, fontRegular) {
     updateProgress();
 }
 
-function initPortfolio() {
+function exitPortfolioScene() {
+    portfolioSceneActive = false;
+    portfolioScenePhase = 'idle';
+
+    if (portfolioCameraStart) {
+        cameraFocusPoint.copy(portfolioCameraStart.focus);
+        cameraRadius = portfolioCameraStart.radius;
+        cameraAngle = portfolioCameraStart.angle;
+        cameraVerticalAngle = portfolioCameraStart.verticalAngle;
+        targetCameraAngle = cameraAngle;
+        targetCameraVerticalAngle = cameraVerticalAngle;
+        targetCameraRadius = cameraRadius;
+    }
+
+    if (portfolioState.group && portfolioState.group.parent) {
+        portfolioState.group.parent.remove(portfolioState.group);
+    }
+    if (motionDesignState && motionDesignState.heartMesh && motionDesignState.heartMesh.parent) {
+        motionDesignState.heartMesh.parent.remove(motionDesignState.heartMesh);
+    }
+
+    portfolioWindowsFlyInInitDone = false;
+
+    portfolioState.items.forEach(item => {
+        if (item.video && !item.video.paused) item.video.pause();
+    });
+}
+
+function initPortfolio(skipAddToScene = false) {
     if (!PORTFOLIO_CONFIG || !PORTFOLIO_CONFIG.items || PORTFOLIO_CONFIG.items.length === 0) return;
     const cfg = PORTFOLIO_CONFIG;
     const items = cfg.items;
-    const cubeSize = cfg.cubeSize;
     const slotW = cfg.slotWidth;
     const slotH = cfg.slotHeight;
-    const thickness = cfg.frameThickness;
-    const nX = Math.ceil(slotW / cubeSize);
-    const nY = Math.ceil(slotH / cubeSize);
-    const borderCount = 2 * nX + 2 * (nY - 2);
-    const cubesPerSlot = borderCount * thickness;
-    const totalCubes = items.length * cubesPerSlot;
-    if (totalCubes <= 0) return;
+    const overlapSpacing = 3.2;
+    const overlapRowSpacing = 2.4;
+    const cols = 3;
 
     const group = new THREE.Group();
     portfolioState.group = group;
+    portfolioState.frameMesh = null;
+    portfolioState.frameCubes = [];
+    portfolioState.planeMeshes = [];
+    portfolioState.planeTargetPositions = [];
+    portfolioState.windowData = [];
+    portfolioState.items = [];
 
-    if (!defaultBoxMaterial) defaultBoxMaterial = new THREE.MeshStandardMaterial(MATERIALS.defaultBox);
-    const boxGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
-    const frameMesh = new THREE.InstancedMesh(boxGeo, defaultBoxMaterial, totalCubes);
-    frameMesh.castShadow = true;
-    frameMesh.receiveShadow = true;
-    portfolioState.frameMesh = frameMesh;
-    group.add(frameMesh);
+    const sides = [
+        () => new THREE.Vector3(-14, 0, 0),
+        () => new THREE.Vector3(14, 0, 0),
+        () => new THREE.Vector3(0, -10, 0),
+        () => new THREE.Vector3(0, 8, 0)
+    ];
 
-    const frameCubes = [];
-    let cubeIndex = 0;
-    const borderSet = new Set();
-    for (let gx = 0; gx < nX; gx++) {
-        borderSet.add(`${gx},0`);
-        borderSet.add(`${gx},${nY - 1}`);
-    }
-    for (let gy = 0; gy < nY; gy++) {
-        borderSet.add(`0,${gy}`);
-        borderSet.add(`${nX - 1},${gy}`);
-    }
-
-    const cols = 3;
     for (let i = 0; i < items.length; i++) {
         const rowIndex = Math.floor(i / cols);
         const colIndex = i % cols;
-        const jitterX = (Math.random() - 0.5) * 0.5;
+        const scale = 0.7 + Math.random() * 0.6;
+        const jitterX = (Math.random() - 0.5) * 0.4;
         const jitterY = (Math.random() - 0.5) * 0.3;
-        const centerX = (colIndex - (cols - 1) / 2) * cfg.slotSpacing + jitterX;
-        const centerY = cfg.offsetYTop - rowIndex * cfg.rowSpacing + jitterY;
-
-        for (const key of borderSet) {
-            const [gx, gy] = key.split(',').map(Number);
-            const px = centerX + (gx - (nX - 1) / 2) * cubeSize;
-            const py = centerY + (gy - (nY - 1) / 2) * cubeSize;
-            for (let zLayer = 0; zLayer < thickness; zLayer++) {
-                const pz = -zLayer * cubeSize;
-                const pos = new THREE.Vector3(px, py, pz);
-                frameCubes.push({
-                    originalPos: pos.clone(),
-                    currentPos: pos.clone(),
-                    velocity: new THREE.Vector3(0, 0, 0),
-                    meshIndex: cubeIndex
-                });
-                dummy.position.copy(pos);
-                dummy.rotation.set(0, 0, 0);
-                dummy.scale.setScalar(1);
-                dummy.updateMatrix();
-                frameMesh.setMatrixAt(cubeIndex, dummy.matrix);
-                cubeIndex++;
-            }
-        }
+        const centerX = (colIndex - (cols - 1) / 2) * overlapSpacing + jitterX;
+        const centerY = cfg.offsetYTop - rowIndex * overlapRowSpacing + jitterY;
+        const targetPos = new THREE.Vector3(centerX, centerY, cfg.planeZOffset);
+        const sideOffset = sides[i % 4]();
+        const flyInStartPos = targetPos.clone().add(sideOffset);
 
         const item = items[i];
         const video = document.createElement('video');
@@ -1744,21 +2090,21 @@ function initPortfolio() {
         const texture = new THREE.VideoTexture(video);
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
-        const planeW = slotW * 0.92;
-        const planeH = slotH * 0.92;
+        const planeW = slotW * 0.92 * scale;
+        const planeH = slotH * 0.92 * scale;
         const planeGeo = new THREE.PlaneGeometry(planeW, planeH);
         const planeMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
         const planeMesh = new THREE.Mesh(planeGeo, planeMat);
-        planeMesh.position.set(centerX, centerY, cfg.planeZOffset);
+        planeMesh.position.copy(flyInStartPos);
         planeMesh.userData.portfolioIndex = i;
         group.add(planeMesh);
         portfolioState.planeMeshes.push(planeMesh);
+        portfolioState.planeTargetPositions.push(targetPos);
+        portfolioState.windowData.push({ targetPos, flyInStartPos, scale });
         portfolioState.items.push({ vimeoUrl: item.vimeoUrl, video, texture, mesh: planeMesh });
     }
 
-    portfolioState.frameCubes = frameCubes;
-    frameMesh.instanceMatrix.needsUpdate = true;
-    scene.add(group);
+    if (!skipAddToScene) scene.add(group);
 }
 
 function onMouseMove(event) {
@@ -1770,8 +2116,8 @@ function onMouseMove(event) {
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     }
 
-    // Handle Camera Rotation & Panning
-    if (!isFreeCam) {
+    // Handle Camera Rotation & Panning (disabled when portfolio scene is active)
+    if (!isFreeCam && !portfolioSceneActive) {
         if (isDragging || isPanning) {
             const deltaX = event.clientX - previousMouseX;
             const deltaY = event.clientY - previousMouseY;
@@ -1835,6 +2181,79 @@ function animate() {
         }
         */
     } else {
+        if (portfolioSceneActive) {
+            const psc = PORTFOLIO_SCENE_CONFIG;
+            const now = Date.now();
+            const elapsed = (now - portfolioScenePhaseStartTime) / 1000;
+
+            if (portfolioScenePhase === 'camera_move') {
+                if (portfolioCameraStart === null) {
+                    portfolioCameraStart = {
+                        focus: cameraFocusPoint.clone(),
+                        radius: cameraRadius,
+                        angle: cameraAngle,
+                        verticalAngle: cameraVerticalAngle
+                    };
+                }
+                const dur = psc.cameraMoveDuration;
+                const progress = Math.min(1, elapsed / dur);
+                const e = easeInOutCubic(progress);
+                cameraFocusPoint.x = portfolioCameraStart.focus.x + (psc.cameraFocusTarget.x - portfolioCameraStart.focus.x) * e;
+                cameraFocusPoint.y = portfolioCameraStart.focus.y + (psc.cameraFocusTarget.y - portfolioCameraStart.focus.y) * e;
+                cameraFocusPoint.z = portfolioCameraStart.focus.z + (psc.cameraFocusTarget.z - portfolioCameraStart.focus.z) * e;
+                cameraRadius = portfolioCameraStart.radius + (psc.cameraRadiusTarget - portfolioCameraStart.radius) * e;
+                cameraAngle = portfolioCameraStart.angle;
+                cameraVerticalAngle = portfolioCameraStart.verticalAngle;
+                targetCameraAngle = cameraAngle;
+                targetCameraVerticalAngle = cameraVerticalAngle;
+                targetCameraRadius = cameraRadius;
+                if (progress >= 1) {
+                    portfolioScenePhase = 'subtitle_transform';
+                    portfolioScenePhaseStartTime = Date.now();
+                }
+            } else {
+                cameraFocusPoint.set(psc.cameraFocusTarget.x, psc.cameraFocusTarget.y, psc.cameraFocusTarget.z);
+                cameraRadius = psc.cameraRadiusTarget;
+                if (portfolioCameraStart) {
+                    cameraAngle = portfolioCameraStart.angle;
+                    cameraVerticalAngle = portfolioCameraStart.verticalAngle;
+                }
+            }
+
+            if (portfolioScenePhase === 'subtitle_transform' && motionDesignState && !motionDesignState.recyclingDone) {
+                const elapsed = (now - portfolioScenePhaseStartTime) / 1000;
+                if (elapsed >= psc.subtitleTransformDuration) {
+                    motionDesignState.recyclingDone = true;
+                    portfolioScenePhase = 'flash';
+                    portfolioScenePhaseStartTime = Date.now();
+                }
+            } else if (portfolioScenePhase === 'flash') {
+                if ((Date.now() - portfolioScenePhaseStartTime) / 1000 >= psc.flashDuration) {
+                    portfolioScenePhase = 'windows_fly_in';
+                    portfolioScenePhaseStartTime = Date.now();
+                }
+            } else if (portfolioScenePhase === 'windows_fly_in' && !portfolioWindowsFlyInInitDone && portfolioState.group) {
+                scene.add(portfolioState.group);
+                if (portfolioState.windowData && portfolioState.planeMeshes.length) {
+                    portfolioState.planeMeshes.forEach((mesh, idx) => {
+                        const wd = portfolioState.windowData[idx];
+                        if (wd) mesh.position.copy(wd.flyInStartPos);
+                    });
+                }
+                portfolioWindowsFlyInInitDone = true;
+            }
+
+            if (backgroundVideoMesh && psc.bgVideoOffsetY != null) {
+                const bgProgress = Math.min(1, (Date.now() - portfolioSceneStartTime) / 1000 / (psc.bgVideoMoveDuration || 2.8));
+                backgroundVideoMesh.position.y = psc.bgVideoOffsetY * easeInOutCubic(bgProgress);
+            }
+
+            const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
+            camera.position.x = cameraFocusPoint.x + Math.sin(cameraAngle) * horizontalRadius;
+            camera.position.z = cameraFocusPoint.z + Math.cos(cameraAngle) * horizontalRadius;
+            camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
+            camera.lookAt(cameraFocusPoint);
+        } else {
         // Cinematic Mode Logic
         if (isCinematic) {
             if (isInitialSequence) {
@@ -1914,6 +2333,7 @@ function animate() {
         camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
 
         camera.lookAt(cameraFocusPoint);
+        }
     }
 
     if (Object.keys(meshRegistry).length > 0) {
@@ -1925,24 +2345,85 @@ function animate() {
         if (intersection) {
             debugMesh.position.copy(target); // Update debug sphere
 
-            // Calculate Mouse Velocity
-            const now = Date.now();
-            const dt = (now - lastMouseTime) / 1000;
-            if (dt > 0 && dt < 0.1) {
-                mouseVelocity.subVectors(target, lastTarget).divideScalar(dt);
+            // Calculate Mouse Velocity (not when portfolio scene active - no sim interaction)
+            if (!portfolioSceneActive) {
+                const now = Date.now();
+                const dt = (now - lastMouseTime) / 1000;
+                if (dt > 0 && dt < 0.1) {
+                    mouseVelocity.subVectors(target, lastTarget).divideScalar(dt);
+                }
+                lastMouseTime = now;
+                lastTarget.copy(target);
             }
-            lastMouseTime = now;
-            lastTarget.copy(target);
-
         } else {
             target.set(1000, 1000, 1000);
             mouseVelocity.set(0, 0, 0);
         }
 
+        const simTarget = portfolioSceneActive ? new THREE.Vector3(1000, 1000, 1000) : target;
+
         const time = Date.now() * 0.001;
         const delta = clock.getDelta();
 
+        if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState && motionDesignState.heartMesh && motionDesignState.heartCubes.length > 0) {
+            const psc = PORTFOLIO_SCENE_CONFIG;
+            const heartElapsed = (Date.now() - portfolioScenePhaseStartTime) / 1000;
+            const heartProgress = Math.min(1, heartElapsed / (psc.heartFlyDuration || 1.2));
+            const heartE = easeInOutCubic(heartProgress);
+            motionDesignState.heartCubes.forEach((hc) => {
+                hc.currentPos.lerpVectors(hc.startPos, hc.targetPos, heartE);
+                dummy.position.copy(hc.currentPos);
+                dummy.scale.setScalar(1);
+                dummy.updateMatrix();
+                motionDesignState.heartMesh.setMatrixAt(hc.meshIndex, dummy.matrix);
+            });
+            motionDesignState.heartMesh.instanceMatrix.needsUpdate = true;
+            if (motionDesignState.heartMesh.material.emissiveIntensity !== undefined) {
+                motionDesignState.heartMesh.material.emissiveIntensity = 1.2 * (1 - heartE);
+            }
+        }
+
+        if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState === null && loadedFontRegular) {
+            const data = computeMotionDesignTargets(loadedFontRegular);
+            if (data) {
+                const productionsGroups = cubeGroups.filter(g => !g.isTop);
+                const byX = (a, b) => (a.originalPos?.x ?? a.x) - (b.originalPos?.x ?? b.x);
+                const sortedGroups = productionsGroups.slice().sort((a, b) => byX(a, b));
+                const sortedTargets = data.targets.slice().sort((a, b) => a.x - b.x);
+                const K = Math.min(sortedGroups.length, sortedTargets.length);
+                for (let i = 0; i < K; i++) {
+                    sortedGroups[i].portfolioStartPos = sortedGroups[i].currentPos.clone();
+                    sortedGroups[i].portfolioTargetPos = sortedTargets[i].clone();
+                }
+                const heartData = createHeartMesh(data.heartCenter);
+                motionDesignState = {
+                    targets: data.targets,
+                    heartCenter: data.heartCenter,
+                    recyclingDone: false,
+                    spawnDone: false,
+                    heartDone: false,
+                    extraGroups: [],
+                    heartCubes: heartData.heartCubes,
+                    heartMesh: heartData.mesh
+                };
+                if (heartData.mesh) scene.add(heartData.mesh);
+            }
+        }
+
         // --- CUBE GROUPS LOGIC ---
+
+        // Glitch volumetryczne: auto-trigger gdy włączone
+        if (cubeGroups.length > 0 && GLITCH_VOLUME_CONFIG.enabled) {
+            if (glitchVolumeNextTrigger === 0) {
+                const cfg = GLITCH_VOLUME_CONFIG;
+                glitchVolumeNextTrigger = time + (cfg.intervalMin + Math.random() * (cfg.intervalMax - cfg.intervalMin)) / 1000;
+            }
+            if (time >= glitchVolumeNextTrigger) {
+                triggerVolumetricGlitch(time);
+                const cfg = GLITCH_VOLUME_CONFIG;
+                glitchVolumeNextTrigger = time + (cfg.intervalMin + Math.random() * (cfg.intervalMax - cfg.intervalMin)) / 1000;
+            }
+        }
 
         // Pre-calculate Vajbuj Bounce State
         let vajbujBounceActive = false;
@@ -1979,7 +2460,34 @@ function animate() {
 
         for (let i = 0; i < cubeGroups.length; i++) {
             const group = cubeGroups[i];
-            const dist = group.currentPos.distanceTo(target);
+
+            if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && group.portfolioTargetPos && motionDesignState) {
+                const psc = PORTFOLIO_SCENE_CONFIG;
+                const elapsed = (Date.now() - portfolioScenePhaseStartTime) / 1000;
+                const progress = Math.min(1, elapsed / psc.subtitleTransformDuration);
+                const e = easeInOutCubic(progress);
+                const start = group.portfolioStartPos || group.originalPos;
+                group.currentPos.lerpVectors(start, group.portfolioTargetPos, e);
+                if (progress >= 1) {
+                    group.originalPos.copy(group.portfolioTargetPos);
+                }
+                let finalQuat = group.rotation;
+                dummy.position.copy(group.currentPos);
+                dummy.rotation.setFromQuaternion(finalQuat);
+                dummy.scale.copy(group.baseScale);
+                dummy.updateMatrix();
+                const entry = meshRegistry[group.shapeId];
+                if (entry) {
+                    const targetMesh = group.isTop ? entry.top : entry.kek;
+                    if (targetMesh) {
+                        targetMesh.setMatrixAt(group.meshIndex, dummy.matrix);
+                        targetMesh.instanceMatrix.needsUpdate = true;
+                    }
+                }
+                continue;
+            }
+
+            const dist = group.currentPos.distanceTo(simTarget);
 
             if (CONFIG.animationMode === 'repulsion') {
                 // --- MODE 1: REPULSION (Original) ---
@@ -1997,7 +2505,7 @@ function animate() {
                 }
 
                 if (dist < CONFIG.repulsionRadius) {
-                    const force = new THREE.Vector3().subVectors(group.currentPos, target);
+                    const force = new THREE.Vector3().subVectors(group.currentPos, simTarget);
                     const len = force.length();
                     if (len > 0) {
                         force.normalize();
@@ -2169,8 +2677,16 @@ function animate() {
                 finalQuat = group.rotation;
             }
 
-            // Update Single Fused Mesh Instance
-            dummy.position.copy(group.currentPos);
+            // Update Single Fused Mesh Instance (glitch volumetryczne: nakładka wizualna)
+            if (group.glitchEndTime && time < group.glitchEndTime) {
+                dummy.position.copy(group.currentPos).add(group.glitchDisplayOffset);
+            } else {
+                dummy.position.copy(group.currentPos);
+                if (group.glitchEndTime) {
+                    group.glitchDisplayOffset.set(0, 0, 0);
+                    group.glitchEndTime = 0;
+                }
+            }
             dummy.rotation.setFromQuaternion(finalQuat);
             dummy.scale.copy(group.baseScale);
             dummy.updateMatrix();
@@ -2188,7 +2704,7 @@ function animate() {
         // --- INNER CUBE PARTICLES LOGIC ---
         for (let i = 0; i < innerCubeParticles.length; i++) {
             const data = innerCubeParticles[i];
-            const dist = data.currentPos.distanceTo(target);
+            const dist = data.currentPos.distanceTo(simTarget);
 
             if (CONFIG.animationMode === 'repulsion') {
                 // --- INNER CUBE REPULSION ---
@@ -2204,7 +2720,7 @@ function animate() {
                 }
 
                 if (dist < CONFIG.repulsionRadius) {
-                    const force = new THREE.Vector3().subVectors(data.currentPos, target);
+                    const force = new THREE.Vector3().subVectors(data.currentPos, simTarget);
                     if (force.length() > 0) {
                         force.normalize();
                         const strength = (1 - dist / CONFIG.repulsionRadius) * CONFIG.repulsionStrength;
@@ -2305,7 +2821,16 @@ function animate() {
                 }
             }
 
-            dummy.position.copy(data.currentPos);
+            // Glitch volumetryczne: nakładka wizualna dla inner cubes
+            if (data.glitchEndTime && time < data.glitchEndTime) {
+                dummy.position.copy(data.currentPos).add(data.glitchDisplayOffset);
+            } else {
+                dummy.position.copy(data.currentPos);
+                if (data.glitchEndTime) {
+                    data.glitchDisplayOffset.set(0, 0, 0);
+                    data.glitchEndTime = 0;
+                }
+            }
             dummy.rotation.set(0, 0, 0);
             dummy.scale.setScalar(1);
             dummy.updateMatrix();
@@ -2321,36 +2846,43 @@ function animate() {
         }
     }
 
-    // --- Portfolio: frame repulsion, hover (play/pause video), update matrices ---
-    if (portfolioState.frameMesh && portfolioState.frameCubes.length > 0) {
+    // --- Portfolio: windows fly-in / floating and hover (play/pause video) ---
+    if (portfolioState.planeMeshes.length > 0) {
+        const psc = PORTFOLIO_SCENE_CONFIG;
+        if (portfolioSceneActive && (portfolioScenePhase === 'windows_fly_in' || portfolioScenePhase === 'floating')) {
+            const elapsed = (Date.now() - portfolioScenePhaseStartTime) / 1000;
+            if (portfolioScenePhase === 'windows_fly_in' && portfolioState.windowData) {
+                const progress = Math.min(1, elapsed / (psc.windowsFlyInDuration || 1));
+                const e = easeInOutCubic(progress);
+                portfolioState.planeMeshes.forEach((mesh, idx) => {
+                    const wd = portfolioState.windowData[idx];
+                    const t = portfolioState.planeTargetPositions[idx];
+                    if (wd && t) {
+                        mesh.position.lerpVectors(wd.flyInStartPos, t, e);
+                    }
+                });
+                if (progress >= 1) {
+                    portfolioScenePhase = 'floating';
+                    portfolioScenePhaseStartTime = Date.now();
+                }
+            } else if (portfolioScenePhase === 'floating' && portfolioState.planeTargetPositions) {
+                const t = Date.now() * 0.001;
+                portfolioState.planeMeshes.forEach((mesh, idx) => {
+                    const tgt = portfolioState.planeTargetPositions[idx];
+                    if (tgt) {
+                        const drift = 0.04 * Math.sin(t + idx);
+                        mesh.position.x = tgt.x + drift;
+                        mesh.position.y = tgt.y + 0.03 * Math.cos(t * 0.6 + idx * 0.5);
+                        mesh.position.z = tgt.z;
+                    }
+                });
+            }
+        }
+
         const portfolioTarget = new THREE.Vector3(1000, 1000, 1000);
         raycaster.setFromCamera(mouse, camera);
         raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), portfolioTarget);
-        const forceScale = PORTFOLIO_CONFIG.forceScale ?? 1.0;
-        for (let i = 0; i < portfolioState.frameCubes.length; i++) {
-            const data = portfolioState.frameCubes[i];
-            const dist = data.currentPos.distanceTo(portfolioTarget);
-
-            if ((CONFIG.animationMode === 'repulsion' || CONFIG.animationMode === 'scatter') && dist < CONFIG.repulsionRadius) {
-                const force = new THREE.Vector3().subVectors(data.currentPos, portfolioTarget);
-                if (force.length() > 0) {
-                    force.normalize();
-                    const strength = (1 - dist / CONFIG.repulsionRadius) * CONFIG.repulsionStrength;
-                    data.velocity.addScaledVector(force, strength * 0.05 * forceScale);
-                }
-            }
-
-            const returnVec = new THREE.Vector3().subVectors(data.originalPos, data.currentPos);
-            data.velocity.add(returnVec.clone().multiplyScalar(0.05));
-            data.velocity.multiplyScalar(0.85);
-            data.currentPos.add(data.velocity);
-            dummy.position.copy(data.currentPos);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.setScalar(1);
-            dummy.updateMatrix();
-            portfolioState.frameMesh.setMatrixAt(data.meshIndex, dummy.matrix);
-        }
-        portfolioState.frameMesh.instanceMatrix.needsUpdate = true;
+        if (portfolioSceneActive) portfolioTarget.set(1000, 1000, 1000);
     }
     if (portfolioState.planeMeshes.length > 0) {
         raycaster.setFromCamera(mouse, camera);
@@ -2358,15 +2890,17 @@ function animate() {
         portfolioState.hoveredIndex = hits.length > 0 && hits[0].object.userData.portfolioIndex !== undefined
             ? hits[0].object.userData.portfolioIndex
             : -1;
-        portfolioState.items.forEach((item, idx) => {
-            if (idx === portfolioState.hoveredIndex) {
-                if (item.video.paused) item.video.play().catch(() => {});
-                item.texture.needsUpdate = true;
-            } else {
-                if (!item.video.paused) item.video.pause();
-                item.video.currentTime = 0;
-            }
-        });
+        if (portfolioSceneActive && (portfolioScenePhase === 'windows_fly_in' || portfolioScenePhase === 'floating')) {
+            portfolioState.items.forEach((item, idx) => {
+                if (idx === portfolioState.hoveredIndex) {
+                    if (item.video.paused) item.video.play().catch(() => {});
+                    item.texture.needsUpdate = true;
+                } else {
+                    if (!item.video.paused) item.video.pause();
+                    item.video.currentTime = 0;
+                }
+            });
+        }
     }
 
     if (crtPass) {
@@ -3470,7 +4004,9 @@ async function loadParticles(data) {
             returnQueue: [],
             currentStepIndex: 0,
             stepStartTime: 0,
-            glitchTarget: new THREE.Vector3()
+            glitchTarget: new THREE.Vector3(),
+            glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
+            glitchEndTime: 0,
         });
     });
 
@@ -3534,7 +4070,9 @@ async function loadParticles(data) {
             returnQueue: [],
             currentStepIndex: 0,
             stepStartTime: 0,
-            glitchTarget: new THREE.Vector3()
+            glitchTarget: new THREE.Vector3(),
+            glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
+            glitchEndTime: 0,
         });
         sIdx++;
     });
