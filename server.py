@@ -1,7 +1,8 @@
 """
-Minimal HTTP server that suppresses ConnectionResetError when the client
+Minimal HTTP server that suppresses connection errors when the client
 closes the connection before the response is fully sent (e.g. refresh, large files).
 """
+import errno
 import sys
 import os
 
@@ -14,6 +15,9 @@ except ImportError:
     from BaseHTTPServer import HTTPServer
     from SimpleHTTPServer import SimpleHTTPRequestHandler
 
+# Windows socket error when client resets connection
+WSAECONNRESET = getattr(errno, "WSAECONNRESET", 10054)
+
 
 class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
     def copyfile(self, source, outputfile):
@@ -22,6 +26,12 @@ class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
         except (ConnectionResetError, BrokenPipeError):
             # Client closed connection (refresh, navigate away, cancel) - ignore
             pass
+        except OSError as e:
+            # On Windows, closed connection often raises OSError with errno 10054
+            if e.errno in (errno.ECONNRESET, errno.EPIPE, WSAECONNRESET):
+                pass
+            else:
+                raise
 
     def log_message(self, format, *args):
         # Optional: keep request log, or comment out to make fully quiet

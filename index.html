@@ -31,20 +31,22 @@
         </div>
     </div>
 
-    <!-- TERMINAL MENU (Bottom Right) -->
+    <!-- RIGHT PANEL: controls above terminal menu -->
+    <div id="right-panel">
     <div id="terminal-menu">
-        <div class="term-line">Animation portfolio</div>
-        <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
-        <div class="term-line">Under Development</div>
-        <div class="term-line">Games ></div>
+        <div class="term-line">Animation portfolio</div><br>
+        <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div><br><br>
+        <div class="term-line">Under Development</div><br>
+        <div class="term-line">Games</div><br>
         <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
-        <div class="term-line">> floppy driver v_0.05.20</div>
-        <div class="term-line">Soft</div>
+        <div class="term-line">> floppy driver v_0.05.20</div><br>
+        <div class="term-line">Software</div><br>
         <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
         <div class="term-line">> pixelgen v 0.2</div>
         <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
         <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
         <div class="term-line">> Frame Gen v_1.0</div>
+    </div>
     </div>
 
     <!-- APPSTAIN MODAL -->
@@ -139,24 +141,23 @@
 
     <!-- GLITCH LAB MODAL -->
     <div id="glitch-modal" class="hidden">
-        <div id="glitch-content">
+        <div id="glitch-backdrop"></div>
+        <div id="glitch-content" class="portfolio-modal-box">
             <button id="glitch-close" class="close-btn">X</button>
+            <h2 id="glitch-title" class="portfolio-modal-title">Glitch Lab v_0.72.34</h2>
 
-            <div id="glitch-header">
+            <div id="glitch-header" class="glitch-lang-row">
                 <div id="lang-toggle">
-                    <span id="lang-pl" class="lang-opt active">PL</span> / <span id="lang-eng"
-                        class="lang-opt">ENG</span>
+                    <span id="lang-pl" class="lang-opt active">PL</span> / <span id="lang-eng" class="lang-opt">ENG</span>
                 </div>
             </div>
 
             <div id="glitch-body">
                 <div id="glitch-img-container">
-                    <img src="GL.jpg" alt="Glitch Lab Preview">
+                    <img src="GL.jpg" alt="Glitch Lab Preview" class="glitch-hero-img">
                 </div>
-                <div id="glitch-text-container">
-                    <!-- Markdown content will be injected here -->
-                    <div id="glitch-md-content">Loading...</div>
-                </div>
+                <!-- Markdown content – same typography as GENIMG -->
+                <div id="glitch-md-content" class="genimg-md">Loading...</div>
             </div>
 
             <div id="glitch-footer">
@@ -170,9 +171,9 @@
     <!-- GENIMG MODAL -->
     <div id="genimg-modal" class="hidden">
         <div id="genimg-backdrop"></div>
-        <div id="genimg-content">
+        <div id="genimg-content" class="portfolio-modal-box">
             <button id="genimg-close" class="close-btn">X</button>
-            <h2 id="genimg-title">GENIMG v 1.3</h2>
+            <h2 id="genimg-title" class="portfolio-modal-title">GENIMG v 1.3</h2>
 
             <div class="genimg-gallery">
                 <img src="ASSETS/GENIMG/01.jpg" alt="GENIMG 01" class="genimg-thumb">

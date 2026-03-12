@@ -31,14 +31,25 @@ export const CONFIG = {
         text: "PRODUCTIONS",
         size: 0.8, // Much smaller than main text
         height: 0.12, // Thickness for geometry (not used for particles directly if hardcoded)
-        offsetY: -5, // Position below main text
+        offsetY: -3, // Position below main text (slightly higher)
         thickness: 2, // Voxel thickness
-        letterSpacing: 0.7
+        letterSpacing: 1, // Slightly more spread between letters
     },
     appstainPassword: "lol",
     appstainRedirectUrl: "https://xcwajdax.github.io/appstainsaga/",
     portfolio: {
         sampleVimeoUrl: "https://player.vimeo.com/video/1170695269"
+    },
+    // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
+    backgroundVideo: {
+        sources: [
+            'ASSETS/BGs/01_torus.mp4',
+            'ASSETS/BGs/02_bag_1.mp4',
+            'ASSETS/BGs/06_kostki_02.mp4'
+        ],
+        positionZ: -20,
+        width: 80,
+        height: 45
     }
 };
 
@@ -193,8 +204,14 @@ export const VAJBUJ_CONFIG = {
 // Shader Configuration
 export const SHADER_CONFIG = {
     crt: {
-        curvature: new THREE.Vector2(0.5, 0.40), // 1.0 = flat
-        lineWidth: 0.1
+        curvature: new THREE.Vector2(0.5, 0.40), // 1.0 = flat, wyższe = mocniejsza krzywizna
+        lineWidth: 0.25,
+        scanlineIntensity: IS_MOBILE ? 0.2 : 0.35,
+        scanlineCount: IS_MOBILE ? 200 : 400,
+        vignetteStrength: 0.85,
+        vignetteRadius: 1.0,
+        chromaticAberration: IS_MOBILE ? 0.001 : 0.003,
+        flickerAmount: IS_MOBILE ? 0 : 0.02
     },
     bloom: {
         threshold: 0.3,
@@ -283,8 +300,8 @@ export const CINEMATIC_CONFIG = {
 // Loader Configuration
 export const LOADER_CONFIG = {
     phases: {
-        assets: { weight: 20, text: "Loading Assets..." }, // HDRI, Font
-        generation: { weight: 80, text: "Generating Particles..." } // Voxelization & Mesh creation
+        assets: { weight: 50, text: "Loading Assets..." },   // wideo w tle + fonty – postęp buforowania widać na pasku (0–50%)
+        generation: { weight: 50, text: "Generating Particles..." }
     },
     colors: {
         background: "#111",

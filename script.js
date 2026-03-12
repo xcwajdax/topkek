@@ -18,10 +18,15 @@ const CRTShader = {
     uniforms: {
         'tDiffuse': { value: null },
         'time': { value: 0 },
-        'start_time': { value: 0 },
         'resolution': { value: new THREE.Vector2() },
-        'curvature': { value: SHADER_CONFIG.crt.curvature }, // 1.0 = flat
-        'lineWidth': { value: SHADER_CONFIG.crt.lineWidth } // Scanline width
+        'curvature': { value: SHADER_CONFIG.crt.curvature },
+        'lineWidth': { value: SHADER_CONFIG.crt.lineWidth },
+        'scanlineIntensity': { value: SHADER_CONFIG.crt.scanlineIntensity },
+        'scanlineCount': { value: SHADER_CONFIG.crt.scanlineCount },
+        'vignetteStrength': { value: SHADER_CONFIG.crt.vignetteStrength },
+        'vignetteRadius': { value: SHADER_CONFIG.crt.vignetteRadius },
+        'chromaticAberration': { value: SHADER_CONFIG.crt.chromaticAberration },
+        'flickerAmount': { value: SHADER_CONFIG.crt.flickerAmount }
     },
 
     vertexShader: `
@@ -34,17 +39,21 @@ const CRTShader = {
 
     fragmentShader: `
         uniform sampler2D tDiffuse;
-        uniform float time; // Time in seconds
+        uniform float time;
         uniform vec2 resolution;
         uniform vec2 curvature;
         uniform float lineWidth;
-        
+        uniform float scanlineIntensity;
+        uniform float scanlineCount;
+        uniform float vignetteStrength;
+        uniform float vignetteRadius;
+        uniform float chromaticAberration;
+        uniform float flickerAmount;
         varying vec2 vUv;
 
-        // Curve operation
         vec2 curve(vec2 uv) {
             uv = (uv - 0.5) * 2.0;
-            uv *= 1.1; // Zoom out slightly to fit curve
+            uv *= 1.1;
             uv.x *= 1.0 + pow((abs(uv.y) * curvature.x), 2.0);
             uv.y *= 1.0 + pow((abs(uv.x) * curvature.y), 2.0);
             uv  = (uv / 2.0) + 0.5;
@@ -54,20 +63,35 @@ const CRTShader = {
 
         void main() {
             vec2 uv = curve(vUv);
-            
-            // Check bounds
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-            } else {
-                // Base color with curvature only
-                vec4 color = texture2D(tDiffuse, uv);
-
-                // Vignette at edges of curved screen
-                float vig = 16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
-                color.rgb *= vec3(pow(vig, 0.9));
-
-                gl_FragColor = color;
+                return;
             }
+
+            vec2 uvC = uv - 0.5;
+            float dist = length(uvC) * 2.0;
+            vec2 dir = normalize(uvC);
+            vec2 uvR = uv + dir * chromaticAberration * dist;
+            vec2 uvB = uv - dir * chromaticAberration * dist;
+
+            float r = texture2D(tDiffuse, uvR).r;
+            float g = texture2D(tDiffuse, uv).g;
+            float b = texture2D(tDiffuse, uvB).b;
+            float a = texture2D(tDiffuse, uv).a;
+            vec4 color = vec4(r, g, b, a);
+
+            float scanline = sin(uv.y * scanlineCount * 3.14159) * 0.5 + 0.5;
+            color.rgb *= 1.0 - scanline * scanlineIntensity;
+
+            float vig = 16.0 * uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
+            vig = pow(vig, vignetteStrength);
+            float vigRad = smoothstep(vignetteRadius, vignetteRadius - 0.2, dist);
+            color.rgb *= mix(vig, 1.0, vigRad);
+
+            float flicker = 1.0 - flickerAmount * (sin(time * 50.0) * 0.5 + 0.5);
+            color.rgb *= flicker;
+
+            gl_FragColor = color;
         }
     `
 };
@@ -92,6 +116,24 @@ let lastMouseTime = 0;
 let lastTarget = new THREE.Vector3();
 let loadedFont = null; // Store loaded font globally
 let loadedFontRegular = null; // Store loaded regular font globally
+
+// Background video (ogromne wideo za TOPKEK)
+let backgroundVideoEl = null;
+let backgroundVideoTexture = null;
+let backgroundVideoMesh = null;
+
+function cycleBackgroundVideo() {
+    const bgCfg = CONFIG.backgroundVideo;
+    const sources = bgCfg?.sources;
+    if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0) return;
+    const currentSrc = backgroundVideoEl.src ? new URL(backgroundVideoEl.src, window.location.origin).pathname.replace(/^\//, '') : '';
+    const others = sources.filter(s => s !== currentSrc && s.replace(/^\//, '') !== currentSrc);
+    const pool = others.length ? others : sources;
+    const next = pool[Math.floor(Math.random() * pool.length)];
+    backgroundVideoEl.src = next;
+    backgroundVideoEl.load();
+    backgroundVideoEl.play().catch(() => {});
+}
 
 // Portfolio (video thumbnails below PRODUCTIONS)
 let portfolioState = {
@@ -188,6 +230,13 @@ function updateProgress() {
 }
 
 function init() {
+    updateProgress(); // Pokazuj 0% i "Loading Assets..." od razu
+    requestAnimationFrame(() => {
+        initSceneAndLoad();
+    });
+}
+
+function initSceneAndLoad() {
     // 1. Scene Setup
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111); // Dark background
@@ -276,28 +325,87 @@ function init() {
     debugMesh = new THREE.Mesh(debugGeo, debugMat);
     scene.add(debugMesh);
 
+    // Tło: ogromne wideo daleko za napisem TOPKEK (losowy plik z listy przy ładowaniu)
+    const bgCfg = CONFIG.backgroundVideo;
+    const bgSources = bgCfg?.sources;
+    const bgSrc = Array.isArray(bgSources) && bgSources.length
+        ? bgSources[Math.floor(Math.random() * bgSources.length)]
+        : bgCfg?.src;
+
+    let videoReadyPromise = Promise.resolve();
+    if (bgCfg && bgSrc) {
+        backgroundVideoEl = document.createElement('video');
+        backgroundVideoEl.muted = true;
+        backgroundVideoEl.loop = true;
+        backgroundVideoEl.playsInline = true;
+        backgroundVideoEl.preload = 'auto';
+        backgroundVideoEl.crossOrigin = 'anonymous';
+        backgroundVideoEl.src = bgSrc;
+        backgroundVideoEl.load();
+
+        const updateVideoProgress = () => {
+            if (loadState.assets >= 100) return;
+            const v = backgroundVideoEl;
+            let pct = 0;
+            const durOk = v.duration && typeof v.duration === 'number' && isFinite(v.duration);
+            if (durOk && v.buffered.length > 0) {
+                const endVal = v.buffered.end(v.buffered.length - 1);
+                pct = Math.min(100, Math.round((endVal / v.duration) * 100));
+            } else if (v.buffered.length > 0) {
+                pct = Math.min(90, loadState.assets + 15);
+            }
+            loadState.assets = Math.max(loadState.assets, pct);
+            updateProgress();
+        };
+        backgroundVideoEl.addEventListener('progress', updateVideoProgress);
+        backgroundVideoEl.addEventListener('loadedmetadata', updateVideoProgress);
+        backgroundVideoEl.addEventListener('loadeddata', updateVideoProgress);
+
+        videoReadyPromise = new Promise((resolve) => {
+            const onReady = () => {
+                loadState.assets = 100;
+                updateProgress();
+                backgroundVideoEl.play().catch(() => {});
+                resolve();
+            };
+            backgroundVideoEl.addEventListener('canplay', onReady, { once: true });
+            backgroundVideoEl.addEventListener('error', onReady, { once: true });
+        });
+
+        backgroundVideoTexture = new THREE.VideoTexture(backgroundVideoEl);
+        backgroundVideoTexture.minFilter = THREE.LinearFilter;
+        backgroundVideoTexture.magFilter = THREE.LinearFilter;
+        const bgGeo = new THREE.PlaneGeometry(bgCfg.width, bgCfg.height);
+        const bgMat = new THREE.MeshBasicMaterial({ map: backgroundVideoTexture, side: THREE.DoubleSide });
+        backgroundVideoMesh = new THREE.Mesh(bgGeo, bgMat);
+        backgroundVideoMesh.position.set(0, 0, bgCfg.positionZ);
+        scene.add(backgroundVideoMesh);
+    }
+
     // 5. Load Fonts and Generate Text
     const loader = new FontLoader();
 
-    // Load both fonts in parallel
+    // Fonts + wideo muszą być gotowe zanim zaczniemy ładować cząsteczki (żeby postęp buforowania był widoczny i żeby nie pokazywać napisu bez wideo)
     const fontBoldPromise = new Promise((resolve, reject) => {
         loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json', resolve, undefined, reject);
     });
 
     const fontRegularPromise = new Promise((resolve, reject) => {
-        // Using helvetiker_regular for a thinner look
         loader.load('https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_regular.typeface.json', resolve, undefined, reject);
     });
 
-    Promise.all([fontBoldPromise, fontRegularPromise])
+    Promise.all([fontBoldPromise, fontRegularPromise, videoReadyPromise])
         .then(async ([fontBold, fontRegular]) => {
             loadedFont = fontBold;
             loadedFontRegular = fontRegular;
-            loadState.assets = 100; // Fonts loaded
+            loadState.assets = 100;
+            loadState.generation = 0;
             updateProgress();
 
-            // Allow UI to update before heavy processing
+            // Daj przeglądarce czas na przerysowanie loadera (postęp i komunikat)
             await new Promise(resolve => requestAnimationFrame(resolve));
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await new Promise(resolve => setTimeout(resolve, 50));
 
             // Try to load particles from file
             try {
@@ -324,6 +432,9 @@ function init() {
             // Portfolio is lazy-initialized on first hover over "Animation portfolio" in terminal
 
             loaderContainer.classList.add('hidden');
+            if (backgroundVideoEl) {
+                backgroundVideoEl.play().catch(() => {});
+            }
             setTimeout(() => {
                 loaderContainer.style.display = 'none';
             }, 500);
@@ -409,75 +520,108 @@ init();
 animate();
 
 function createUI() {
+    const rightPanel = document.getElementById('right-panel');
+    if (!rightPanel) return;
+
     const ui = document.createElement('div');
     ui.id = 'ui-container';
 
+    // --- Mouse animation Mode ---
+    const sectionMode = document.createElement('div');
+    sectionMode.className = 'controls-section';
+    const titleMode = document.createElement('div');
+    titleMode.className = 'controls-category-title';
+    titleMode.textContent = 'Mouse animation Mode';
+    sectionMode.appendChild(titleMode);
+    const itemsMode = document.createElement('div');
+    itemsMode.className = 'controls-category-items';
+
     const btn1 = document.createElement('button');
     btn1.className = 'mode-btn active';
-    btn1.innerText = 'Repulsion';
+    btn1.innerText = '> Repulsion';
     btn1.onclick = () => setMode('repulsion', btn1, [btn2, btn3]);
 
     const btn2 = document.createElement('button');
     btn2.className = 'mode-btn';
-    btn2.innerText = 'Scatter';
+    btn2.innerText = '> Scatter';
     btn2.onclick = () => setMode('scatter', btn2, [btn1, btn3]);
 
     const btn3 = document.createElement('button');
     btn3.className = 'mode-btn';
-    btn3.innerText = 'Grid';
+    btn3.innerText = '> Grid';
     btn3.onclick = () => setMode('grid', btn3, [btn1, btn2]);
 
-    ui.appendChild(btn1);
-    ui.appendChild(btn2);
-    ui.appendChild(btn3);
+    itemsMode.appendChild(btn1);
+    itemsMode.appendChild(btn2);
+    itemsMode.appendChild(btn3);
+    sectionMode.appendChild(itemsMode);
+    ui.appendChild(sectionMode);
 
-    // Camera Mode Toggle
-    const btnCinematic = document.createElement('button');
-    btnCinematic.className = 'mode-btn';
-    btnCinematic.innerText = 'Dynamic Cam';
-    btnCinematic.onclick = () => {
-        if (!isCinematic) {
-            setCameraMode('dynamic');
-            btnCinematic.classList.add('active');
-        } else {
-            setCameraMode('manual');
-            btnCinematic.classList.remove('active');
-        }
+    // --- Camera ---
+    const sectionCam = document.createElement('div');
+    sectionCam.className = 'controls-section';
+    const titleCam = document.createElement('div');
+    titleCam.className = 'controls-category-title';
+    titleCam.textContent = 'Camera';
+    sectionCam.appendChild(titleCam);
+    const itemsCam = document.createElement('div');
+    itemsCam.className = 'controls-category-items';
+
+    const btnFreeCam = document.createElement('button');
+    btnFreeCam.className = 'mode-btn' + (isCinematic ? '' : ' active');
+    btnFreeCam.innerText = '> Free Cam';
+    btnFreeCam.onclick = () => {
+        setCameraMode('free');
+        btnFreeCam.classList.add('active');
+        btnCinematic.classList.remove('active');
     };
-    ui.appendChild(btnCinematic);
 
-    // Custom Text Button
+    const btnCinematic = document.createElement('button');
+    btnCinematic.className = 'mode-btn' + (isCinematic ? ' active' : '');
+    btnCinematic.innerText = '> Dynamic Cam';
+    btnCinematic.onclick = () => {
+        setCameraMode('dynamic');
+        btnCinematic.classList.add('active');
+        btnFreeCam.classList.remove('active');
+    };
+
+    itemsCam.appendChild(btnFreeCam);
+    itemsCam.appendChild(btnCinematic);
+    sectionCam.appendChild(itemsCam);
+    ui.appendChild(sectionCam);
+
+    // --- Change text ---
+    const sectionText = document.createElement('div');
+    sectionText.className = 'controls-section';
     const btnCustomText = document.createElement('button');
     btnCustomText.className = 'mode-btn';
-    btnCustomText.innerText = 'Change Text';
+    btnCustomText.innerText = 'Change text';
     btnCustomText.onclick = () => {
         document.getElementById('custom-text-modal').classList.remove('hidden');
     };
-    ui.appendChild(btnCustomText);
+    sectionText.appendChild(btnCustomText);
+    ui.appendChild(sectionText);
 
-    // Store reference for status update
-    window.cinematicButton = btnCinematic;
-
-    // VAJBUJ Button
-    if (VAJBUJ_CONFIG.enabled) {
-        const btnVajbuj = document.createElement('button');
-        btnVajbuj.className = 'mode-btn vajbuj-btn';
-        btnVajbuj.innerText = '🎵 VAJBUJ';
-        btnVajbuj.onclick = () => {
-            if (!vajbujState.active) {
-                startVajbujMode();
-                btnVajbuj.classList.add('active');
-            } else {
-                stopVajbujMode();
-            }
-        };
-        ui.appendChild(btnVajbuj);
-
-        // Store reference for deactivation
-        window.vajbujButton = btnVajbuj;
+    // --- Change BG ---
+    const bgCfg = CONFIG.backgroundVideo;
+    if (bgCfg && Array.isArray(bgCfg.sources) && bgCfg.sources.length > 0) {
+        const sectionBg = document.createElement('div');
+        sectionBg.className = 'controls-section';
+        const btnBgVideo = document.createElement('button');
+        btnBgVideo.className = 'mode-btn';
+        btnBgVideo.innerText = 'Change BG';
+        btnBgVideo.title = 'Zmień wideo w tle';
+        btnBgVideo.onclick = cycleBackgroundVideo;
+        sectionBg.appendChild(btnBgVideo);
+        ui.appendChild(sectionBg);
     }
 
-    document.body.appendChild(ui);
+    window.cinematicButton = btnCinematic;
+    window.freeCamButton = btnFreeCam;
+
+    // Vajbuj: ukryty (nie dodajemy przycisku)
+
+    rightPanel.insertBefore(ui, rightPanel.firstChild);
 
     // --- NEW UI ELEMENTS ---
 
@@ -677,13 +821,13 @@ function createUI() {
 
     const initGlitchModal = () => {
         const modal = document.getElementById('glitch-modal');
+        const backdrop = document.getElementById('glitch-backdrop');
         const closeBtn = document.getElementById('glitch-close');
         const langPl = document.getElementById('lang-pl');
         const langEng = document.getElementById('lang-eng');
 
-        closeBtn.onclick = () => {
-            modal.classList.add('hidden');
-        };
+        closeBtn.onclick = () => modal.classList.add('hidden');
+        if (backdrop) backdrop.onclick = () => modal.classList.add('hidden');
 
         langPl.onclick = () => {
             if (currentLang !== 'PL') {
@@ -920,10 +1064,15 @@ function setCameraMode(mode) {
         isCinematic = false;
     }
 
-    // Sync UI Button
+    // Sync UI buttons (Free Cam / Dynamic Cam)
     if (window.cinematicButton) {
-        if (isCinematic) window.cinematicButton.classList.add('active');
-        else window.cinematicButton.classList.remove('active');
+        if (isCinematic) {
+            window.cinematicButton.classList.add('active');
+            if (window.freeCamButton) window.freeCamButton.classList.remove('active');
+        } else {
+            window.cinematicButton.classList.remove('active');
+            if (window.freeCamButton) window.freeCamButton.classList.add('active');
+        }
     }
 }
 
@@ -1157,7 +1306,7 @@ async function generateParticles(font, fontRegular) {
         if (iterationCount % 50 === 0) { // Update every 50 columns
             loadState.generation = Math.round((gx - minGx) / (maxGx - minGx) * 30);
             updateProgress();
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await new Promise(resolve => requestAnimationFrame(resolve));
         }
     }
 
@@ -1175,7 +1324,7 @@ async function generateParticles(font, fontRegular) {
             const progress = 30 + (i / totalSaturationSteps) * 60;
             loadState.generation = Math.min(90, Math.round(progress));
             updateProgress();
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await new Promise(resolve => requestAnimationFrame(resolve));
         }
 
         sampler.sample(tempPosition, tempNormal);
@@ -1393,7 +1542,7 @@ async function generateParticles(font, fontRegular) {
 
     loadState.generation = 95;
     updateProgress();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     // --- POPULATE MESHES ---
     proposedGroups.forEach(groupProps => {
@@ -1673,6 +1822,8 @@ function onWindowResize() {
 
 function animate() {
     requestAnimationFrame(animate);
+
+    if (!camera || !scene || !renderer) return;
 
     if (isFreeCam && controls) {
         controls.update();
@@ -2304,10 +2455,15 @@ function onWheel(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Check if Glitch Lab modal is open
+    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG)
+    const appstainModal = document.getElementById('appstain-modal');
     const glitchModal = document.getElementById('glitch-modal');
-    if (glitchModal && !glitchModal.classList.contains('hidden')) {
-        // Allow default scrolling for the modal
+    const genimgModal = document.getElementById('genimg-modal');
+    if (
+        (appstainModal && !appstainModal.classList.contains('hidden')) ||
+        (glitchModal && !glitchModal.classList.contains('hidden')) ||
+        (genimgModal && !genimgModal.classList.contains('hidden'))
+    ) {
         return;
     }
 
@@ -3259,7 +3415,7 @@ async function loadParticles(data) {
     console.log("Loading particles from file...");
     loadState.generation = 10;
     updateProgress();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     // 1. Reconstruct Counts
     const groupCounts = {};
@@ -3275,7 +3431,7 @@ async function loadParticles(data) {
 
     loadState.generation = 50;
     updateProgress();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     // 3. Populate Cubes
     cubeGroups = [];
@@ -3326,7 +3482,7 @@ async function loadParticles(data) {
 
     loadState.generation = 80;
     updateProgress();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     // 4. Inner Cubes
     innerCubeParticles = [];
