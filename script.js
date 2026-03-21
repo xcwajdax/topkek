@@ -12,7 +12,72 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE } from './config.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG } from './config.js';
+
+function resolvePerformanceMode() {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get(PERFORMANCE_CONFIG.urlParam);
+    if (q === 'lite' || q === 'full' || q === 'auto') {
+        try {
+            localStorage.setItem(PERFORMANCE_CONFIG.storageKey, q);
+        } catch (_) { /* ignore */ }
+        return q;
+    }
+    try {
+        const stored = localStorage.getItem(PERFORMANCE_CONFIG.storageKey);
+        if (stored === 'lite' || stored === 'full' || stored === 'auto') return stored;
+    } catch (_) { /* ignore */ }
+    return 'auto';
+}
+
+function shouldUseLitePerformance(mode) {
+    if (mode === 'lite') return true;
+    if (mode === 'full') return false;
+    const mem = navigator.deviceMemory;
+    const cores = navigator.hardwareConcurrency || 8;
+    if (mem != null && mem <= PERFORMANCE_CONFIG.autoLiteMaxDeviceMemoryGb) return true;
+    if (cores <= PERFORMANCE_CONFIG.autoLiteMaxHardwareConcurrency) return true;
+    return false;
+}
+
+const performanceRuntime = (() => {
+    const mode = resolvePerformanceMode();
+    const lite = shouldUseLitePerformance(mode);
+    const prof = PERFORMANCE_CONFIG.profiles[lite ? 'lite' : 'full'];
+    const shadowMapSize = IS_MOBILE
+        ? CONFIG.shadowMapSize
+        : (prof.shadowMapSizeOverride ?? CONFIG.shadowMapSize);
+    return {
+        mode,
+        lite,
+        maxPixelRatioCap: prof.maxPixelRatioCap,
+        enableSao: prof.enableSao,
+        enableBloom: prof.enableBloom,
+        enableCrt: prof.enableCrt,
+        secondLightCastShadow: prof.secondLightCastShadow,
+        shadowMapSize
+    };
+})();
+
+function getEffectivePixelRatio() {
+    return Math.min(window.devicePixelRatio || 1, performanceRuntime.maxPixelRatioCap);
+}
+
+const _simForce = new THREE.Vector3();
+const _simReturnVec = new THREE.Vector3();
+const _simTargetHome = new THREE.Vector3();
+const _simImpulse = new THREE.Vector3();
+const _simSpinAxis = new THREE.Vector3();
+const _simDeltaRotAxis = new THREE.Vector3();
+const _simOffset = new THREE.Vector3();
+const _simRotAxisGrid = new THREE.Vector3();
+const _simEuler = new THREE.Euler();
+const _simFinalQuatRepulsion = new THREE.Quaternion();
+const _simFinalQuatWithGlitch = new THREE.Quaternion();
+const _quatIdentity = new THREE.Quaternion(0, 0, 0, 1);
+const _simFarSim = new THREE.Vector3(1000, 1000, 1000);
+const _mousePickPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const _rayPlaneHit = new THREE.Vector3();
 
 const CRTShader = {
     uniforms: {
@@ -273,7 +338,7 @@ function initSceneAndLoad() {
     // 3. Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(getEffectivePixelRatio());
     renderer.shadowMap.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -288,36 +353,44 @@ function initSceneAndLoad() {
     controls.zoomSpeed = CONFIG.freeCamZoomSpeed;
     controls.enabled = false; // Start disabled
 
-    // Post-Processing
+    // Post-Processing (zależnie od performanceRuntime: SAO / bloom / CRT)
     const renderScene = new RenderPass(scene, camera);
-
-    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = SHADER_CONFIG.bloom.threshold;
-    bloomPass.strength = SHADER_CONFIG.bloom.strength; // Adjust for glow intensity
-    bloomPass.radius = SHADER_CONFIG.bloom.radius;
-
-    const outputPass = new OutputPass();
-
-    crtPass = new ShaderPass(CRTShader);
-    crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
-
-    const saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
-    saoPass.params.saoBias = SHADER_CONFIG.sao.saoBias;
-    saoPass.params.saoIntensity = SHADER_CONFIG.sao.saoIntensity;
-    saoPass.params.saoScale = SHADER_CONFIG.sao.saoScale;
-    saoPass.params.saoKernelRadius = SHADER_CONFIG.sao.saoKernelRadius;
-    saoPass.params.saoMinResolution = SHADER_CONFIG.sao.saoMinResolution;
-    saoPass.params.saoBlur = SHADER_CONFIG.sao.saoBlur;
-    saoPass.params.saoBlurRadius = SHADER_CONFIG.sao.saoBlurRadius;
-    saoPass.params.saoBlurStdDev = SHADER_CONFIG.sao.saoBlurStdDev;
-    saoPass.params.saoBlurDepthCutoff = SHADER_CONFIG.sao.saoBlurDepthCutoff;
-
     composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
-    composer.addPass(saoPass);
-    composer.addPass(bloomPass);
-    composer.addPass(crtPass);
-    composer.addPass(outputPass);
+
+    if (performanceRuntime.enableSao) {
+        const saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
+        saoPass.params.saoBias = SHADER_CONFIG.sao.saoBias;
+        saoPass.params.saoIntensity = SHADER_CONFIG.sao.saoIntensity;
+        saoPass.params.saoScale = SHADER_CONFIG.sao.saoScale;
+        saoPass.params.saoKernelRadius = SHADER_CONFIG.sao.saoKernelRadius;
+        saoPass.params.saoMinResolution = SHADER_CONFIG.sao.saoMinResolution;
+        saoPass.params.saoBlur = SHADER_CONFIG.sao.saoBlur;
+        saoPass.params.saoBlurRadius = SHADER_CONFIG.sao.saoBlurRadius;
+        saoPass.params.saoBlurStdDev = SHADER_CONFIG.sao.saoBlurStdDev;
+        saoPass.params.saoBlurDepthCutoff = SHADER_CONFIG.sao.saoBlurDepthCutoff;
+        composer.addPass(saoPass);
+    }
+
+    if (performanceRuntime.enableBloom) {
+        bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = SHADER_CONFIG.bloom.threshold;
+        bloomPass.strength = SHADER_CONFIG.bloom.strength;
+        bloomPass.radius = SHADER_CONFIG.bloom.radius;
+        composer.addPass(bloomPass);
+    } else {
+        bloomPass = null;
+    }
+
+    if (performanceRuntime.enableCrt) {
+        crtPass = new ShaderPass(CRTShader);
+        crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
+        composer.addPass(crtPass);
+    } else {
+        crtPass = null;
+    }
+
+    composer.addPass(new OutputPass());
 
     // 4. Lighting & Environment (HDRI)
     new RGBELoader()
@@ -333,13 +406,13 @@ function initSceneAndLoad() {
     const dirLight1 = new THREE.DirectionalLight(0xFF0000, 0.7);
     dirLight1.position.set(10, 10, 10);
     dirLight1.castShadow = true;
-    dirLight1.shadow.mapSize.width = CONFIG.shadowMapSize;
-    dirLight1.shadow.mapSize.height = CONFIG.shadowMapSize;
+    dirLight1.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    dirLight1.shadow.mapSize.height = performanceRuntime.shadowMapSize;
     const dirLight2 = new THREE.DirectionalLight(0x0000FF, 0.7);
     dirLight2.position.set(-10, -10, 10);
-    dirLight2.castShadow = true;
-    dirLight2.shadow.mapSize.width = CONFIG.shadowMapSize;
-    dirLight2.shadow.mapSize.height = CONFIG.shadowMapSize;
+    dirLight2.castShadow = performanceRuntime.secondLightCastShadow;
+    dirLight2.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    dirLight2.shadow.mapSize.height = performanceRuntime.shadowMapSize;
     scene.add(dirLight1);
     scene.add(dirLight2);
 
@@ -1094,7 +1167,7 @@ function createUI() {
 
     // --- END NEW UI ELEMENTS ---
 
-    if (isMobile) {
+    if (IS_MOBILE) {
         const info = document.createElement('div');
         info.className = 'mobile-info';
         info.innerText = 'Check out on Pc/MAC';
@@ -2354,6 +2427,7 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
 
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(getEffectivePixelRatio());
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     if (crtPass) crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
@@ -2534,28 +2608,27 @@ function animate() {
     if (Object.keys(meshRegistry).length > 0) {
         raycaster.setFromCamera(mouse, camera);
 
-        const target = new THREE.Vector3();
-        const intersection = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), target);
+        const intersection = raycaster.ray.intersectPlane(_mousePickPlane, _rayPlaneHit);
 
         if (intersection) {
-            debugMesh.position.copy(target); // Update debug sphere
+            debugMesh.position.copy(_rayPlaneHit); // Update debug sphere
 
             // Calculate Mouse Velocity (not when portfolio scene active - no sim interaction)
             if (!portfolioSceneActive) {
                 const now = Date.now();
                 const dt = (now - lastMouseTime) / 1000;
                 if (dt > 0 && dt < 0.1) {
-                    mouseVelocity.subVectors(target, lastTarget).divideScalar(dt);
+                    mouseVelocity.subVectors(_rayPlaneHit, lastTarget).divideScalar(dt);
                 }
                 lastMouseTime = now;
-                lastTarget.copy(target);
+                lastTarget.copy(_rayPlaneHit);
             }
         } else {
-            target.set(1000, 1000, 1000);
+            _rayPlaneHit.set(1000, 1000, 1000);
             mouseVelocity.set(0, 0, 0);
         }
 
-        const simTarget = portfolioSceneActive ? new THREE.Vector3(1000, 1000, 1000) : target;
+        const simTarget = portfolioSceneActive ? _simFarSim.set(1000, 1000, 1000) : _rayPlaneHit;
 
         const time = Date.now() * 0.001;
         const delta = clock.getDelta();
@@ -2676,7 +2749,6 @@ function animate() {
                     const targetMesh = group.isTop ? entry.top : entry.kek;
                     if (targetMesh) {
                         targetMesh.setMatrixAt(group.meshIndex, dummy.matrix);
-                        targetMesh.instanceMatrix.needsUpdate = true;
                     }
                 }
                 continue;
@@ -2687,7 +2759,7 @@ function animate() {
             if (CONFIG.animationMode === 'repulsion') {
                 // --- MODE 1: REPULSION (Original) ---
                 // --- DYNAMIC HOME POSITION FOR VAJBUJ MODE ---
-                let targetHome = group.originalPos.clone();
+                _simTargetHome.copy(group.originalPos);
                 if (vajbujBounceActive) {
                     // Quantized Alternating: Odd blocks UP, Even blocks DOWN
                     // Period approx 3.5 units (covering letter + spacing)
@@ -2696,31 +2768,31 @@ function animate() {
                     const isOdd = Math.abs(bucket) % 2 === 1;
                     const alternate = isOdd ? 1 : -1;
 
-                    targetHome.y += vajbujBounceAmplitude * alternate;
+                    _simTargetHome.y += vajbujBounceAmplitude * alternate;
                 }
 
                 if (dist < CONFIG.repulsionRadius) {
-                    const force = new THREE.Vector3().subVectors(group.currentPos, simTarget);
-                    const len = force.length();
+                    _simForce.subVectors(group.currentPos, simTarget);
+                    const len = _simForce.length();
                     if (len > 0) {
-                        force.normalize();
+                        _simForce.normalize();
                         const strength = (1 - dist / CONFIG.repulsionRadius) * CONFIG.repulsionStrength;
                         // Removed random noise to prevent jelly effect
-                        group.velocity.addScaledVector(force, strength * 0.05);
+                        group.velocity.addScaledVector(_simForce, strength * 0.05);
                     }
                 }
 
-                const returnVec = new THREE.Vector3().subVectors(targetHome, group.currentPos);
+                _simReturnVec.subVectors(_simTargetHome, group.currentPos);
 
                 // Overdamped Spring (EaseOut)
                 // Stronger pull, much stronger drag
-                group.velocity.add(returnVec.clone().multiplyScalar(0.05));
+                group.velocity.addScaledVector(_simReturnVec, 0.05);
                 group.velocity.multiplyScalar(0.85); // High friction -> No overshoot
 
                 group.currentPos.add(group.velocity);
 
                 // Reset rotation
-                group.rotation.slerp(new THREE.Quaternion(), 0.1);
+                group.rotation.slerp(_quatIdentity, 0.1);
 
             } else if (CONFIG.animationMode === 'grid') {
                 // --- MODE 3: GRID & CHOREOGRAPHED RETURN ---
@@ -2737,18 +2809,18 @@ function animate() {
 
                     // LOCAL GLITCH TARGET
                     // Don't set currentPos instantly. Set target.
-                    const offset = new THREE.Vector3(
+                    _simOffset.set(
                         (Math.random() - 0.5) * displacementScale,
                         (Math.random() - 0.5) * displacementScale,
                         (Math.random() - 0.5) * displacementScale
                     );
 
-                    group.glitchTarget.addVectors(group.originalPos, offset);
+                    group.glitchTarget.addVectors(group.originalPos, _simOffset);
 
                     // Start rotation towards random orthogonal
                     const rotAxisIdx = Math.floor(Math.random() * 3);
-                    const rotAxis = new THREE.Vector3(rotAxisIdx === 0 ? 1 : 0, rotAxisIdx === 1 ? 1 : 0, rotAxisIdx === 2 ? 1 : 0);
-                    group.rotation.setFromAxisAngle(rotAxis, (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2);
+                    _simRotAxisGrid.set(rotAxisIdx === 0 ? 1 : 0, rotAxisIdx === 1 ? 1 : 0, rotAxisIdx === 2 ? 1 : 0);
+                    group.rotation.setFromAxisAngle(_simRotAxisGrid, (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2);
 
                     group.stepStartTime = time + 1.0; // Fly out for 1 second? Or wait?
                 }
@@ -2788,7 +2860,7 @@ function animate() {
                     // IDLE - ensure home
                     const lerpFactor = 1 - Math.exp(-2.0 * delta);
                     group.currentPos.lerp(group.originalPos, lerpFactor);
-                    group.rotation.slerp(new THREE.Quaternion(), lerpFactor);
+                    group.rotation.slerp(_quatIdentity, lerpFactor);
                 }
 
             } else {
@@ -2799,16 +2871,16 @@ function animate() {
                     // Smash!
                     group.isFlying = true;
                     // Impulse matches mouse direction + randomness
-                    const impulse = mouseVelocity.clone().multiplyScalar(0.002);
-                    impulse.x += (Math.random() - 0.5) * 0.02;
-                    impulse.y += (Math.random() - 0.5) * 0.02;
-                    impulse.z += (Math.random() - 0.5) * 0.05; // More Z chaos
+                    _simImpulse.copy(mouseVelocity).multiplyScalar(0.002);
+                    _simImpulse.x += (Math.random() - 0.5) * 0.02;
+                    _simImpulse.y += (Math.random() - 0.5) * 0.02;
+                    _simImpulse.z += (Math.random() - 0.5) * 0.05; // More Z chaos
 
-                    group.velocity.add(impulse);
+                    group.velocity.add(_simImpulse);
 
                     // Add Spin
-                    const spinAxis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-                    group.angularVelocity.add(spinAxis.multiplyScalar(mouseVelocity.length() * 0.002));
+                    _simSpinAxis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+                    group.angularVelocity.add(_simSpinAxis.multiplyScalar(mouseVelocity.length() * 0.002));
 
                     // Schedule Return (fly for 0.5s to 1.5s)
                     group.returnStartTime = time + 0.5 + Math.random();
@@ -2821,11 +2893,12 @@ function animate() {
                     group.currentPos.add(group.velocity);
 
                     // Apply rotation
-                    const deltaRot = new THREE.Quaternion().setFromAxisAngle(
-                        group.angularVelocity.clone().normalize(),
-                        group.angularVelocity.length()
-                    );
-                    group.rotation.multiply(deltaRot);
+                    const avLen = group.angularVelocity.length();
+                    if (avLen > 1e-8) {
+                        _simDeltaRotAxis.copy(group.angularVelocity).multiplyScalar(1 / avLen);
+                        _simFinalQuatWithGlitch.setFromAxisAngle(_simDeltaRotAxis, avLen);
+                        group.rotation.multiply(_simFinalQuatWithGlitch);
+                    }
 
                     // Check if time to return
                     if (time > group.returnStartTime) {
@@ -2837,16 +2910,16 @@ function animate() {
                     // Check delay (already handled by returnStartTime, so just return)
                     {
                         // Drift back slowly
-                        const returnVec = new THREE.Vector3().subVectors(group.originalPos, group.currentPos);
-                        const d = returnVec.length();
+                        _simReturnVec.subVectors(group.originalPos, group.currentPos);
+                        const d = _simReturnVec.length();
 
                         if (d > 0.01) {
                             // Ease out cubic or simple lerp
                             const speed = 0.02; // Very slow return
-                            group.currentPos.add(returnVec.multiplyScalar(speed));
+                            group.currentPos.add(_simReturnVec.multiplyScalar(speed));
 
                             // Rotate back to identity
-                            group.rotation.slerp(new THREE.Quaternion(), 0.05);
+                            group.rotation.slerp(_quatIdentity, 0.05);
                         } else {
                             // Snap
                             group.currentPos.copy(group.originalPos);
@@ -2865,9 +2938,9 @@ function animate() {
             // In Repulsion mode, we use velocity tilt. In Scatter, we use actual physics rotation.
             let finalQuat;
             if (CONFIG.animationMode === 'repulsion') {
-                // Convert old Euler tilt to Quat
-                const euler = new THREE.Euler(rotX, rotY, rotZ);
-                finalQuat = new THREE.Quaternion().setFromEuler(euler);
+                _simEuler.set(rotX, rotY, rotZ);
+                _simFinalQuatRepulsion.setFromEuler(_simEuler);
+                finalQuat = _simFinalQuatRepulsion;
             } else {
                 finalQuat = group.rotation;
             }
@@ -2887,11 +2960,12 @@ function animate() {
                 }
             }
 
-            let finalQuatWithGlitch = finalQuat;
             if (hasActiveGlitch && group.glitchRotation) {
-                finalQuatWithGlitch = finalQuat.clone().multiply(group.glitchRotation);
+                _simFinalQuatWithGlitch.copy(finalQuat).multiply(group.glitchRotation);
+                dummy.rotation.setFromQuaternion(_simFinalQuatWithGlitch);
+            } else {
+                dummy.rotation.setFromQuaternion(finalQuat);
             }
-            dummy.rotation.setFromQuaternion(finalQuatWithGlitch);
 
             if (hasActiveGlitch && group.glitchScale) {
                 dummy.scale.copy(group.baseScale).multiply(group.glitchScale);
@@ -2919,28 +2993,28 @@ function animate() {
                 // --- INNER CUBE REPULSION ---
 
                 // --- DYNAMIC HOME POSITION FOR VAJBUJ MODE ---
-                let targetHome = data.originalPos.clone();
+                _simTargetHome.copy(data.originalPos);
                 if (vajbujBounceActive) {
                     const bucket = Math.floor(data.originalPos.x / 3.5);
                     const isOdd = Math.abs(bucket) % 2 === 1;
                     const alternate = isOdd ? 1 : -1;
 
-                    targetHome.y += vajbujBounceAmplitude * alternate;
+                    _simTargetHome.y += vajbujBounceAmplitude * alternate;
                 }
 
                 if (dist < CONFIG.repulsionRadius) {
-                    const force = new THREE.Vector3().subVectors(data.currentPos, simTarget);
-                    if (force.length() > 0) {
-                        force.normalize();
+                    _simForce.subVectors(data.currentPos, simTarget);
+                    if (_simForce.length() > 0) {
+                        _simForce.normalize();
                         const strength = (1 - dist / CONFIG.repulsionRadius) * CONFIG.repulsionStrength;
                         // No noise
-                        data.velocity.addScaledVector(force, strength * 0.05);
+                        data.velocity.addScaledVector(_simForce, strength * 0.05);
                     }
                 }
-                const returnVec = new THREE.Vector3().subVectors(targetHome, data.currentPos);
+                _simReturnVec.subVectors(_simTargetHome, data.currentPos);
 
                 // Overdamped Return
-                data.velocity.add(returnVec.clone().multiplyScalar(0.05));
+                data.velocity.addScaledVector(_simReturnVec, 0.05);
                 data.velocity.multiplyScalar(0.85);
                 data.currentPos.add(data.velocity);
 
@@ -2953,12 +3027,12 @@ function animate() {
                 if (dist < dynamicRadius && speed > 2) {
                     data.gridState = 'DISPLACED';
 
-                    const offset = new THREE.Vector3(
+                    _simOffset.set(
                         (Math.random() - 0.5) * displacementScale,
                         (Math.random() - 0.5) * displacementScale,
                         (Math.random() - 0.5) * displacementScale
                     );
-                    data.glitchTarget.addVectors(data.originalPos, offset);
+                    data.glitchTarget.addVectors(data.originalPos, _simOffset);
 
                     data.stepStartTime = time + 1.0;
                 }
@@ -3000,12 +3074,12 @@ function animate() {
                 if (dist < 1.5 && mouseVelocity.length() > 2) {
                     data.isFlying = true;
                     // Reduced Power (0.001 vs 0.002)
-                    const impulse = mouseVelocity.clone().multiplyScalar(0.001);
-                    impulse.x += (Math.random() - 0.5) * 0.01;
-                    impulse.y += (Math.random() - 0.5) * 0.01;
-                    impulse.z += (Math.random() - 0.5) * 0.02;
+                    _simImpulse.copy(mouseVelocity).multiplyScalar(0.001);
+                    _simImpulse.x += (Math.random() - 0.5) * 0.01;
+                    _simImpulse.y += (Math.random() - 0.5) * 0.01;
+                    _simImpulse.z += (Math.random() - 0.5) * 0.02;
 
-                    data.velocity.add(impulse);
+                    data.velocity.add(_simImpulse);
 
                     // Helper for return time
                     data.returnStartTime = time + 0.5 + Math.random();
@@ -3020,10 +3094,10 @@ function animate() {
                     }
                 } else {
                     // Return logic
-                    const returnVec = new THREE.Vector3().subVectors(data.originalPos, data.currentPos);
-                    const d = returnVec.length();
+                    _simReturnVec.subVectors(data.originalPos, data.currentPos);
+                    const d = _simReturnVec.length();
                     if (d > 0.01) {
-                        data.currentPos.add(returnVec.multiplyScalar(0.02));
+                        data.currentPos.add(_simReturnVec.multiplyScalar(0.02));
                     } else {
                         data.currentPos.copy(data.originalPos);
                     }
@@ -3102,12 +3176,6 @@ function animate() {
             }
         }
 
-        const portfolioTarget = new THREE.Vector3(1000, 1000, 1000);
-        raycaster.setFromCamera(mouse, camera);
-        raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), portfolioTarget);
-        if (portfolioSceneActive) portfolioTarget.set(1000, 1000, 1000);
-    }
-    if (portfolioState.planeMeshes.length > 0) {
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObjects(portfolioState.planeMeshes);
         portfolioState.hoveredIndex = hits.length > 0 && hits[0].object.userData.portfolioIndex !== undefined
