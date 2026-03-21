@@ -94,12 +94,83 @@ export const PORTFOLIO_SCENE_CONFIG = {
 export const GLITCH_VOLUME_CONFIG = {
     enabled: false,
     intervalMin: 2000,   // ms – min odstęp auto-triggera
-    intervalMax: 5000,  // ms – max odstęp auto-triggera
-    duration: 0.12,     // s – jak długo offset jest widoczny
-    maxOffset: 0.4,     // maks. przesunięcie na oś
-    bandCount: 8,       // na ile pasów (X) dzielimy napis
-    bandsPerGlitch: 2,  // ile pasów jednocześnie glitchować
-    includeInnerCubes: true
+    intervalMax: 5000,   // ms – max odstęp auto-triggera
+    duration: 0.12,      // s – jak długo offset jest widoczny
+    maxOffset: 0.4,      // maks. przesunięcie na oś
+    bandCount: 8,        // na ile pasów (X) dzielimy napis (pattern 'bands')
+    bandsPerGlitch: 2,   // ile pasów jednocześnie glitchować
+    includeInnerCubes: true,
+
+    // Wspólne opcje zachowania
+    pattern: 'bands', // 'bands' | 'grid2d' | 'clusters'
+    useRotation: false,
+    useScale: false,
+    useColorFlicker: false,
+
+    // Rotacja i skala
+    rotationMaxAngle: Math.PI / 4,
+    scaleMin: 0.9,
+    scaleMax: 1.15,
+
+    // Parametry dla patternu 'grid2d'
+    gridCols: 4,
+    gridRows: 3,
+    tilesPerGlitch: 1,
+
+    // Parametry dla patternu 'clusters'
+    clusterFraction: 0.05,
+    clusterMinCount: 50,
+    clusterMaxCount: 500,
+
+    // Kolor – używane w drugiej iteracji (color flicker)
+    colorFlickerStrength: 0.2
+};
+
+// Presety zachowania glitch volumetrycznego
+export const GLITCH_VOLUME_PRESETS = {
+    subtelny: {
+        pattern: 'bands',
+        duration: 0.08,
+        maxOffset: 0.25,
+        bandsPerGlitch: 1,
+        tilesPerGlitch: 1,
+        clusterFraction: 0.02,
+        intervalMin: 2200,
+        intervalMax: 5200,
+        useRotation: false,
+        useScale: false,
+        useColorFlicker: false
+    },
+    mocny: {
+        pattern: 'grid2d',
+        duration: 0.14,
+        maxOffset: 0.45,
+        bandsPerGlitch: 2,
+        tilesPerGlitch: 2,
+        clusterFraction: 0.06,
+        intervalMin: 1800,
+        intervalMax: 4200,
+        useRotation: true,
+        useScale: true,
+        useColorFlicker: false
+    },
+    chaos: {
+        pattern: 'clusters',
+        duration: 0.1,
+        maxOffset: 0.6,
+        bandsPerGlitch: 3,
+        tilesPerGlitch: 3,
+        clusterFraction: 0.15,
+        intervalMin: 1200,
+        intervalMax: 3200,
+        useRotation: true,
+        useScale: true,
+        useColorFlicker: true
+    }
+};
+
+export const GLITCH_VOLUME_STATE = {
+    currentPreset: 'subtelny'
 };
 
 // VAJBUJ SZMATO Mode Configuration

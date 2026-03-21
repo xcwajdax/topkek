@@ -783,7 +783,8 @@ body {
     text-decoration: underline;
 }
 
-#term-anim-portfolio.portfolio-active {
+#term-anim-portfolio.portfolio-active,
+#term-vajbuj.vajbuj-active {
     background: rgba(76, 175, 80, 0.25);
     border-radius: 4px;
 }

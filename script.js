@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG } from './config.js';
+import { IS_MOBILE as isMobile, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE } from './config.js';
 
 const CRTShader = {
     uniforms: {
@@ -682,8 +682,67 @@ function createUI() {
     btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
     btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(clock.getElapsedTime());
 
+    const presetButtons = {};
+
+    const applyGlitchPreset = (name) => {
+        const preset = GLITCH_VOLUME_PRESETS[name];
+        if (!preset) return;
+
+        // Nadpisujemy tylko wybrane pola w głównym configu
+        GLITCH_VOLUME_CONFIG.pattern = preset.pattern;
+        GLITCH_VOLUME_CONFIG.duration = preset.duration;
+        GLITCH_VOLUME_CONFIG.maxOffset = preset.maxOffset;
+        if (preset.bandsPerGlitch != null) GLITCH_VOLUME_CONFIG.bandsPerGlitch = preset.bandsPerGlitch;
+        if (preset.tilesPerGlitch != null) GLITCH_VOLUME_CONFIG.tilesPerGlitch = preset.tilesPerGlitch;
+        if (preset.clusterFraction != null) GLITCH_VOLUME_CONFIG.clusterFraction = preset.clusterFraction;
+        if (preset.intervalMin != null) GLITCH_VOLUME_CONFIG.intervalMin = preset.intervalMin;
+        if (preset.intervalMax != null) GLITCH_VOLUME_CONFIG.intervalMax = preset.intervalMax;
+        GLITCH_VOLUME_CONFIG.useRotation = !!preset.useRotation;
+        GLITCH_VOLUME_CONFIG.useScale = !!preset.useScale;
+        GLITCH_VOLUME_CONFIG.useColorFlicker = !!preset.useColorFlicker;
+
+        GLITCH_VOLUME_STATE.currentPreset = name;
+
+        // Resetujemy auto-trigger, żeby szybko zobaczyć zmianę charakteru glitcha
+        glitchVolumeNextTrigger = 0;
+
+        // Aktualizujemy klasę active na przyciskach presetów
+        Object.keys(presetButtons).forEach(key => {
+            presetButtons[key].classList.toggle('active', key === name);
+        });
+    };
+
+    const btnPresetSubtelny = document.createElement('button');
+    btnPresetSubtelny.className = 'mode-btn';
+    btnPresetSubtelny.innerText = '> Subtelny';
+    btnPresetSubtelny.title = 'Delikatny glitch (bands/grid2d)';
+    btnPresetSubtelny.onclick = () => applyGlitchPreset('subtelny');
+    presetButtons.subtelny = btnPresetSubtelny;
+
+    const btnPresetMocny = document.createElement('button');
+    btnPresetMocny.className = 'mode-btn';
+    btnPresetMocny.innerText = '> Mocny';
+    btnPresetMocny.title = 'Mocniejszy glitch z rotacją i skalą';
+    btnPresetMocny.onclick = () => applyGlitchPreset('mocny');
+    presetButtons.mocny = btnPresetMocny;
+
+    const btnPresetChaos = document.createElement('button');
+    btnPresetChaos.className = 'mode-btn';
+    btnPresetChaos.innerText = '> Chaos';
+    btnPresetChaos.title = 'Chaotyczne klastry voxelowe';
+    btnPresetChaos.onclick = () => applyGlitchPreset('chaos');
+    presetButtons.chaos = btnPresetChaos;
+
+    // Ustaw stan początkowy presetów zgodnie z configiem
+    if (GLITCH_VOLUME_STATE.currentPreset && presetButtons[GLITCH_VOLUME_STATE.currentPreset]) {
+        presetButtons[GLITCH_VOLUME_STATE.currentPreset].classList.add('active');
+    }
+
     itemsGlitchVol.appendChild(btnGlitchToggle);
     itemsGlitchVol.appendChild(btnGlitchTrigger);
+    itemsGlitchVol.appendChild(btnPresetSubtelny);
+    itemsGlitchVol.appendChild(btnPresetMocny);
+    itemsGlitchVol.appendChild(btnPresetChaos);
     sectionGlitchVol.appendChild(itemsGlitchVol);
     ui.appendChild(sectionGlitchVol);
 
@@ -726,6 +785,28 @@ function createUI() {
             portfolioScenePhase = 'camera_move';
             portfolioScenePhaseStartTime = Date.now();
             portfolioSceneStartTime = Date.now();
+        });
+    }
+
+    const termVajbuj = document.getElementById('term-vajbuj');
+    if (termVajbuj) {
+        window.vajbujButton = termVajbuj;
+        termVajbuj.addEventListener('click', () => {
+            if (!VAJBUJ_CONFIG.enabled || !vajbujState.audio) {
+                console.warn('[VAJBUJ] Disabled or not initialized');
+                return;
+            }
+            if (portfolioSceneActive) {
+                exitPortfolioScene();
+                if (termAnimPortfolio) termAnimPortfolio.classList.remove('portfolio-active');
+            }
+            if (vajbujState.active && !vajbujState.isStopping) {
+                stopVajbujMode();
+                return;
+            }
+            if (vajbujState.active) return;
+            startVajbujMode();
+            termVajbuj.classList.add('vajbuj-active');
         });
     }
 
@@ -1122,72 +1203,184 @@ function triggerVolumetricGlitch(time) {
     const cfg = GLITCH_VOLUME_CONFIG;
     if (!cubeGroups.length) return;
 
-    let minX = Infinity;
-    let maxX = -Infinity;
-    for (let i = 0; i < cubeGroups.length; i++) {
-        const x = cubeGroups[i].originalPos.x;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-    }
-    const spanX = maxX - minX;
-    if (spanX <= 0) return;
-
-    const bandCount = Math.max(1, cfg.bandCount);
-    const bandsPerGlitch = Math.min(cfg.bandsPerGlitch, bandCount);
-    const selectedBands = new Set();
-    while (selectedBands.size < bandsPerGlitch) {
-        selectedBands.add(Math.floor(Math.random() * bandCount));
-    }
-
     const maxOffset = cfg.maxOffset;
     const duration = cfg.duration;
     const endTime = time + duration;
 
-    for (let i = 0; i < cubeGroups.length; i++) {
-        const group = cubeGroups[i];
-        const bandIdx = Math.min(
-            bandCount - 1,
-            Math.floor(((group.originalPos.x - minX) / spanX) * bandCount)
-        );
-        if (!selectedBands.has(bandIdx)) continue;
+    const targetGroups = [];
+    const targetInner = [];
 
-        if (!group.glitchDisplayOffset) group.glitchDisplayOffset = new THREE.Vector3(0, 0, 0);
-        group.glitchDisplayOffset.set(
-            (Math.random() - 0.5) * 2 * maxOffset,
-            (Math.random() - 0.5) * 2 * maxOffset,
-            (Math.random() - 0.5) * 2 * maxOffset
-        );
-        group.glitchEndTime = endTime;
-    }
-
-    if (cfg.includeInnerCubes && innerCubeParticles.length > 0) {
-        let innerMinX = Infinity;
-        let innerMaxX = -Infinity;
-        for (let i = 0; i < innerCubeParticles.length; i++) {
-            const x = innerCubeParticles[i].originalPos.x;
-            if (x < innerMinX) innerMinX = x;
-            if (x > innerMaxX) innerMaxX = x;
+    // --- Pattern selection for cubeGroups ---
+    if (cfg.pattern === 'grid2d' || cfg.pattern === 'bands') {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < cubeGroups.length; i++) {
+            const p = cubeGroups[i].originalPos;
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
         }
-        const innerSpanX = innerMaxX - innerMinX;
-        if (innerSpanX > 0) {
-            for (let i = 0; i < innerCubeParticles.length; i++) {
-                const data = innerCubeParticles[i];
+        const spanX = maxX - minX;
+        const spanY = maxY - minY;
+        if (spanX <= 0) return;
+
+        if (cfg.pattern === 'bands') {
+            const bandCount = Math.max(1, cfg.bandCount);
+            const bandsPerGlitch = Math.min(cfg.bandsPerGlitch, bandCount);
+            const selectedBands = new Set();
+            while (selectedBands.size < bandsPerGlitch) {
+                selectedBands.add(Math.floor(Math.random() * bandCount));
+            }
+
+            for (let i = 0; i < cubeGroups.length; i++) {
+                const group = cubeGroups[i];
                 const bandIdx = Math.min(
                     bandCount - 1,
-                    Math.floor(((data.originalPos.x - innerMinX) / innerSpanX) * bandCount)
+                    Math.floor(((group.originalPos.x - minX) / spanX) * bandCount)
                 );
-                if (!selectedBands.has(bandIdx)) continue;
+                if (selectedBands.has(bandIdx)) targetGroups.push(group);
+            }
 
-                if (!data.glitchDisplayOffset) data.glitchDisplayOffset = new THREE.Vector3(0, 0, 0);
-                data.glitchDisplayOffset.set(
+            if (cfg.includeInnerCubes && innerCubeParticles.length > 0) {
+                let innerMinX = Infinity;
+                let innerMaxX = -Infinity;
+                for (let i = 0; i < innerCubeParticles.length; i++) {
+                    const x = innerCubeParticles[i].originalPos.x;
+                    if (x < innerMinX) innerMinX = x;
+                    if (x > innerMaxX) innerMaxX = x;
+                }
+                const innerSpanX = innerMaxX - innerMinX;
+                if (innerSpanX > 0) {
+                    for (let i = 0; i < innerCubeParticles.length; i++) {
+                        const data = innerCubeParticles[i];
+                        const bandIdx = Math.min(
+                            bandCount - 1,
+                            Math.floor(((data.originalPos.x - innerMinX) / innerSpanX) * bandCount)
+                        );
+                        if (selectedBands.has(bandIdx)) targetInner.push(data);
+                    }
+                }
+            }
+        } else {
+            const cols = Math.max(1, cfg.gridCols || 4);
+            const rows = Math.max(1, cfg.gridRows || 3);
+            const tilesPerGlitch = Math.min(cfg.tilesPerGlitch || 1, cols * rows);
+
+            const chosenTiles = new Set();
+            while (chosenTiles.size < tilesPerGlitch) {
+                const c = Math.floor(Math.random() * cols);
+                const r = Math.floor(Math.random() * rows);
+                chosenTiles.add(`${c},${r}`);
+            }
+
+            const getTileIndex = (x, y) => {
+                const colIdx = Math.min(cols - 1, Math.max(0, Math.floor(((x - minX) / spanX) * cols)));
+                const rowIdx = spanY > 0
+                    ? Math.min(rows - 1, Math.max(0, Math.floor(((y - minY) / spanY) * rows)))
+                    : 0;
+                return `${colIdx},${rowIdx}`;
+            };
+
+            for (let i = 0; i < cubeGroups.length; i++) {
+                const group = cubeGroups[i];
+                const key = getTileIndex(group.originalPos.x, group.originalPos.y);
+                if (chosenTiles.has(key)) targetGroups.push(group);
+            }
+
+            if (cfg.includeInnerCubes && innerCubeParticles.length > 0) {
+                for (let i = 0; i < innerCubeParticles.length; i++) {
+                    const data = innerCubeParticles[i];
+                    const key = getTileIndex(data.originalPos.x, data.originalPos.y);
+                    if (chosenTiles.has(key)) targetInner.push(data);
+                }
+            }
+        }
+    } else {
+        // clusters
+        const total = cubeGroups.length;
+        if (total === 0) return;
+        let targetCount = Math.round((cfg.clusterFraction || 0.05) * total);
+        if (cfg.clusterMinCount != null) targetCount = Math.max(cfg.clusterMinCount, targetCount);
+        if (cfg.clusterMaxCount != null) targetCount = Math.min(cfg.clusterMaxCount, targetCount);
+        targetCount = Math.min(targetCount, total);
+
+        const indices = [];
+        for (let i = 0; i < total; i++) indices.push(i);
+        for (let i = indices.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = indices[i];
+            indices[i] = indices[j];
+            indices[j] = tmp;
+        }
+        for (let i = 0; i < targetCount; i++) {
+            targetGroups.push(cubeGroups[indices[i]]);
+        }
+
+        if (cfg.includeInnerCubes && innerCubeParticles.length > 0) {
+            const innerTotal = innerCubeParticles.length;
+            let innerTargetCount = Math.round((cfg.clusterFraction || 0.05) * innerTotal);
+            if (cfg.clusterMinCount != null) innerTargetCount = Math.max(cfg.clusterMinCount, innerTargetCount);
+            if (cfg.clusterMaxCount != null) innerTargetCount = Math.min(cfg.clusterMaxCount, innerTargetCount);
+            innerTargetCount = Math.min(innerTargetCount, innerTotal);
+
+            const innerIdx = [];
+            for (let i = 0; i < innerTotal; i++) innerIdx.push(i);
+            for (let i = innerIdx.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                const tmp = innerIdx[i];
+                innerIdx[i] = innerIdx[j];
+                innerIdx[j] = tmp;
+            }
+            for (let i = 0; i < innerTargetCount; i++) {
+                targetInner.push(innerCubeParticles[innerIdx[i]]);
+            }
+        }
+    }
+
+    const applyGlitchTo = (targetArray) => {
+        for (let i = 0; i < targetArray.length; i++) {
+            const item = targetArray[i];
+            if (maxOffset > 0) {
+                item.glitchDisplayOffset.set(
                     (Math.random() - 0.5) * 2 * maxOffset,
                     (Math.random() - 0.5) * 2 * maxOffset,
                     (Math.random() - 0.5) * 2 * maxOffset
                 );
-                data.glitchEndTime = endTime;
+            } else {
+                item.glitchDisplayOffset.set(0, 0, 0);
+            }
+            item.glitchEndTime = endTime;
+
+            if (cfg.useRotation) {
+                const axis = new THREE.Vector3(
+                    Math.random() - 0.5,
+                    Math.random() - 0.5,
+                    Math.random() - 0.5
+                ).normalize();
+                const angle = (Math.random() * 2 - 1) * (cfg.rotationMaxAngle || Math.PI / 4);
+                if (!item.glitchRotation) item.glitchRotation = new THREE.Quaternion();
+                item.glitchRotation.setFromAxisAngle(axis, angle);
+            } else {
+                item.glitchRotation = null;
+            }
+
+            if (cfg.useScale) {
+                const sRangeMin = cfg.scaleMin != null ? cfg.scaleMin : 0.9;
+                const sRangeMax = cfg.scaleMax != null ? cfg.scaleMax : 1.15;
+                const s = sRangeMin + Math.random() * (sRangeMax - sRangeMin);
+                if (!item.glitchScale) item.glitchScale = new THREE.Vector3(1, 1, 1);
+                item.glitchScale.set(s, s, s);
+            } else {
+                item.glitchScale = null;
             }
         }
-    }
+    };
+
+    applyGlitchTo(targetGroups);
+    applyGlitchTo(targetInner);
 }
 
 function setCameraMode(mode) {
@@ -2000,6 +2193,8 @@ async function generateParticles(font, fontRegular) {
             glitchTarget: new THREE.Vector3(),
             glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
             glitchEndTime: 0,
+            glitchRotation: null,
+            glitchScale: null,
         });
         sIdx++;
     }
@@ -2678,17 +2873,31 @@ function animate() {
             }
 
             // Update Single Fused Mesh Instance (glitch volumetryczne: nakładka wizualna)
-            if (group.glitchEndTime && time < group.glitchEndTime) {
+            let hasActiveGlitch = group.glitchEndTime && time < group.glitchEndTime;
+            if (hasActiveGlitch) {
                 dummy.position.copy(group.currentPos).add(group.glitchDisplayOffset);
             } else {
                 dummy.position.copy(group.currentPos);
                 if (group.glitchEndTime) {
                     group.glitchDisplayOffset.set(0, 0, 0);
                     group.glitchEndTime = 0;
+                    group.glitchRotation = null;
+                    group.glitchScale = null;
+                    hasActiveGlitch = false;
                 }
             }
-            dummy.rotation.setFromQuaternion(finalQuat);
-            dummy.scale.copy(group.baseScale);
+
+            let finalQuatWithGlitch = finalQuat;
+            if (hasActiveGlitch && group.glitchRotation) {
+                finalQuatWithGlitch = finalQuat.clone().multiply(group.glitchRotation);
+            }
+            dummy.rotation.setFromQuaternion(finalQuatWithGlitch);
+
+            if (hasActiveGlitch && group.glitchScale) {
+                dummy.scale.copy(group.baseScale).multiply(group.glitchScale);
+            } else {
+                dummy.scale.copy(group.baseScale);
+            }
             dummy.updateMatrix();
 
             // Find the correct mesh
@@ -2822,17 +3031,31 @@ function animate() {
             }
 
             // Glitch volumetryczne: nakładka wizualna dla inner cubes
-            if (data.glitchEndTime && time < data.glitchEndTime) {
+            let innerHasGlitch = data.glitchEndTime && time < data.glitchEndTime;
+            if (innerHasGlitch) {
                 dummy.position.copy(data.currentPos).add(data.glitchDisplayOffset);
             } else {
                 dummy.position.copy(data.currentPos);
                 if (data.glitchEndTime) {
                     data.glitchDisplayOffset.set(0, 0, 0);
                     data.glitchEndTime = 0;
+                    data.glitchRotation = null;
+                    data.glitchScale = null;
+                    innerHasGlitch = false;
                 }
             }
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.setScalar(1);
+
+            if (innerHasGlitch && data.glitchRotation) {
+                dummy.rotation.setFromQuaternion(data.glitchRotation);
+            } else {
+                dummy.rotation.set(0, 0, 0);
+            }
+
+            if (innerHasGlitch && data.glitchScale) {
+                dummy.scale.copy(data.glitchScale);
+            } else {
+                dummy.scale.setScalar(1);
+            }
             dummy.updateMatrix();
             innerCubeInstancedMesh.setMatrixAt(data.meshIndex, dummy.matrix);
         }
@@ -3831,9 +4054,9 @@ function stopVajbujMode() {
     targetCameraRadius = CONFIG.initialZoom;
     cameraFocusPoint.set(0, 0, 0);
 
-    // Sync UI Button immediately
+    // Sync terminal menu highlight immediately
     if (window.vajbujButton) {
-        window.vajbujButton.classList.remove('active');
+        window.vajbujButton.classList.remove('vajbuj-active');
     }
 
     // 3. Final cleanup after ~2s
@@ -4007,6 +4230,8 @@ async function loadParticles(data) {
             glitchTarget: new THREE.Vector3(),
             glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
             glitchEndTime: 0,
+            glitchRotation: null,
+            glitchScale: null,
         });
     });
 
@@ -4073,6 +4298,8 @@ async function loadParticles(data) {
             glitchTarget: new THREE.Vector3(),
             glitchDisplayOffset: new THREE.Vector3(0, 0, 0),
             glitchEndTime: 0,
+            glitchRotation: null,
+            glitchScale: null,
         });
         sIdx++;
     });
