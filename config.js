@@ -3,6 +3,32 @@ import * as THREE from 'three';
 // Device Detection
 export const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 800;
 
+// Tryb wydajności: `?perf=lite|full|auto`, potem localStorage (`storageKey`), domyślnie auto + heurystyka
+export const PERFORMANCE_CONFIG = {
+    storageKey: 'topkek-performance',
+    urlParam: 'perf',
+    autoLiteMaxDeviceMemoryGb: 4,
+    autoLiteMaxHardwareConcurrency: 4,
+    profiles: {
+        full: {
+            maxPixelRatioCap: 2,
+            enableSao: true,
+            enableBloom: true,
+            enableCrt: true,
+            secondLightCastShadow: true,
+            shadowMapSizeOverride: null
+        },
+        lite: {
+            maxPixelRatioCap: 1.25,
+            enableSao: false,
+            enableBloom: true,
+            enableCrt: false,
+            secondLightCastShadow: false,
+            shadowMapSizeOverride: 512
+        }
+    }
+};
+
 // Text & Particle Configuration
 export const CONFIG = {
     text: IS_MOBILE ? "K" : "TOPKEK",
