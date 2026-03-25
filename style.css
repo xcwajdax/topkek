@@ -1247,6 +1247,64 @@ body {
     background: #66BB6A;
 }
 
+/* SCNDBREJN Modal */
+#scndbrejn-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    font-family: 'Courier New', monospace;
+}
+
+#scndbrejn-modal.hidden {
+    display: none;
+}
+
+#scndbrejn-backdrop {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+}
+
+#scndbrejn-content {
+    width: 90vw;
+    max-width: 900px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 24px;
+    scrollbar-width: thin;
+    scrollbar-color: #4CAF50 #111;
+}
+
+#scndbrejn-content .close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+}
+
+#scndbrejn-content::-webkit-scrollbar {
+    width: 10px;
+}
+
+#scndbrejn-content::-webkit-scrollbar-track {
+    background: #111;
+}
+
+#scndbrejn-content::-webkit-scrollbar-thumb {
+    background: #4CAF50;
+    border: 1px solid #111;
+}
+
+#scndbrejn-content::-webkit-scrollbar-thumb:hover {
+    background: #66BB6A;
+}
+
 /* Custom Text Modal */
 #custom-text-modal {
     position: fixed;

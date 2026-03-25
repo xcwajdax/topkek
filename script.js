@@ -185,7 +185,21 @@ let loadedFontRegular = null; // Store loaded regular font globally
 // Background video (ogromne wideo za TOPKEK)
 let backgroundVideoEl = null;
 let backgroundVideoTexture = null;
+/** Drugi VideoTexture z mapping equirect — nie ruszamy UV płaszczyzny tła */
+let backgroundVideoTextureEnv = null;
 let backgroundVideoMesh = null;
+
+// Video IBL (fake GI) + HDRI fallback
+let hdriEnvironmentTexture = null;
+let videoIblPmremGenerator = null;
+let videoIblEnvScene = null;
+let videoIblLastPmremTime = 0;
+let videoIblLastHemisphereSampleTime = 0;
+let videoIblPmremRenderTarget = null;
+let videoIblSamplingCanvas = null;
+let videoIblSamplingCtx = null;
+let videoHemisphereLight = null;
+let videoAmbientLight = null;
 
 function cycleBackgroundVideo() {
     const bgCfg = CONFIG.backgroundVideo;
@@ -198,6 +212,189 @@ function cycleBackgroundVideo() {
     backgroundVideoEl.src = next;
     backgroundVideoEl.load();
     backgroundVideoEl.play().catch(() => {});
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+}
+
+function disposeVideoIblPmremTarget() {
+    if (videoIblPmremRenderTarget) {
+        videoIblPmremRenderTarget.dispose();
+        videoIblPmremRenderTarget = null;
+    }
+}
+
+function sampleVideoColorsToHemisphere(hemiCfg) {
+    if (!backgroundVideoEl || !videoHemisphereLight || !videoAmbientLight) return;
+    const w = hemiCfg.canvasWidth ?? 32;
+    const h = hemiCfg.canvasHeight ?? 64;
+    if (!videoIblSamplingCanvas) {
+        videoIblSamplingCanvas = document.createElement('canvas');
+        videoIblSamplingCtx = videoIblSamplingCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (videoIblSamplingCanvas.width !== w || videoIblSamplingCanvas.height !== h) {
+        videoIblSamplingCanvas.width = w;
+        videoIblSamplingCanvas.height = h;
+    }
+    const ctx = videoIblSamplingCtx;
+    try {
+        ctx.drawImage(backgroundVideoEl, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        const d = img.data;
+        const mid = Math.floor(h / 2);
+        let sr = 0;
+        let sg = 0;
+        let sb = 0;
+        let nTop = 0;
+        let gr = 0;
+        let gg = 0;
+        let gb = 0;
+        let nBot = 0;
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                const r = d[i];
+                const g = d[i + 1];
+                const b = d[i + 2];
+                if (y < mid) {
+                    sr += r;
+                    sg += g;
+                    sb += b;
+                    nTop++;
+                } else {
+                    gr += r;
+                    gg += g;
+                    gb += b;
+                    nBot++;
+                }
+            }
+        }
+        if (nTop < 1 || nBot < 1) return;
+        videoHemisphereLight.color.setRGB(sr / nTop / 255, sg / nTop / 255, sb / nTop / 255);
+        videoHemisphereLight.groundColor.setRGB(gr / nBot / 255, gg / nBot / 255, gb / nBot / 255);
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.color.lerpColors(videoHemisphereLight.color, videoHemisphereLight.groundColor, 0.5);
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    } catch (_) {
+        /* np. canvas tainted — zostaw poprzednie kolory */
+    }
+}
+
+function updateVideoBasedLighting(nowMs) {
+    const bg = CONFIG.backgroundVideo;
+    const vi = bg?.videoIbl;
+    const hemiCfg = bg?.hemisphereFromVideo;
+    if (!vi?.enabled || !backgroundVideoEl || !renderer) return;
+    if (backgroundVideoEl.readyState < 2) return;
+
+    const usePmrem = Boolean(
+        backgroundVideoTextureEnv &&
+        videoIblPmremGenerator &&
+        videoIblEnvScene &&
+        vi.usePmrem !== false &&
+        !IS_MOBILE &&
+        vi.replaceSceneEnvironment !== false
+    );
+    const useHemisphere = Boolean(
+        hemiCfg?.enabled &&
+        videoHemisphereLight &&
+        videoAmbientLight &&
+        (IS_MOBILE || hemiCfg.always === true)
+    );
+
+    if (useHemisphere) {
+        const hw = hemiCfg.intervalMs || 400;
+        if (nowMs - videoIblLastHemisphereSampleTime >= hw) {
+            videoIblLastHemisphereSampleTime = nowMs;
+            sampleVideoColorsToHemisphere(hemiCfg);
+        }
+    } else if (videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = 0;
+        videoAmbientLight.intensity = 0;
+    }
+
+    if (!usePmrem) return;
+
+    const pw = vi.intervalMs || 320;
+    if (pw > 0 && nowMs - videoIblLastPmremTime < pw) return;
+    videoIblLastPmremTime = nowMs;
+
+    try {
+        const sigmaRaw = vi.sigma ?? 0.04;
+        const sigma = Math.min(Math.max(0, sigmaRaw), 0.08);
+        const newRt = videoIblPmremGenerator.fromScene(videoIblEnvScene, sigma);
+        const prev = videoIblPmremRenderTarget;
+        videoIblPmremRenderTarget = newRt;
+        scene.environment = newRt.texture;
+        if (prev && prev !== newRt) prev.dispose();
+    } catch (err) {
+        console.warn('[VideoIBL] PMREM failed', err);
+        if (hdriEnvironmentTexture) scene.environment = hdriEnvironmentTexture;
+    }
+}
+
+function initBackgroundVideoIbl() {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    if (!vi?.enabled || !renderer || !backgroundVideoEl) return;
+
+    if (!IS_MOBILE && vi.usePmrem !== false && vi.replaceSceneEnvironment !== false) {
+        videoIblPmremGenerator = new THREE.PMREMGenerator(renderer);
+        backgroundVideoTextureEnv = new THREE.VideoTexture(backgroundVideoEl);
+        backgroundVideoTextureEnv.mapping = THREE.EquirectangularReflectionMapping;
+        backgroundVideoTextureEnv.minFilter = THREE.LinearFilter;
+        backgroundVideoTextureEnv.magFilter = THREE.LinearFilter;
+        if ('colorSpace' in backgroundVideoTextureEnv) {
+            backgroundVideoTextureEnv.colorSpace = THREE.SRGBColorSpace;
+        }
+
+        videoIblEnvScene = new THREE.Scene();
+        const sphereGeo = new THREE.SphereGeometry(200, 48, 24);
+        /** toneMapped: false — inaczej ACES na rendererze „gasi” LDR wideo w bake PMREM (prawie czarne env). */
+        const envSphereMat = new THREE.MeshBasicMaterial({
+            map: backgroundVideoTextureEnv,
+            side: THREE.BackSide,
+            toneMapped: false
+        });
+        videoIblEnvScene.add(new THREE.Mesh(sphereGeo, envSphereMat));
+    }
+
+    const hemiCfg = CONFIG.backgroundVideo?.hemisphereFromVideo;
+    if (hemiCfg?.enabled) {
+        videoHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0);
+        videoAmbientLight = new THREE.AmbientLight(0xffffff, 0);
+        scene.add(videoHemisphereLight);
+        scene.add(videoAmbientLight);
+    }
+}
+
+function applyVideoIblMaterialBoost() {
+    const bg = CONFIG.backgroundVideo;
+    const vi = bg?.videoIbl;
+    const boost = bg?.envMapIntensityBoost;
+    if (!vi?.enabled || !backgroundVideoEl || !boost) return;
+
+    const applyStd = (mat, matKey) => {
+        if (!mat) return;
+        const b = boost[matKey];
+        if (b == null) return;
+        const base = MATERIALS[matKey]?.envMapIntensity ?? 1;
+        mat.envMapIntensity = base * b;
+    };
+
+    applyStd(defaultBoxMaterial, 'defaultBox');
+    applyStd(glassMaterial, 'glass');
+    applyStd(goldMaterial, 'gold');
+    if (innerCubeInstancedMesh?.material) applyStd(innerCubeInstancedMesh.material, 'innerCubes');
+
+    const hv = boost.vajbujBgCubes;
+    if (hv != null && vajbujState.bgCubesMesh?.material) {
+        const base = VAJBUJ_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
+        vajbujState.bgCubesMesh.material.envMapIntensity = base * hv;
+    }
+
+    const hh = boost.heart;
+    if (hh != null && motionDesignState?.heartMesh?.material) {
+        motionDesignState.heartMesh.material.envMapIntensity = 0.4 * hh;
+    }
 }
 
 // Portfolio (video thumbnails below PRODUCTIONS)
@@ -392,14 +589,12 @@ function initSceneAndLoad() {
 
     composer.addPass(new OutputPass());
 
-    // 4. Lighting & Environment (HDRI)
+    // 4. Lighting & Environment (HDRI — fallback dopóki PMREM z wideo nie nadpisze scene.environment)
     new RGBELoader()
         .load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr', function (texture) {
             texture.mapping = THREE.EquirectangularReflectionMapping;
-            // scene.background = texture; // Uncomment to see the HDR background
+            hdriEnvironmentTexture = texture;
             scene.environment = texture;
-
-            // Generate particles only after basic setup is safe, but we can do it parallel
         });
 
     // Keep a subtle Directional Light1 for sharp shadows
@@ -477,6 +672,8 @@ function initSceneAndLoad() {
         backgroundVideoMesh = new THREE.Mesh(bgGeo, bgMat);
         backgroundVideoMesh.position.set(0, 0, bgCfg.positionZ);
         scene.add(backgroundVideoMesh);
+
+        initBackgroundVideoIbl();
     }
 
     // 5. Load Fonts and Generate Text
@@ -839,6 +1036,7 @@ function createUI() {
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
     const termPortfolio = document.getElementById('term-portfolio');
+    const termScndbrejn = document.getElementById('term-scndbrejn');
     const termAnimPortfolio = document.getElementById('term-anim-portfolio');
 
     if (termAnimPortfolio) {
@@ -908,6 +1106,12 @@ function createUI() {
     if (termGenimg) {
         termGenimg.onclick = () => {
             document.getElementById('genimg-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termScndbrejn) {
+        termScndbrejn.onclick = () => {
+            document.getElementById('scndbrejn-modal').classList.remove('hidden');
         };
     }
 
@@ -1037,6 +1241,14 @@ function createUI() {
     if (genimgModal && genimgClose) {
         genimgClose.onclick = () => genimgModal.classList.add('hidden');
         if (genimgBackdrop) genimgBackdrop.onclick = () => genimgModal.classList.add('hidden');
+    }
+
+    const scndbrejnModal = document.getElementById('scndbrejn-modal');
+    const scndbrejnClose = document.getElementById('scndbrejn-close');
+    const scndbrejnBackdrop = document.getElementById('scndbrejn-backdrop');
+    if (scndbrejnModal && scndbrejnClose) {
+        scndbrejnClose.onclick = () => scndbrejnModal.classList.add('hidden');
+        if (scndbrejnBackdrop) scndbrejnBackdrop.onclick = () => scndbrejnModal.classList.add('hidden');
     }
     // GENIMG gallery: click thumb to open in image-viewer (same as APPSTAIN)
     const genimgContent = document.getElementById('genimg-content');
@@ -1647,7 +1859,8 @@ function createHeartMesh(heartCenter) {
         metalness: 0.75,
         roughness: 0.25,
         emissive: 0xff2222,
-        emissiveIntensity: 0
+        emissiveIntensity: 0,
+        envMapIntensity: 0.4
     });
     const mesh = new THREE.InstancedMesh(boxGeo, heartMat, count);
     mesh.castShadow = true;
@@ -2279,6 +2492,7 @@ async function generateParticles(font, fontRegular) {
     // Final progress update
     loadState.generation = 100;
     updateProgress();
+    applyVideoIblMaterialBoost();
 }
 
 function exitPortfolioScene() {
@@ -2439,6 +2653,8 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!camera || !scene || !renderer) return;
+
+    updateVideoBasedLighting(performance.now());
 
     if (isFreeCam && controls) {
         controls.update();
@@ -2675,6 +2891,7 @@ function animate() {
                     heartMesh: heartData.mesh
                 };
                 if (heartData.mesh) scene.add(heartData.mesh);
+                applyVideoIblMaterialBoost();
             }
         }
 
@@ -3280,14 +3497,16 @@ function onWheel(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG)
+    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN)
     const appstainModal = document.getElementById('appstain-modal');
     const glitchModal = document.getElementById('glitch-modal');
     const genimgModal = document.getElementById('genimg-modal');
+    const scndbrejnModalWheel = document.getElementById('scndbrejn-modal');
     if (
         (appstainModal && !appstainModal.classList.contains('hidden')) ||
         (glitchModal && !glitchModal.classList.contains('hidden')) ||
-        (genimgModal && !genimgModal.classList.contains('hidden'))
+        (genimgModal && !genimgModal.classList.contains('hidden')) ||
+        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden'))
     ) {
         return;
     }
@@ -3523,6 +3742,7 @@ function createVajbujBackgroundCubes() {
     }
 
     scene.add(vajbujState.bgCubesMesh);
+    applyVideoIblMaterialBoost();
 }
 
 function startVajbujMode() {
@@ -4379,6 +4599,7 @@ async function loadParticles(data) {
 
     loadState.generation = 100;
     updateProgress();
+    applyVideoIblMaterialBoost();
 
     // Hide Loader
     loaderContainer.classList.add('hidden');

@@ -75,7 +75,37 @@ export const CONFIG = {
         ],
         positionZ: -20,
         width: 80,
-        height: 45
+        height: 45,
+        /** Fake GI z klatki wideo: PMREM (desktop) + próbkowanie koloru → Hemisphere/Ambient (mobile) */
+        videoIbl: {
+            enabled: true,
+            /** Na mobile domyślnie wyłączone (koszt GPU); Hemisphere wystarczy */
+            usePmrem: !IS_MOBILE,
+            /** false = scene.environment zostaje HDRI (odporność na czarny PMREM); wideo tylko Hemisphere + boost */
+            replaceSceneEnvironment: true,
+            intervalMs: IS_MOBILE ? 0 : 320,
+            /** Promień rozmycia w radianach — Three.js ogranicza ~20 próbek; >~0.1 zwykle klipuje (konsola). */
+            sigma: 0.04
+        },
+        hemisphereFromVideo: {
+            enabled: true,
+            /** true na desktopie = zapasowy fill z kolorem wideo, gdy PMREM/ACES psuje jasność */
+            always: !IS_MOBILE,
+            intensity: 0.85,
+            ambientIntensity: 0.32,
+            intervalMs: 420,
+            canvasWidth: 32,
+            canvasHeight: 64
+        },
+        /** Mnożniki envMapIntensity względem MATERIALS.* (żeby widać dynamiczne IBL) */
+        envMapIntensityBoost: {
+            defaultBox: 2.4,
+            glass: 2.0,
+            gold: 2.2,
+            innerCubes: 2.0,
+            heart: 1.35,
+            vajbujBgCubes: 2.0
+        }
     }
 };
 
