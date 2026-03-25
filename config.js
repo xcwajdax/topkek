@@ -46,7 +46,7 @@ export const CONFIG = {
     animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
     gridCols: 10, // For grid calculation
     gridSpacing: 2,
-    shadowMapSize: IS_MOBILE ? 128 : 2048, // Reduced shadow map size for mobile
+    shadowMapSize: IS_MOBILE ? 128 : 1028, // Reduced shadow map size for mobile
     zoomSensitivity: 0.005, // Speed of zoom via scroll
     freeCamZoomSpeed: 0.005, // Szybkość zoomu w trybie Free Cam (OrbitControls)
     minZoom: 3, // Minimum camera distance
@@ -69,9 +69,51 @@ export const CONFIG = {
     // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
     backgroundVideo: {
         sources: [
-            'ASSETS/BGs/01_torus.mp4',
-            'ASSETS/BGs/02_bag_1.mp4',
-            'ASSETS/BGs/06_kostki_02.mp4'
+            {
+                src: 'ASSETS/BGs/01_torus.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 25.0,
+                    glass: 6.0,
+                    gold: 6.2,
+                    innerCubes: 0.1,
+                    heart: 1.35,
+                    vajbujBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 2.0,
+                    ambientIntensity: 1
+                }
+            },
+            {
+                src: 'ASSETS/BGs/02_bag_1.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 5.0,
+                    glass: 2.0,
+                    gold: 2.2,
+                    innerCubes: 0.1,
+                    heart: 1.35,
+                    vajbujBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 1.2,
+                    ambientIntensity: 1
+                }
+            },
+            {
+                src: 'ASSETS/BGs/06_kostki_02.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 5.0,
+                    glass: 2.0,
+                    gold: 2.2,
+                    innerCubes: 0.1,
+                    heart: 1.35,
+                    vajbujBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 3,
+                    ambientIntensity: 0.5
+                }
+            }
         ],
         positionZ: -20,
         width: 80,
@@ -83,6 +125,7 @@ export const CONFIG = {
             usePmrem: !IS_MOBILE,
             /** false = scene.environment zostaje HDRI (odporność na czarny PMREM); wideo tylko Hemisphere + boost */
             replaceSceneEnvironment: true,
+            // Mniej opóźnienia “fake GI” po klatkach w tle
             intervalMs: IS_MOBILE ? 0 : 320,
             /** Promień rozmycia w radianach — Three.js ogranicza ~20 próbek; >~0.1 zwykle klipuje (konsola). */
             sigma: 0.04
@@ -92,17 +135,18 @@ export const CONFIG = {
             /** true na desktopie = zapasowy fill z kolorem wideo, gdy PMREM/ACES psuje jasność */
             always: !IS_MOBILE,
             intensity: 0.85,
-            ambientIntensity: 0.32,
-            intervalMs: 420,
+            ambientIntensity: 0.6,
+            // Szybsza reakcja kolorów (bez zbyt częstych próbek)
+            intervalMs: 40,
             canvasWidth: 32,
             canvasHeight: 64
         },
         /** Mnożniki envMapIntensity względem MATERIALS.* (żeby widać dynamiczne IBL) */
         envMapIntensityBoost: {
-            defaultBox: 2.4,
+            defaultBox: 5.0,
             glass: 2.0,
             gold: 2.2,
-            innerCubes: 2.0,
+            innerCubes: 0.1,
             heart: 1.35,
             vajbujBgCubes: 2.0
         }
@@ -342,8 +386,8 @@ export const VAJBUJ_CONFIG = {
     bgCubeSize: 0.25, // smaller cubes
     bgCubeCount: 100,
     bgCubeMaterial: {
-        metalness: 0.2,
-        roughness: 0.8
+        metalness: 0.6,
+        roughness: 0.4
     },
 
     // Tempo dynamics
@@ -388,6 +432,12 @@ export const SHADER_CONFIG = {
 
 };
 
+// Debug-only flags (default: off). Keep this as data-only: no side effects.
+export const DEBUG_FLAGS = {
+    // innerCubes shader patch validation (varying selection + token replacement).
+    innerCubesEmissivePatchLog: false
+};
+
 // Material Configuration
 export const MATERIALS = {
     defaultBox: {
@@ -415,9 +465,13 @@ export const MATERIALS = {
     },
     innerCubes: {
         color: 0xffffff,
-        roughness: 0,
-        metalness: 0,
-        emissiveIntensity: 0.1
+        // Reduce "mirror-like" look so emissive glow dominates.
+        roughness: 0.8,
+        metalness: 0.2,
+        emissive: 0xffffff,
+        // Boost so emissive is visible even with bloom threshold/ACES.
+        emissiveIntensity: 5.0,
+        toneMapped: false
     }
 };
 
@@ -457,6 +511,43 @@ export const LOADER_CONFIG = {
     phases: {
         assets: { weight: 50, text: "Loading Assets..." },   // wideo w tle + fonty – postęp buforowania widać na pasku (0–50%)
         generation: { weight: 50, text: "Generating Particles..." }
+    },
+    // Fake loader: pasek ma rosnąć sam (coraz wolniej) i zmieniać opis co sekundę,
+    // dopóki aplikacja nie dojdzie realnie do "Ready".
+    simulation: {
+        enabled: true,
+        // Miękki sufit (symulacja dąży do tego, a potem i tak „dociskamy” do 100% przy zakończeniu).
+        softCap: 99,
+        // Stała czasowa dla podejścia wykładniczego (im większa, tym wolniej).
+        tauMs: 5000,
+        // Ile ms między podmianą komunikatu.
+        messageIntervalMs: 3000,
+        // Ile procent „wyprzedzenia” może mieć symulacja względem realnego postępu
+        // (żeby pasek nie kończył się zanim realnie dojdzie reszta).
+        maxLeadPercentage: 25,
+        // Żeby symulacja startowała od 0 bez skoku.
+        startPercentage: 0
+    },
+    messages: {
+        assets: [
+            "Buffering the universe. Almost there...",
+            "Feeding the background video. Shhh...",
+            "Warming up fonts and tiny lies...",
+            "Scanning for pixels. Please wait...",
+            "Feeding the renderer data. Slowly, proudly."
+        ],
+        generation: [
+            "Voxelizing the dream. No questions asked...",
+            "Sampling surfaces. Vibes are loading...",
+            "Building TOPKEK blocks. Good luck, patience.",
+            "Packing cubes into cubes. They approve.",
+            "Almost there - keep breathing."
+        ],
+        ready: [
+            "Ready. Please pretend this was instant.",
+            "Load complete. KEK is on the way.",
+            "Done. The rest is pure magic."
+        ]
     },
     colors: {
         background: "#111",

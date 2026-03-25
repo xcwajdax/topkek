@@ -32,17 +32,32 @@ body {
 #loader-content {
     text-align: center;
     width: 300px;
-    font-family: 'Courier New', monospace;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     /* Monospace for tech vibe */
+}
+
+#loader-title {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-size: 2rem;
+    letter-spacing: 10px;
+    margin-bottom: 10px;
+    white-space: nowrap;
+    opacity: 0.15;
 }
 
 #loading-text {
     color: white;
-    font-size: 14px;
+    font-size: 0.7rem;
     margin-bottom: 10px;
     letter-spacing: 1px;
     text-transform: uppercase;
-    opacity: 0.8;
+    opacity: 0.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 #progress-bar-container {

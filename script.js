@@ -12,7 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG } from './config.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
 
 function resolvePerformanceMode() {
     const params = new URLSearchParams(window.location.search);
@@ -189,6 +189,12 @@ let backgroundVideoTexture = null;
 let backgroundVideoTextureEnv = null;
 let backgroundVideoMesh = null;
 
+// Frame-sync helpers for video-based lighting (reduces perceived lag)
+let videoFrameCounter = 0;
+let lastHemiSampleFrameCounter = -1;
+let lastPmremSampleFrameCounter = -1;
+let videoFrameCallbackStarted = false;
+
 // Video IBL (fake GI) + HDRI fallback
 let hdriEnvironmentTexture = null;
 let videoIblPmremGenerator = null;
@@ -201,19 +207,49 @@ let videoIblSamplingCtx = null;
 let videoHemisphereLight = null;
 let videoAmbientLight = null;
 
+// Active profile for currently playing background video (used for per-BG intensity "emission" tuning).
+let activeBackgroundVideoSource = null;
+
+function getActiveHemisphereCfg() {
+    const base = CONFIG.backgroundVideo?.hemisphereFromVideo ?? {};
+    const override = activeBackgroundVideoSource?.hemisphereFromVideo ?? {};
+    return { ...base, ...override };
+}
+
+function getActiveEnvMapIntensityBoost() {
+    const base = CONFIG.backgroundVideo?.envMapIntensityBoost ?? {};
+    const override = activeBackgroundVideoSource?.envMapIntensityBoost ?? {};
+    return { ...base, ...override };
+}
+
 function cycleBackgroundVideo() {
     const bgCfg = CONFIG.backgroundVideo;
     const sources = bgCfg?.sources;
     if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0) return;
     const currentSrc = backgroundVideoEl.src ? new URL(backgroundVideoEl.src, window.location.origin).pathname.replace(/^\//, '') : '';
-    const others = sources.filter(s => s !== currentSrc && s.replace(/^\//, '') !== currentSrc);
+    const normalizeSrc = (src) => (typeof src === 'string' ? src.replace(/^\//, '') : '');
+
+    const others = sources.filter(s => normalizeSrc(s?.src) !== currentSrc);
     const pool = others.length ? others : sources;
     const next = pool[Math.floor(Math.random() * pool.length)];
-    backgroundVideoEl.src = next;
+    if (!next?.src) return;
+
+    activeBackgroundVideoSource = next;
+    backgroundVideoEl.src = next.src;
     backgroundVideoEl.load();
     backgroundVideoEl.play().catch(() => {});
     videoIblLastPmremTime = 0;
     videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    // Apply tuning immediately (without waiting for the next sampling tick).
+    applyVideoIblMaterialBoost();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
 }
 
 function disposeVideoIblPmremTarget() {
@@ -225,6 +261,13 @@ function disposeVideoIblPmremTarget() {
 
 function sampleVideoColorsToHemisphere(hemiCfg) {
     if (!backgroundVideoEl || !videoHemisphereLight || !videoAmbientLight) return;
+
+    // Even if sampling fails (e.g. tainted canvas), lights must keep their "power".
+    const hemiIntensity = hemiCfg.intensity ?? 0.85;
+    const ambientIntensity = hemiCfg.ambientIntensity ?? 0.32;
+    videoHemisphereLight.intensity = hemiIntensity;
+    videoAmbientLight.intensity = ambientIntensity;
+
     const w = hemiCfg.canvasWidth ?? 32;
     const h = hemiCfg.canvasHeight ?? 64;
     if (!videoIblSamplingCanvas) {
@@ -271,22 +314,21 @@ function sampleVideoColorsToHemisphere(hemiCfg) {
         if (nTop < 1 || nBot < 1) return;
         videoHemisphereLight.color.setRGB(sr / nTop / 255, sg / nTop / 255, sb / nTop / 255);
         videoHemisphereLight.groundColor.setRGB(gr / nBot / 255, gg / nBot / 255, gb / nBot / 255);
-        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
         videoAmbientLight.color.lerpColors(videoHemisphereLight.color, videoHemisphereLight.groundColor, 0.5);
-        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
     } catch (_) {
         /* np. canvas tainted — zostaw poprzednie kolory */
     }
 }
 
 function updateVideoBasedLighting(nowMs) {
-    const bg = CONFIG.backgroundVideo;
-    const vi = bg?.videoIbl;
-    const hemiCfg = bg?.hemisphereFromVideo;
-    if (!vi?.enabled || !backgroundVideoEl || !renderer) return;
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const hemiCfg = getActiveHemisphereCfg();
+    // Hemisphere/Ambient (fallback fill) powinny działać nawet jeśli PMREM jest wyłączony.
+    if (!backgroundVideoEl || !renderer) return;
     if (backgroundVideoEl.readyState < 2) return;
 
     const usePmrem = Boolean(
+        vi?.enabled &&
         backgroundVideoTextureEnv &&
         videoIblPmremGenerator &&
         videoIblEnvScene &&
@@ -304,23 +346,28 @@ function updateVideoBasedLighting(nowMs) {
     if (useHemisphere) {
         const hw = hemiCfg.intervalMs || 400;
         if (nowMs - videoIblLastHemisphereSampleTime >= hw) {
-            videoIblLastHemisphereSampleTime = nowMs;
-            sampleVideoColorsToHemisphere(hemiCfg);
+            const frameChanged = videoFrameCounter !== lastHemiSampleFrameCounter;
+            const shouldSample = !videoFrameCallbackStarted || frameChanged;
+            if (shouldSample) {
+                videoIblLastHemisphereSampleTime = nowMs;
+                if (videoFrameCallbackStarted) lastHemiSampleFrameCounter = videoFrameCounter;
+                sampleVideoColorsToHemisphere(hemiCfg);
+            }
         }
-    } else if (videoHemisphereLight && videoAmbientLight) {
-        videoHemisphereLight.intensity = 0;
-        videoAmbientLight.intensity = 0;
     }
 
     if (!usePmrem) return;
 
     const pw = vi.intervalMs || 320;
     if (pw > 0 && nowMs - videoIblLastPmremTime < pw) return;
+    if (videoFrameCallbackStarted && videoFrameCounter === lastPmremSampleFrameCounter) return;
     videoIblLastPmremTime = nowMs;
+    if (videoFrameCallbackStarted) lastPmremSampleFrameCounter = videoFrameCounter;
 
     try {
         const sigmaRaw = vi.sigma ?? 0.04;
         const sigma = Math.min(Math.max(0, sigmaRaw), 0.08);
+        if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
         const newRt = videoIblPmremGenerator.fromScene(videoIblEnvScene, sigma);
         const prev = videoIblPmremRenderTarget;
         videoIblPmremRenderTarget = newRt;
@@ -330,6 +377,21 @@ function updateVideoBasedLighting(nowMs) {
         console.warn('[VideoIBL] PMREM failed', err);
         if (hdriEnvironmentTexture) scene.environment = hdriEnvironmentTexture;
     }
+}
+
+function startVideoFrameCallbackOnce() {
+    if (videoFrameCallbackStarted) return;
+    if (!backgroundVideoEl || typeof backgroundVideoEl.requestVideoFrameCallback !== 'function') return;
+    if (backgroundVideoEl.readyState < 2) return; // Not enough data decoded yet
+
+    videoFrameCallbackStarted = true;
+    const v = backgroundVideoEl;
+    const onVideoFrame = () => {
+        videoFrameCounter++;
+        v.requestVideoFrameCallback(onVideoFrame);
+    };
+
+    v.requestVideoFrameCallback(onVideoFrame);
 }
 
 function initBackgroundVideoIbl() {
@@ -357,19 +419,21 @@ function initBackgroundVideoIbl() {
         videoIblEnvScene.add(new THREE.Mesh(sphereGeo, envSphereMat));
     }
 
-    const hemiCfg = CONFIG.backgroundVideo?.hemisphereFromVideo;
+    const hemiCfg = getActiveHemisphereCfg();
     if (hemiCfg?.enabled) {
-        videoHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0);
-        videoAmbientLight = new THREE.AmbientLight(0xffffff, 0);
+        // Important: even if sampling colors fails (CORS/tainted canvas), lights must still have power.
+        const hemiIntensity = hemiCfg.intensity ?? 0.85;
+        const ambientIntensity = hemiCfg.ambientIntensity ?? 0.32;
+        videoHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, hemiIntensity);
+        videoAmbientLight = new THREE.AmbientLight(0xffffff, ambientIntensity);
         scene.add(videoHemisphereLight);
         scene.add(videoAmbientLight);
     }
 }
 
 function applyVideoIblMaterialBoost() {
-    const bg = CONFIG.backgroundVideo;
-    const vi = bg?.videoIbl;
-    const boost = bg?.envMapIntensityBoost;
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const boost = getActiveEnvMapIntensityBoost();
     if (!vi?.enabled || !backgroundVideoEl || !boost) return;
 
     const applyStd = (mat, matKey) => {
@@ -497,11 +561,123 @@ let loadState = {
     generation: 0
 };
 
-function updateProgress() {
+// Loader simulation state (fake progress + funny rotating messages)
+let loaderSim = {
+    active: false,
+    rafId: null,
+    intervalId: null,
+    simProgress: 0,
+    lastBarWidth: null,
+    lastMessage: null
+};
+
+function getRealPhase() {
+    if (loadState.assets < 100) return 'assets';
+    if (loadState.generation < 100) return 'generation';
+    return 'ready';
+}
+
+function computeRealPercentage() {
     const totalWeight = LOADER_CONFIG.phases.assets.weight + LOADER_CONFIG.phases.generation.weight;
     const currentWeight = (loadState.assets * LOADER_CONFIG.phases.assets.weight / 100) +
         (loadState.generation * LOADER_CONFIG.phases.generation.weight / 100);
-    const percentage = Math.round((currentWeight / totalWeight) * 100);
+    return Math.max(0, Math.min(100, Math.round((currentWeight / totalWeight) * 100)));
+}
+
+function setLoaderUI(percentage, text) {
+    const pct = Math.max(0, Math.min(100, percentage));
+    // Keep bar animating smoothly even if the integer text stays the same.
+    const widthStr = `${pct.toFixed(2)}%`;
+    if (loaderSim.lastBarWidth !== widthStr) {
+        progressFill.style.width = widthStr;
+        progressText.innerText = `${Math.round(pct)}%`;
+        loaderSim.lastBarWidth = widthStr;
+    }
+    if (typeof text === 'string') {
+        if (statusText.innerText !== text) {
+            statusText.innerText = text;
+        }
+    }
+}
+
+function pickLoaderMessage(phase) {
+    const pools = LOADER_CONFIG.messages || {};
+    const list = pools[phase] || [];
+    if (!list.length) return 'Loading...';
+    const idx = Math.floor(Math.random() * list.length);
+    return list[idx];
+}
+
+function stopLoaderSimulation({ finalize = false } = {}) {
+    if (!loaderSim.active && !finalize) return;
+
+    loaderSim.active = false;
+    if (loaderSim.rafId) cancelAnimationFrame(loaderSim.rafId);
+    if (loaderSim.intervalId) clearInterval(loaderSim.intervalId);
+    loaderSim.rafId = null;
+    loaderSim.intervalId = null;
+
+    if (finalize) {
+        const readyText = pickLoaderMessage('ready');
+        setLoaderUI(100, readyText);
+    }
+}
+
+function startLoaderSimulation() {
+    if (!LOADER_CONFIG.simulation?.enabled) return;
+
+    // If user triggers reload quickly (e.g. custom text), restart simulation cleanly.
+    stopLoaderSimulation();
+
+    loaderSim.active = true;
+    loaderSim.simProgress = LOADER_CONFIG.simulation?.startPercentage ?? 0;
+    loaderSim.lastBarWidth = null;
+
+    const phase = getRealPhase();
+    setLoaderUI(loaderSim.simProgress, pickLoaderMessage(phase));
+
+    const softCap = Math.max(loaderSim.simProgress, LOADER_CONFIG.simulation?.softCap ?? 99);
+    const tauMs = LOADER_CONFIG.simulation?.tauMs ?? 2400;
+    const maxLeadPercentage = LOADER_CONFIG.simulation?.maxLeadPercentage ?? 25;
+
+    let lastT = performance.now();
+    const tick = (now) => {
+        if (!loaderSim.active) return;
+        const dt = Math.max(0, now - lastT);
+        lastT = now;
+
+        // Keep the fake progress behind the real loading (with small lead).
+        // It still accelerates at the beginning and slows down near the current cap.
+        const realPct = computeRealPercentage();
+        const dynamicCap = Math.min(softCap, realPct + maxLeadPercentage);
+
+        // Exponential approach to dynamicCap:
+        // progress moves fast at start and slows down near the cap.
+        const decay = Math.exp(-dt / tauMs);
+        loaderSim.simProgress = dynamicCap - (dynamicCap - loaderSim.simProgress) * decay;
+        loaderSim.simProgress = Math.min(loaderSim.simProgress, dynamicCap);
+
+        setLoaderUI(loaderSim.simProgress);
+
+        loaderSim.rafId = requestAnimationFrame(tick);
+    };
+    loaderSim.rafId = requestAnimationFrame(tick);
+
+    const intervalMs = LOADER_CONFIG.simulation?.messageIntervalMs ?? 1000;
+    loaderSim.intervalId = setInterval(() => {
+        if (!loaderSim.active) return;
+        const nextPhase = getRealPhase();
+        // Ensure the text changes even if the phase doesn't.
+        setLoaderUI(loaderSim.simProgress, pickLoaderMessage(nextPhase));
+    }, intervalMs);
+}
+
+function updateProgress() {
+    // Keep the "real progress" calculation for phase selection,
+    // but avoid DOM writes while the fake loader simulation is active.
+    const percentage = computeRealPercentage();
+
+    if (loaderSim.active) return;
 
     progressFill.style.width = `${percentage}%`;
     progressText.innerText = `${percentage}%`;
@@ -516,7 +692,8 @@ function updateProgress() {
 }
 
 function init() {
-    updateProgress(); // Pokazuj 0% i "Loading Assets..." od razu
+    startLoaderSimulation();
+    updateProgress(); // zapewnij spójność fazy (bez nadpisywania DOM-a przy sim)
     requestAnimationFrame(() => {
         initSceneAndLoad();
     });
@@ -598,13 +775,13 @@ function initSceneAndLoad() {
         });
 
     // Keep a subtle Directional Light1 for sharp shadows
-    const dirLight1 = new THREE.DirectionalLight(0xFF0000, 0.7);
-    dirLight1.position.set(10, 10, 10);
+    const dirLight1 = new THREE.DirectionalLight(0xFF0000, 15);
+    dirLight1.position.set(-10, 1-0, 10);
     dirLight1.castShadow = true;
     dirLight1.shadow.mapSize.width = performanceRuntime.shadowMapSize;
     dirLight1.shadow.mapSize.height = performanceRuntime.shadowMapSize;
-    const dirLight2 = new THREE.DirectionalLight(0x0000FF, 0.7);
-    dirLight2.position.set(-10, -10, 10);
+    const dirLight2 = new THREE.DirectionalLight(0x0000FF, 1);
+    dirLight2.position.set(10, 10, 10);
     dirLight2.castShadow = performanceRuntime.secondLightCastShadow;
     dirLight2.shadow.mapSize.width = performanceRuntime.shadowMapSize;
     dirLight2.shadow.mapSize.height = performanceRuntime.shadowMapSize;
@@ -620,9 +797,11 @@ function initSceneAndLoad() {
     // Tło: ogromne wideo daleko za napisem TOPKEK (losowy plik z listy przy ładowaniu)
     const bgCfg = CONFIG.backgroundVideo;
     const bgSources = bgCfg?.sources;
-    const bgSrc = Array.isArray(bgSources) && bgSources.length
+    const bgSource = Array.isArray(bgSources) && bgSources.length
         ? bgSources[Math.floor(Math.random() * bgSources.length)]
-        : bgCfg?.src;
+        : null;
+    activeBackgroundVideoSource = bgSource;
+    const bgSrc = bgSource?.src ?? bgCfg?.src;
 
     let videoReadyPromise = Promise.resolve();
     if (bgCfg && bgSrc) {
@@ -658,6 +837,7 @@ function initSceneAndLoad() {
                 loadState.assets = 100;
                 updateProgress();
                 backgroundVideoEl.play().catch(() => {});
+                startVideoFrameCallbackOnce();
                 resolve();
             };
             backgroundVideoEl.addEventListener('canplay', onReady, { once: true });
@@ -725,6 +905,8 @@ function initSceneAndLoad() {
             initVajbujMode();
             // Portfolio is lazy-initialized on first hover over "Animation portfolio" in terminal
 
+            // Loader is about to disappear; stop fake progress to avoid running in background.
+            stopLoaderSimulation({ finalize: true });
             loaderContainer.classList.add('hidden');
             if (backgroundVideoEl) {
                 backgroundVideoEl.play().catch(() => {});
@@ -735,6 +917,7 @@ function initSceneAndLoad() {
         })
         .catch(err => {
             console.error("Error loading fonts:", err);
+            stopLoaderSimulation();
             statusText.innerText = "Error Loading Fonts";
         });
 
@@ -1436,6 +1619,7 @@ async function updateText(newText) {
     loaderContainer.style.display = 'flex';
     loaderContainer.classList.remove('hidden');
     loadState.generation = 0;
+    startLoaderSimulation();
     updateProgress();
 
     // Allow UI to update
@@ -1468,6 +1652,7 @@ async function updateText(newText) {
     CONFIG.text = newText;
     await generateParticles(loadedFont, loadedFontRegular);
 
+    stopLoaderSimulation({ finalize: true });
     loaderContainer.classList.add('hidden');
     setTimeout(() => {
         loaderContainer.style.display = 'none';
@@ -2442,6 +2627,59 @@ async function generateParticles(font, fontRegular) {
     const innerCubeCount = 2000;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
+    // Enable instanceColor tinting for the shader (instancing color varying).
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        // Three.js r0.160: InstancedMesh `instanceColor` is exposed via `vInstanceColor` (not `vColor`).
+        // Robust varying selection: in some material/shader variants the token may appear only in vertex or fragment shader.
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        const perInstanceFactor = `(${colorVarying} * 0.4 + vec3(0.2))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        // Prefer patching `emissiveRadiance` (earlier in shader flow), so later assignments can't “wash out” the tint.
+        // Only multiply `totalEmissiveRadiance = emissiveRadiance * factor` when `emissiveRadiance` was NOT already patched.
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        let totalFromEmissiveRadiancePatched = false;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+            totalFromEmissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        let totalFromEmissivePatched = false;
+        if (totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+            totalFromEmissivePatched = true;
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', {
+                colorVarying,
+                emissiveRadiancePatched,
+                totalFromEmissiveRadiancePatched,
+                totalFromEmissivePatched,
+                shaderPatched: after !== before
+            });
+        }
+        shader.fragmentShader = after;
+    };
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCubeCount);
     const color = new THREE.Color();
@@ -4542,6 +4780,55 @@ async function loadParticles(data) {
     const innerCount = data.inner.length;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
+    // Enable instanceColor tinting for the shader (instancing color varying).
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        const perInstanceFactor = `(${colorVarying} * 0.8 + vec3(0.2))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        let totalFromEmissiveRadiancePatched = false;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+            totalFromEmissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        let totalFromEmissivePatched = false;
+        if (totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+            totalFromEmissivePatched = true;
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', {
+                colorVarying,
+                emissiveRadiancePatched,
+                totalFromEmissiveRadiancePatched,
+                totalFromEmissivePatched,
+                shaderPatched: after !== before
+            });
+        }
+        shader.fragmentShader = after;
+    };
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCount);
     const color = new THREE.Color();
@@ -4599,6 +4886,7 @@ async function loadParticles(data) {
 
     loadState.generation = 100;
     updateProgress();
+    stopLoaderSimulation({ finalize: true });
     applyVideoIblMaterialBoost();
 
     // Hide Loader

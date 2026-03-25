@@ -25,13 +25,24 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 ## [Unreleased]
 
 ### Added
-- *(dodawaj tu nowe zmiany przed wydaniem)*
+- Dodano możliwość sterowania „mocą emmisji” (envMapIntensity + intensity/ambient z próbkowania wideo) osobno dla każdego background video.
 
 ### Changed
 - *(zmiany w istniejącej funkcjonalności)*
+- Zmieniono loader, aby symulował postęp i wyświetlał memiczne komunikaty co sekundę podczas ładowania.
+- Zmieniono parametry fake-loadera, aby pasek nie kończył się zbyt szybko i komunikaty zmieniały się rzadziej.
+- Dopasowano loader: komunikaty wolniej (ok. co 3s), po angielsku i z mniejszą czcionką.
+- Zmieniono font w loaderze na bezszeryfowy.
+- Dodano statyczny tytuł `T O P K E K` nad loaderem i wymuszono jednowierszowy `loading-text`.
 
 ### Fixed
-- *(poprawki)*
+- Poprawiono przyciemnienie sceny spowodowane wyzerowaniem świateł Hemisphere/Ambient z wideo w tle.
+- Poprawiono opóźnienie aktualizacji “fake GI” z wideo przez synchronizację z klatkami (`requestVideoFrameCallback`), z zachowaniem fallbacku na urządzeniach bez API.
+- Zmniejszono `intervalMs` dynamicznego oświetlenia z wideo w tle, żeby ograniczyć widoczny lag zmiany kolorów.
+- Poprawiono świecenie `innerCubes` (emissive) i ich kolorowanie per-instance (`instanceColor`).
+- Poprawiono widoczność emissive `innerCubes` (podbicie i `toneMapped: false`) oraz zabezpieczono mnożenie per-instance, żeby nie zerowało glow.
+- Poprawiono mapowanie emissive `innerCubes` per-instance w Three r160 (użycie `vInstanceColor` dla `instanceColor`).
+- Poprawiono wstrzykiwanie per-instance emissive w `innerCubes`, aby gradient HSL nie wybielał się do bieli.
 
 ---
 
