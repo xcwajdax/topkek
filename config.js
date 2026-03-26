@@ -45,7 +45,7 @@ export const CONFIG = {
     returnSpeed: 0.2,
     sampleDensity: 1, // Points per unit area (increase for more dense voxels)
     letterSpacing: 0.5, // Extra spacing between letters
-    animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
+    animationMode: 'scatter', // 'repulsion', 'scatter', or 'grid'
     gridCols: 10, // For grid calculation
     gridSpacing: 2,
     shadowMapSize: IS_MOBILE ? 128 : 1028, // Reduced shadow map size for mobile
@@ -77,8 +77,8 @@ export const CONFIG = {
                     defaultBox: 25.0,
                     glass: 6.0,
                     gold: 6.2,
-                    innerCubes: 0.1,
-                    heart: 1.35,
+                    innerCubes: 0.5,
+                    heart: 1.35,   
                     vajbujBgCubes: 2.0
                 },
                 hemisphereFromVideo: {
@@ -92,7 +92,7 @@ export const CONFIG = {
                     defaultBox: 5.0,
                     glass: 2.0,
                     gold: 2.2,
-                    innerCubes: 0.1,
+                    innerCubes: 0.5,
                     heart: 1.35,
                     vajbujBgCubes: 2.0
                 },
@@ -107,7 +107,7 @@ export const CONFIG = {
                     defaultBox: 5.0,
                     glass: 2.0,
                     gold: 2.2,
-                    innerCubes: 0.1,
+                    innerCubes: 0.5,
                     heart: 1.35,
                     vajbujBgCubes: 2.0
                 },
@@ -195,19 +195,19 @@ export const PORTFOLIO_SCENE_CONFIG = {
 // Glitch volumetryczne – blokowe przeskoki fragmentów napisu TOPKEK
 export const GLITCH_VOLUME_CONFIG = {
     enabled: false,
-    intervalMin: 2000,   // ms – min odstęp auto-triggera
-    intervalMax: 5000,   // ms – max odstęp auto-triggera
-    duration: 0.12,      // s – jak długo offset jest widoczny
+    intervalMin: 200,   // ms – min odstęp auto-triggera
+    intervalMax: 2000,   // ms – max odstęp auto-triggera
+    duration: 0.88,      // s – jak długo offset jest widoczny
     maxOffset: 0.4,      // maks. przesunięcie na oś
-    bandCount: 8,        // na ile pasów (X) dzielimy napis (pattern 'bands')
-    bandsPerGlitch: 2,   // ile pasów jednocześnie glitchować
+    bandCount: 32,        // na ile pasów (X) dzielimy napis (pattern 'bands')
+    bandsPerGlitch: 4,   // ile pasów jednocześnie glitchować
     includeInnerCubes: true,
 
     // Wspólne opcje zachowania
     pattern: 'bands', // 'bands' | 'grid2d' | 'clusters'
     useRotation: false,
-    useScale: false,
-    useColorFlicker: false,
+    useScale: true,
+    useColorFlicker: true,
 
     // Rotacja i skala
     rotationMaxAngle: Math.PI / 4,
@@ -215,14 +215,14 @@ export const GLITCH_VOLUME_CONFIG = {
     scaleMax: 1.15,
 
     // Parametry dla patternu 'grid2d'
-    gridCols: 4,
-    gridRows: 3,
-    tilesPerGlitch: 1,
+    gridCols: 25,
+    gridRows: 8,
+    tilesPerGlitch: 4,
 
     // Parametry dla patternu 'clusters'
     clusterFraction: 0.05,
     clusterMinCount: 50,
-    clusterMaxCount: 500,
+    clusterMaxCount: 300,
 
     // Kolor – używane w drugiej iteracji (color flicker)
     colorFlickerStrength: 0.2
@@ -232,42 +232,42 @@ export const GLITCH_VOLUME_CONFIG = {
 export const GLITCH_VOLUME_PRESETS = {
     subtelny: {
         pattern: 'bands',
-        duration: 0.08,
-        maxOffset: 0.25,
-        bandsPerGlitch: 1,
-        tilesPerGlitch: 1,
-        clusterFraction: 0.02,
-        intervalMin: 2200,
-        intervalMax: 5200,
+        duration: 0.2,
+        maxOffset: 1,
+        bandsPerGlitch: 0.3,
+        tilesPerGlitch: 0.2,
+        clusterFraction: 0.2,
+        intervalMin: 220,
+        intervalMax: 50,
         useRotation: false,
-        useScale: false,
+        useScale: true,
         useColorFlicker: false
     },
     mocny: {
         pattern: 'grid2d',
-        duration: 0.14,
+        duration: 0.80,
         maxOffset: 0.45,
-        bandsPerGlitch: 2,
-        tilesPerGlitch: 2,
-        clusterFraction: 0.06,
-        intervalMin: 1800,
-        intervalMax: 4200,
+        bandsPerGlitch: 6,
+        tilesPerGlitch: 3,
+        clusterFraction: 0.12,
+        intervalMin: 180,
+        intervalMax: 1200,
         useRotation: true,
         useScale: true,
         useColorFlicker: false
     },
     chaos: {
         pattern: 'clusters',
-        duration: 0.1,
-        maxOffset: 0.6,
-        bandsPerGlitch: 3,
+        duration: 0.3,
+        maxOffset: 0.4,
+        bandsPerGlitch: 5,
         tilesPerGlitch: 3,
         clusterFraction: 0.15,
-        intervalMin: 1200,
-        intervalMax: 3200,
+        intervalMin: 60,
+        intervalMax: 900,
         useRotation: true,
-        useScale: true,
-        useColorFlicker: true
+        useScale: false,
+        useColorFlicker: false
     }
 };
 
@@ -499,9 +499,31 @@ export const SHAPE_DEFINITIONS = [
 
 // After loader: fly camera from far radius to CONFIG.initialZoom (manual path, ease-in)
 export const INTRO_CAMERA_CONFIG = {
-    durationMs: 3000,
+    durationMs: 6000,
     /** Must be > CONFIG.initialZoom; keep < camera far plane (0.1..100) */
-    startRadius: 80
+    startRadius: 45
+};
+
+/** UI reveal after intro fly-in ends (terminal lines, prod label, camera HUD). */
+export const POST_INTRO_UI_CONFIG = {
+    enabled: true,
+    menuLineStaggerMs: 52,
+    menuLineAnimSec: 0.62,
+    uiContainerDelayMs: 60,
+    uiContainerAnimSec: 0.52,
+    terminalShellDelayMs: 380,
+    terminalShellAnimSec: 0.55,
+    cameraHudDelayMs: 100,
+    cameraHudAnimSec: 0.58,
+    prodLabelDelayMs: 240,
+    prodLabelAnimSec: 0.72,
+    slidePx: 44
+};
+
+// Top-left camera HUD (live coords + mode buttons)
+export const CAMERA_HUD_CONFIG = {
+    coordinateDecimals: 2,
+    defaultFov: 45
 };
 
 // Cinematic Camera Shots

@@ -13,7 +13,15 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
 import { initTopkekTerminalShell } from './terminal-shell.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
+
+const CUSTOM_TEXT_QUERY_PARAM = 'text';
+const MAX_CUSTOM_TEXT_LENGTH = 10;
+
+function sanitizeCustomText(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().toUpperCase().slice(0, MAX_CUSTOM_TEXT_LENGTH);
+}
 
 function resolvePerformanceMode() {
     const params = new URLSearchParams(window.location.search);
@@ -59,6 +67,13 @@ const performanceRuntime = (() => {
         shadowMapSize
     };
 })();
+
+const customTextFromUrl = sanitizeCustomText(
+    new URLSearchParams(window.location.search).get(CUSTOM_TEXT_QUERY_PARAM) || ''
+);
+if (customTextFromUrl) {
+    CONFIG.text = customTextFromUrl;
+}
 
 function getEffectivePixelRatio() {
     return Math.min(window.devicePixelRatio || 1, performanceRuntime.maxPixelRatioCap);
@@ -548,10 +563,16 @@ let isInitialSequence = true;
 let introCameraFlyInActive = false;
 let introFlyInStartTime = 0;
 let introFlyInStartRadius = INTRO_CAMERA_CONFIG.startRadius;
+let postIntroUiRevealed = false;
 
 // Cinematic Camera State (Shots imported)
 let cinematicDollySpeed = 0; // Speed of radius change
 let currentShotSpeedMult = 0.2; // Speed of orbit
+
+// Camera HUD (top-left panel)
+let cameraHudModeEl = null;
+let cameraHudPosEl = null;
+let cameraHudTgtEl = null;
 
 // DOM Elements
 const container = document.getElementById('canvas-container');
@@ -698,6 +719,41 @@ function updateProgress() {
     } else {
         statusText.innerText = "Ready!";
     }
+}
+
+function applyPostIntroUiCssVars() {
+    const c = POST_INTRO_UI_CONFIG;
+    const r = document.documentElement;
+    const px = `${c.slidePx}px`;
+    r.style.setProperty('--post-intro-slide-x', px);
+    r.style.setProperty('--post-intro-menu-stagger', `${c.menuLineStaggerMs}ms`);
+    r.style.setProperty('--post-intro-menu-dur', `${c.menuLineAnimSec}s`);
+    r.style.setProperty('--post-intro-ui-delay', `${c.uiContainerDelayMs}ms`);
+    r.style.setProperty('--post-intro-ui-dur', `${c.uiContainerAnimSec}s`);
+    r.style.setProperty('--post-intro-shell-delay', `${c.terminalShellDelayMs}ms`);
+    r.style.setProperty('--post-intro-shell-dur', `${c.terminalShellAnimSec}s`);
+    r.style.setProperty('--post-intro-hud-delay', `${c.cameraHudDelayMs}ms`);
+    r.style.setProperty('--post-intro-hud-dur', `${c.cameraHudAnimSec}s`);
+    r.style.setProperty('--post-intro-prod-delay', `${c.prodLabelDelayMs}ms`);
+    r.style.setProperty('--post-intro-prod-dur', `${c.prodLabelAnimSec}s`);
+}
+
+function revealPostIntroUi() {
+    if (postIntroUiRevealed) return;
+    postIntroUiRevealed = true;
+    const body = document.body;
+    if (!POST_INTRO_UI_CONFIG.enabled) {
+        applyPostIntroUiCssVars();
+        body.classList.remove('post-intro-ui-pending');
+        body.classList.add('post-intro-ui-ready');
+        return;
+    }
+    applyPostIntroUiCssVars();
+    document.querySelectorAll('#terminal-menu .term-line').forEach((el, i) => {
+        el.style.setProperty('--post-intro-line-index', String(i));
+    });
+    body.classList.remove('post-intro-ui-pending');
+    body.classList.add('post-intro-ui-ready');
 }
 
 function init() {
@@ -923,6 +979,9 @@ function initSceneAndLoad() {
             targetCameraRadius = introFlyInStartRadius;
             introFlyInStartTime = performance.now();
             introCameraFlyInActive = true;
+            setTimeout(() => {
+                revealPostIntroUi();
+            }, INTRO_CAMERA_CONFIG.durationMs + 200);
             loaderContainer.classList.add('hidden');
             if (backgroundVideoEl) {
                 backgroundVideoEl.play().catch(() => {});
@@ -935,6 +994,7 @@ function initSceneAndLoad() {
             console.error("Error loading fonts:", err);
             stopLoaderSimulation();
             statusText.innerText = "Error Loading Fonts";
+            revealPostIntroUi();
         });
 
     // 6. Events
@@ -943,21 +1003,6 @@ function initSceneAndLoad() {
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('keydown', (e) => {
-        if (e.code === 'Space') {
-            isAlternateMaterial = !isAlternateMaterial;
-
-            // Update Bloom Strength
-            if (bloomPass) {
-                bloomPass.strength = isAlternateMaterial ? SHADER_CONFIG.bloom.alternateStrength : SHADER_CONFIG.bloom.strength;
-            }
-
-
-            // Iterate over registry to update materials
-            Object.values(meshRegistry).forEach(entry => {
-                if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
-                if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
-            });
-        }
         if (e.code === 'Escape') {
             if (isCinematic || isFreeCam) {
                 setCameraMode('manual');
@@ -1039,6 +1084,17 @@ function passEnabledLine(name, pass) {
     return `${name}: ${pass.enabled ? 'on' : 'off'}`;
 }
 
+function setAlternateMaterialMode(nextState) {
+    isAlternateMaterial = !!nextState;
+    if (bloomPass) {
+        bloomPass.strength = isAlternateMaterial ? SHADER_CONFIG.bloom.alternateStrength : SHADER_CONFIG.bloom.strength;
+    }
+    Object.values(meshRegistry).forEach(entry => {
+        if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
+        if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
+    });
+}
+
 function runTopkekTerminalCommand(line) {
     const parts = line.trim().split(/\s+/).filter(Boolean);
     const cmd = parts[0].toLowerCase();
@@ -1052,6 +1108,7 @@ function runTopkekTerminalCommand(line) {
             'bloom on | off | strength <n>',
             'sao on | off (full perf only)',
             'crt on | off',
+            'material toggle | default | alt | status',
             'light <1|2> color <#rrggbb|0xrrggbb>',
             'light <1|2> intensity <n>',
             'postproc status'
@@ -1130,6 +1187,26 @@ function runTopkekTerminalCommand(line) {
         return ['Usage: crt on | off'];
     }
 
+    if (cmd === 'material') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub === 'toggle') {
+            setAlternateMaterialMode(!isAlternateMaterial);
+            return [`Material mode: ${isAlternateMaterial ? 'alt' : 'default'}.`];
+        }
+        if (sub === 'default') {
+            setAlternateMaterialMode(false);
+            return ['Material mode: default.'];
+        }
+        if (sub === 'alt') {
+            setAlternateMaterialMode(true);
+            return ['Material mode: alt.'];
+        }
+        if (sub === 'status') {
+            return [`Material mode: ${isAlternateMaterial ? 'alt' : 'default'}.`];
+        }
+        return ['Usage: material toggle | default | alt | status'];
+    }
+
     if (cmd === 'light') {
         const idx = parts[1];
         const op = (parts[2] || '').toLowerCase();
@@ -1172,16 +1249,20 @@ function createUI() {
     const rightPanel = document.getElementById('right-panel');
     if (!rightPanel) return;
 
-    const ui = document.createElement('div');
-    ui.id = 'ui-container';
+    let ui = document.getElementById('ui-container');
+    if (!ui) {
+        ui = document.createElement('div');
+        ui.id = 'ui-container';
+        rightPanel.insertBefore(ui, rightPanel.firstChild);
+    }
 
-    // --- Mouse animation Mode ---
-    const sectionMode = document.createElement('div');
-    sectionMode.className = 'controls-section';
+    // --- Mouse animation Mode (under Camera HUD) ---
+    const mouseModeWrap = document.createElement('div');
+    mouseModeWrap.className = 'controls-section';
     const titleMode = document.createElement('div');
     titleMode.className = 'controls-category-title';
     titleMode.textContent = 'Mouse animation Mode';
-    sectionMode.appendChild(titleMode);
+    mouseModeWrap.appendChild(titleMode);
     const itemsMode = document.createElement('div');
     itemsMode.className = 'controls-category-items';
 
@@ -1203,18 +1284,30 @@ function createUI() {
     itemsMode.appendChild(btn1);
     itemsMode.appendChild(btn2);
     itemsMode.appendChild(btn3);
-    sectionMode.appendChild(itemsMode);
-    ui.appendChild(sectionMode);
+    mouseModeWrap.appendChild(itemsMode);
 
-    // --- Camera ---
-    const sectionCam = document.createElement('div');
-    sectionCam.className = 'controls-section';
-    const titleCam = document.createElement('div');
-    titleCam.className = 'controls-category-title';
-    titleCam.textContent = 'Camera';
-    sectionCam.appendChild(titleCam);
-    const itemsCam = document.createElement('div');
-    itemsCam.className = 'controls-category-items';
+    // --- Camera HUD (top-left; live coords + mode + reset) ---
+    const cameraHud = document.createElement('div');
+    cameraHud.id = 'camera-hud';
+    const hudTitle = document.createElement('div');
+    hudTitle.className = 'camera-hud-title';
+    hudTitle.textContent = 'Camera';
+    cameraHud.appendChild(hudTitle);
+
+    cameraHudModeEl = document.createElement('div');
+    cameraHudModeEl.className = 'camera-hud-mode';
+    cameraHud.appendChild(cameraHudModeEl);
+
+    cameraHudPosEl = document.createElement('pre');
+    cameraHudPosEl.className = 'camera-hud-coords';
+    cameraHud.appendChild(cameraHudPosEl);
+
+    cameraHudTgtEl = document.createElement('pre');
+    cameraHudTgtEl.className = 'camera-hud-coords';
+    cameraHud.appendChild(cameraHudTgtEl);
+
+    const hudItems = document.createElement('div');
+    hudItems.className = 'controls-category-items';
 
     const btnFreeCam = document.createElement('button');
     btnFreeCam.className = 'mode-btn' + (isCinematic ? '' : ' active');
@@ -1234,10 +1327,54 @@ function createUI() {
         btnFreeCam.classList.remove('active');
     };
 
-    itemsCam.appendChild(btnFreeCam);
-    itemsCam.appendChild(btnCinematic);
-    sectionCam.appendChild(itemsCam);
-    ui.appendChild(sectionCam);
+    const btnResetCam = document.createElement('button');
+    btnResetCam.className = 'mode-btn';
+    btnResetCam.innerText = '> Reset widoku';
+    btnResetCam.title = 'Przywróć domyślną pozycję kamery';
+    btnResetCam.onclick = () => resetCameraToDefaultView();
+
+    hudItems.appendChild(btnFreeCam);
+    hudItems.appendChild(btnCinematic);
+    hudItems.appendChild(btnResetCam);
+    cameraHud.appendChild(hudItems);
+    cameraHud.appendChild(mouseModeWrap);
+    
+    // --- Glitch Volumetric ---
+    const sectionGlitch = document.createElement('div');
+    sectionGlitch.className = 'controls-section';
+    const glitchTitle = document.createElement('div');
+    glitchTitle.className = 'controls-category-title';
+    glitchTitle.textContent = 'Glitch Volumetric';
+    sectionGlitch.appendChild(glitchTitle);
+
+    const glitchItems = document.createElement('div');
+    glitchItems.className = 'controls-category-items';
+    const btnGlitchToggle = document.createElement('button');
+    btnGlitchToggle.id = 'btn-glitch-toggle';
+    btnGlitchToggle.className = 'mode-btn';
+    btnGlitchToggle.innerText = '> Activate';
+    glitchItems.appendChild(btnGlitchToggle);
+
+    const btnPresetSubtelny = document.createElement('button');
+    btnPresetSubtelny.id = 'btn-glitch-preset-subtelny';
+    btnPresetSubtelny.className = 'mode-btn';
+    btnPresetSubtelny.innerText = '> Soft';
+    glitchItems.appendChild(btnPresetSubtelny);
+
+    const btnPresetMocny = document.createElement('button');
+    btnPresetMocny.id = 'btn-glitch-preset-mocny';
+    btnPresetMocny.className = 'mode-btn';
+    btnPresetMocny.innerText = '> Strong';
+    glitchItems.appendChild(btnPresetMocny);
+
+    const btnPresetChaos = document.createElement('button');
+    btnPresetChaos.id = 'btn-glitch-preset-chaos';
+    btnPresetChaos.className = 'mode-btn';
+    btnPresetChaos.innerText = '> Crazy';
+    glitchItems.appendChild(btnPresetChaos);
+
+    sectionGlitch.appendChild(glitchItems);
+    cameraHud.appendChild(sectionGlitch);
 
     // --- Change text ---
     const sectionText = document.createElement('div');
@@ -1245,11 +1382,58 @@ function createUI() {
     const btnCustomText = document.createElement('button');
     btnCustomText.className = 'mode-btn';
     btnCustomText.innerText = 'Change text';
-    btnCustomText.onclick = () => {
-        document.getElementById('custom-text-modal').classList.remove('hidden');
+
+    const customTextInlineControls = document.createElement('div');
+    customTextInlineControls.className = 'inline-text-regen hidden';
+
+    const customTextInput = document.createElement('input');
+    customTextInput.className = 'inline-text-regen-input';
+    customTextInput.type = 'text';
+    customTextInput.maxLength = MAX_CUSTOM_TEXT_LENGTH;
+    customTextInput.placeholder = 'TOPKEK';
+
+    const regenButton = document.createElement('button');
+    regenButton.className = 'mode-btn inline-text-regen-btn';
+    regenButton.innerText = 'regen';
+
+    const runRegen = () => {
+        const nextText = sanitizeCustomText(customTextInput.value);
+        if (!nextText) {
+            customTextInput.classList.add('is-invalid');
+            customTextInput.focus();
+            return;
+        }
+        customTextInput.classList.remove('is-invalid');
+
+        const params = new URLSearchParams(window.location.search);
+        params.set(CUSTOM_TEXT_QUERY_PARAM, nextText);
+        const nextQuery = params.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`;
+        window.location.assign(nextUrl);
     };
+
+    btnCustomText.onclick = () => {
+        customTextInput.value = CONFIG.text;
+        customTextInlineControls.classList.remove('hidden');
+        btnCustomText.classList.add('hidden');
+        customTextInput.focus();
+        customTextInput.select();
+    };
+
+    customTextInput.addEventListener('input', () => {
+        customTextInput.value = customTextInput.value.toUpperCase();
+        customTextInput.classList.remove('is-invalid');
+    });
+    customTextInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') runRegen();
+    });
+    regenButton.onclick = runRegen;
+
     sectionText.appendChild(btnCustomText);
-    ui.appendChild(sectionText);
+    customTextInlineControls.appendChild(customTextInput);
+    customTextInlineControls.appendChild(regenButton);
+    sectionText.appendChild(customTextInlineControls);
+    cameraHud.appendChild(sectionText);
 
     // --- Change BG ---
     const bgCfg = CONFIG.backgroundVideo;
@@ -1262,36 +1446,32 @@ function createUI() {
         btnBgVideo.title = 'Zmień wideo w tle';
         btnBgVideo.onclick = cycleBackgroundVideo;
         sectionBg.appendChild(btnBgVideo);
-        ui.appendChild(sectionBg);
+        cameraHud.appendChild(sectionBg);
     }
+    document.body.appendChild(cameraHud);
 
     // --- Glitch volumetryczne ---
-    const sectionGlitchVol = document.createElement('div');
-    sectionGlitchVol.className = 'controls-section';
-    const titleGlitchVol = document.createElement('div');
-    titleGlitchVol.className = 'controls-category-title';
-    titleGlitchVol.textContent = 'Glitch volumetryczne';
-    sectionGlitchVol.appendChild(titleGlitchVol);
-    const itemsGlitchVol = document.createElement('div');
-    itemsGlitchVol.className = 'controls-category-items';
-
-    const btnGlitchToggle = document.createElement('button');
-    btnGlitchToggle.className = 'mode-btn' + (GLITCH_VOLUME_CONFIG.enabled ? ' active' : '');
-    btnGlitchToggle.innerText = '> Glitch volumetryczne';
-    btnGlitchToggle.title = 'Włącz/wyłącz blokowe przeskoki fragmentów napisu';
-    btnGlitchToggle.onclick = () => {
-        GLITCH_VOLUME_CONFIG.enabled = !GLITCH_VOLUME_CONFIG.enabled;
-        btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
-        if (!GLITCH_VOLUME_CONFIG.enabled) glitchVolumeNextTrigger = 0;
+    const btnGlitchTrigger = document.getElementById('btn-glitch-trigger');
+    const presetButtons = {
+        subtelny: btnPresetSubtelny,
+        mocny: btnPresetMocny,
+        chaos: btnPresetChaos
     };
 
-    const btnGlitchTrigger = document.createElement('button');
-    btnGlitchTrigger.className = 'mode-btn';
-    btnGlitchTrigger.innerText = 'Trigger';
-    btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
-    btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(clock.getElapsedTime());
+    if (btnGlitchToggle) {
+        btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
+        btnGlitchToggle.title = 'Włącz/wyłącz blokowe przeskoki fragmentów napisu';
+        btnGlitchToggle.onclick = () => {
+            GLITCH_VOLUME_CONFIG.enabled = !GLITCH_VOLUME_CONFIG.enabled;
+            btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
+            if (!GLITCH_VOLUME_CONFIG.enabled) glitchVolumeNextTrigger = 0;
+        };
+    }
 
-    const presetButtons = {};
+    if (btnGlitchTrigger) {
+        btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
+        btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(clock.getElapsedTime());
+    }
 
     const applyGlitchPreset = (name) => {
         const preset = GLITCH_VOLUME_PRESETS[name];
@@ -1317,50 +1497,34 @@ function createUI() {
 
         // Aktualizujemy klasę active na przyciskach presetów
         Object.keys(presetButtons).forEach(key => {
-            presetButtons[key].classList.toggle('active', key === name);
+            presetButtons[key]?.classList.toggle('active', key === name);
         });
     };
 
-    const btnPresetSubtelny = document.createElement('button');
-    btnPresetSubtelny.className = 'mode-btn';
-    btnPresetSubtelny.innerText = '> Subtelny';
-    btnPresetSubtelny.title = 'Delikatny glitch (bands/grid2d)';
-    btnPresetSubtelny.onclick = () => applyGlitchPreset('subtelny');
-    presetButtons.subtelny = btnPresetSubtelny;
+    if (btnPresetSubtelny) {
+        btnPresetSubtelny.title = 'Delikatny glitch (bands/grid2d)';
+        btnPresetSubtelny.onclick = () => applyGlitchPreset('subtelny');
+    }
 
-    const btnPresetMocny = document.createElement('button');
-    btnPresetMocny.className = 'mode-btn';
-    btnPresetMocny.innerText = '> Mocny';
-    btnPresetMocny.title = 'Mocniejszy glitch z rotacją i skalą';
-    btnPresetMocny.onclick = () => applyGlitchPreset('mocny');
-    presetButtons.mocny = btnPresetMocny;
+    if (btnPresetMocny) {
+        btnPresetMocny.title = 'Mocniejszy glitch z rotacją i skalą';
+        btnPresetMocny.onclick = () => applyGlitchPreset('mocny');
+    }
 
-    const btnPresetChaos = document.createElement('button');
-    btnPresetChaos.className = 'mode-btn';
-    btnPresetChaos.innerText = '> Chaos';
-    btnPresetChaos.title = 'Chaotyczne klastry voxelowe';
-    btnPresetChaos.onclick = () => applyGlitchPreset('chaos');
-    presetButtons.chaos = btnPresetChaos;
+    if (btnPresetChaos) {
+        btnPresetChaos.title = 'Chaotyczne klastry voxelowe';
+        btnPresetChaos.onclick = () => applyGlitchPreset('chaos');
+    }
 
     // Ustaw stan początkowy presetów zgodnie z configiem
     if (GLITCH_VOLUME_STATE.currentPreset && presetButtons[GLITCH_VOLUME_STATE.currentPreset]) {
         presetButtons[GLITCH_VOLUME_STATE.currentPreset].classList.add('active');
     }
 
-    itemsGlitchVol.appendChild(btnGlitchToggle);
-    itemsGlitchVol.appendChild(btnGlitchTrigger);
-    itemsGlitchVol.appendChild(btnPresetSubtelny);
-    itemsGlitchVol.appendChild(btnPresetMocny);
-    itemsGlitchVol.appendChild(btnPresetChaos);
-    sectionGlitchVol.appendChild(itemsGlitchVol);
-    ui.appendChild(sectionGlitchVol);
-
     window.cinematicButton = btnCinematic;
     window.freeCamButton = btnFreeCam;
 
     // Vajbuj: ukryty (nie dodajemy przycisku)
-
-    rightPanel.insertBefore(ui, rightPanel.firstChild);
 
     // --- NEW UI ELEMENTS ---
 
@@ -1638,38 +1802,7 @@ function createUI() {
     };
     initGlitchModal();
 
-    // 5. Custom Text Modal Logic
-    const initCustomTextModal = () => {
-        const modal = document.getElementById('custom-text-modal');
-        const closeBtn = document.getElementById('custom-text-close');
-        const submitBtn = document.getElementById('custom-text-submit');
-        const input = document.getElementById('custom-text-input');
-
-        const close = () => {
-            modal.classList.add('hidden');
-            input.value = '';
-        };
-
-        const submit = () => {
-            const text = input.value.trim().toUpperCase();
-            if (text.length > 0) {
-                updateText(text);
-                close();
-            }
-        };
-
-        closeBtn.onclick = close;
-        submitBtn.onclick = submit;
-
-        input.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                submit();
-            }
-        });
-    };
-    initCustomTextModal();
-
-    // 6. Portfolio Vimeo Modal Logic
+    // 5. Portfolio Vimeo Modal Logic
     const initPortfolioVimeoModal = () => {
         const modal = document.getElementById('portfolio-vimeo-modal');
         const closeBtn = document.getElementById('portfolio-vimeo-close');
@@ -2047,12 +2180,80 @@ function setCameraMode(mode) {
     }
 }
 
+function resetCameraToDefaultView() {
+    if (typeof portfolioSceneActive !== 'undefined' && portfolioSceneActive) {
+        exitPortfolioScene();
+        const ap = document.getElementById('term-anim-portfolio');
+        if (ap) ap.classList.remove('portfolio-active');
+    }
+
+    introCameraFlyInActive = false;
+
+    const fov = CAMERA_HUD_CONFIG.defaultFov;
+    const z0 = CONFIG.initialZoom;
+
+    cameraFocusPoint.set(0, 0, 0);
+    cameraAngle = 0;
+    cameraVerticalAngle = 0;
+    cameraRadius = z0;
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = z0;
+    cinematicDollySpeed = 0;
+
+    if (camera) {
+        camera.fov = fov;
+        camera.updateProjectionMatrix();
+    }
+
+    if (isFreeCam && controls) {
+        camera.position.set(0, 0, z0);
+        controls.target.set(0, 0, 0);
+        cameraFocusPoint.copy(controls.target);
+        controls.update();
+    } else if (camera) {
+        const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
+        camera.position.x = cameraFocusPoint.x + Math.sin(cameraAngle) * horizontalRadius;
+        camera.position.z = cameraFocusPoint.z + Math.cos(cameraAngle) * horizontalRadius;
+        camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
+        camera.lookAt(cameraFocusPoint);
+    }
+
+    if (isCinematic) {
+        cinematicSwitchTime = Date.now() + 2000;
+    }
+}
+
+function updateCameraHud() {
+    if (!camera || !cameraHudModeEl || !cameraHudPosEl || !cameraHudTgtEl) return;
+
+    const d = CAMERA_HUD_CONFIG.coordinateDecimals;
+    const fmt = (n) => n.toFixed(d);
+    const p = camera.position;
+    cameraHudPosEl.textContent = `pos: ${fmt(p.x)} ${fmt(p.y)} ${fmt(p.z)}`;
+
+    if (isFreeCam && controls) {
+        const t = controls.target;
+        cameraHudTgtEl.textContent = `tgt: ${fmt(t.x)} ${fmt(t.y)} ${fmt(t.z)}`;
+        cameraHudTgtEl.classList.remove('camera-hud-coords--hidden');
+    } else {
+        cameraHudTgtEl.textContent = '';
+        cameraHudTgtEl.classList.add('camera-hud-coords--hidden');
+    }
+
+    let modeLabel = 'Manual';
+    if (portfolioSceneActive) modeLabel = 'Portfolio';
+    else if (isFreeCam) modeLabel = 'Free';
+    else if (isCinematic) modeLabel = 'Dynamic';
+    cameraHudModeEl.textContent = `Mode: ${modeLabel}`;
+}
+
 function easeInOutCubic(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function easeInCubic(t) {
-    return t * t * t;
+function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
 }
 
 function computeMotionDesignTargets(font) {
@@ -3129,12 +3330,13 @@ function animate() {
             const nowIntro = performance.now();
             const ic = INTRO_CAMERA_CONFIG;
             const tIntro = Math.min(1, (nowIntro - introFlyInStartTime) / ic.durationMs);
-            const eIntro = easeInCubic(tIntro);
+            const eIntro = easeOutCubic(tIntro);
             cameraRadius = introFlyInStartRadius + (CONFIG.initialZoom - introFlyInStartRadius) * eIntro;
             targetCameraRadius = CONFIG.initialZoom;
             if (tIntro >= 1) {
                 introCameraFlyInActive = false;
                 cameraRadius = CONFIG.initialZoom;
+                revealPostIntroUi();
             }
         }
 
@@ -3221,6 +3423,8 @@ function animate() {
         camera.lookAt(cameraFocusPoint);
         }
     }
+
+    updateCameraHud();
 
     if (Object.keys(meshRegistry).length > 0) {
         raycaster.setFromCamera(mouse, camera);

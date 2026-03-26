@@ -1,0 +1,2 @@
+# SFTP: skopiuj .vscode/sftp.json.example → .vscode/sftp.json i ustaw hasło (plik z hasłem nie jest commitowany).
+.vscode/sftp.json

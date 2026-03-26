@@ -19,7 +19,7 @@
     </script>
 </head>
 
-<body>
+<body class="post-intro-ui-pending">
     <div id="canvas-container"></div>
     <div id="loader-container">
         <div id="loader-content">
@@ -34,13 +34,14 @@
 
     <!-- RIGHT PANEL: controls above terminal menu -->
     <div id="right-panel">
+    <div id="ui-container"></div>
     <div id="terminal-menu">
-        <!-- Animation portfolio: ukryte tymczasowo (usuń atrybut hidden z wrappera, by przywrócić) -->
+        <!-- Animation portfolio: temporarily hidden (remove hidden to restore) -->
         <div id="anim-portfolio-terminal-block" hidden>
         <div class="term-line">Animation portfolio</div><br>
         <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
         </div>
-        <div class="term-line" id="term-vajbuj">VAJBUJ — w konsoli: vajbuj / vajbuj stop</div><br><br>
+        <div class="term-line" id="term-vajbuj">VAJBUJ — type in terminal:<br> vajbuj / vajbuj stop</div><br><br>
         <div class="term-line">Under Development</div><br>
         <div class="term-line">Games</div><br>
         <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
@@ -115,7 +116,7 @@
 
             <!-- Music: custom player -->
             <section class="appstain-section-box">
-                <h3 class="appstain-section-title">Listen: Akta i Pętle</h3>
+                <h3 class="appstain-section-title">Listen: Files and Loops</h3>
                 <div class="appstain-card appstain-audio-card">
                     <audio id="appstain-audio-el" src="ASSETS/APPSTAIN/Appstain Clicker - Akta i Petle.mp3" preload="metadata"></audio>
                     <div class="appstain-audio-player">
@@ -237,18 +238,6 @@
         </div>
     </div>
 
-    <!-- CUSTOM TEXT MODAL -->
-    <div id="custom-text-modal" class="hidden">
-        <div id="custom-text-content">
-            <h2>ENTER TEXT</h2>
-            <input type="text" id="custom-text-input" placeholder="TOPKEK" maxlength="10">
-            <div class="modal-buttons">
-                <button id="custom-text-submit" class="mode-btn">GENERATE</button>
-            </div>
-            <button id="custom-text-close" class="close-btn">X</button>
-        </div>
-    </div>
-
     <!-- PORTFOLIO DETAIL MODAL (per-animation: description, media, typography) -->
     <div id="portfolio-detail-modal" class="hidden portfolio-detail-modal">
         <div class="portfolio-detail-backdrop"></div>
@@ -258,7 +247,7 @@
             <p id="portfolio-detail-description" class="portfolio-detail-description"></p>
             <div id="portfolio-detail-gallery" class="portfolio-detail-gallery"></div>
             <div id="portfolio-detail-typography" class="portfolio-detail-typography"></div>
-            <button id="portfolio-detail-play-video" class="button-primary">Odtwórz wideo</button>
+            <button id="portfolio-detail-play-video" class="button-primary">Play video</button>
         </div>
     </div>
 

@@ -25,13 +25,31 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 ## [Unreleased]
 
 ### Added
+- Dodano szablon wdrożenia SFTP dla Cursor/VS Code (`.vscode/sftp.json.example`) oraz wpis w `.gitignore` dla lokalnego `.vscode/sftp.json` z hasłem.
+- Dodano dokument `docs/SFTP_Deploy.md` z instrukcją wdrożenia strony przez SFTP w Cursorze/VS Code.
+- Dodano animowane pojawianie się UI po zakończeniu lotu intro kamery: HUD kamery z góry, etykieta „TOP KEK Productions…” z dołu, panel kontrolek + konsola i wiersze menu z prawej (stagger + krótki efekt „glitch” na liniach); parametry w `POST_INTRO_UI_CONFIG` (`config.js`); tryb `prefers-reduced-motion` pomija ukrywanie i animacje.
+- Dodano panel kamery w lewym górnym rogu (`#camera-hud`): na żywo współrzędne pozycji (i cel orbit w Free Cam), przełączniki Free / Dynamic Cam, przycisk resetu widoku; konfiguracja `CAMERA_HUD_CONFIG` w `config.js`.
 - Dodano konsolę poleceń na dole prawego panelu (`terminal-shell.js`, `#topkek-terminal-shell`) z komendami: `help`, `vajbuj` / `vajbuj stop`, `bloom`, `sao`, `crt`, `light`, `postproc status`; dane UI w `TERMINAL_CONFIG` (`config.js`).
-- Dodano intro kamery po ukryciu loadera: zbliżanie z dużej odległości do pozycji startowej w 3 s z ease-in (`INTRO_CAMERA_CONFIG` w `config.js`).
+- Dodano intro kamery po ukryciu loadera: zbliżanie z dużej odległości do pozycji startowej z ease-in (`INTRO_CAMERA_CONFIG` w `config.js`; czas trwania w konfiguracji).
 - Dodano `CONFIG.innerCubeZBias` (opcjonalny offset Z inner cubes przy `loadParticles` z JSON; domyślnie 0 — zgodność z zbakowanym `particles_*.json`).
 - Dodano możliwość sterowania „mocą emmisji” (envMapIntensity + intensity/ambient z próbkowania wideo) osobno dla każdego background video.
 
 ### Changed
+- Przeniesiono kontrolki `Glitch Volumetric`, `Change text` i `Change BG` do lewego HUD kamery pod sekcję „Mouse animation Mode”; sekcja glitch nie jest już renderowana statycznie w `index.html`.
+- Przeniesiono przełączanie materiałów napisu z klawisza spacji do komendy terminala `material toggle | default | alt | status`.
+- Zmieniono domyślny `CONFIG.animationMode` na `scatter` dla trybu animacji myszy.
+- Zmieniono domyślną ścieżkę SFTP w lokalnym pliku `.vscode/sftp.json` z `/public_html` na `/topkek`.
+- Zmieniono pasek przewijania logu konsoli terminala (`.topkek-terminal-log`) na customowy, spójny z zielonym motywem UI.
+- Przeniesiono menu „Mouse animation Mode” z prawego panelu pod menu kamery w lewym HUD (`#camera-hud`).
+- Przeniesiono sekcję „Glitch volumetryczne” z dynamicznego renderowania w `script.js` do statycznego markupu w `index.html`, pozostawiając obsługę logiki przycisków w JS.
+- Zmieniono krzywą intro kamery z ease-in na ease-out, aby końcówka dojazdu była płynniejsza.
+- Zmieniono treści w `index.html` na spójnie angielskie (w tym etykietę przycisku odtwarzania i pozostałe polskie fragmenty).
+- Przeniesiono sterowanie kamerą (Free Cam / Dynamic Cam) z prawego panelu do lewego HUD kamery.
 - VAJBUJ uruchamiany wyłącznie z konsoli (wpis `vajbuj`); wpis w menu terminala jest tylko informacyjny.
+- Ustawiono start intro kamery na `Z = 50` (`INTRO_CAMERA_CONFIG.startRadius`).
+- Wydłużono intro kamery po loaderze do 9 s (`INTRO_CAMERA_CONFIG.durationMs`).
+- Zmieniono `Change text` na kontrolkę inline w prawym panelu (input + przycisk `regen`), która przeładowuje stronę z nowym napisem przez parametr URL `?text=...`, oraz usunięto nieużywany modal custom text.
+- Dopracowano UX `Change text`: pole pojawia się dopiero po kliknięciu przycisku i zastępuje go w tym samym miejscu; input jest bezramkowy, od razu aktywny (focus + migający caret) i wypełniony aktualnym tekstem.
 - *(zmiany w istniejącej funkcjonalności)*
 - Ukryto w menu terminala wpis i przycisk „Animation portfolio” (wrapper z atrybutem `hidden` w `index.html`; usunięcie `hidden` przywraca widoczność).
 - Zmieniono loader, aby symulował postęp i wyświetlał memiczne komunikaty co sekundę podczas ładowania.
@@ -41,6 +59,9 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 - Dodano statyczny tytuł `T O P K E K` nad loaderem i wymuszono jednowierszowy `loading-text`.
 
 ### Fixed
+- Wygładzono animacje wejścia menu/UI: ustawiono `animation-fill-mode: both` i `will-change` dla elementów reveal, aby wyeliminować „skakanie” przy opóźnieniach i staggerze.
+- Poprawiono brak animacji wejścia menu/UI na systemach z aktywną preferencją `prefers-reduced-motion`: reveal po intro kamery ponownie wymusza animacje.
+- Poprawiono przedwczesne pojawianie się menu/UI: reveal nie uruchamia się już przy przełączaniu trybu kamery i innych akcjach pobocznych, tylko po zakończeniu intro kamery (z krótkim fallbackiem czasowym względem `INTRO_CAMERA_CONFIG.durationMs`).
 - Przywrócono widoczność wewnętrznych sześcianów napisu: jaśniejsze `MATERIALS.innerCubes`, kompromisowe parametry bloom w `SHADER_CONFIG`, oraz łagodny lift emissive w patchu shadera (`generateParticles` / `loadParticles`).
 - Poprawiono wystawanie inner cubes od przodu przy `particles_*.json`: `CONFIG.innerCubeZBias` faktycznie ustawiony na 0 w `config.js` (wartość 0.22 wypychała połowę rdzenia w stronę +Z względem zbakowanych pozycji).
 - Poprawiono wybielanie inner cubes: usunięto z patcha shadera stałą `+ vec3(0.2)` (podbijała każdy kanał emissive), ujednolicono obie ścieżki tworzenia materiału, dostrojono albedo i metal/roughness w `MATERIALS.innerCubes`, złagodzono bloom w `config.js`.
