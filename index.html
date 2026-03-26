@@ -35,9 +35,12 @@
     <!-- RIGHT PANEL: controls above terminal menu -->
     <div id="right-panel">
     <div id="terminal-menu">
+        <!-- Animation portfolio: ukryte tymczasowo (usuń atrybut hidden z wrappera, by przywrócić) -->
+        <div id="anim-portfolio-terminal-block" hidden>
         <div class="term-line">Animation portfolio</div><br>
         <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
-        <div class="term-line interactive-term-line" id="term-vajbuj">> VAJBUJ</div><br><br>
+        </div>
+        <div class="term-line" id="term-vajbuj">VAJBUJ — w konsoli: vajbuj / vajbuj stop</div><br><br>
         <div class="term-line">Under Development</div><br>
         <div class="term-line">Games</div><br>
         <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
@@ -50,6 +53,14 @@
         <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
         <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
         <div class="term-line">> Frame Gen v_1.0</div>
+    </div>
+    <div id="topkek-terminal-shell" class="topkek-terminal-shell" aria-label="TOPKEK command console">
+        <div class="topkek-terminal-shell-title">console</div>
+        <div class="topkek-terminal-log" role="log" aria-live="polite" data-terminal-log></div>
+        <div class="topkek-terminal-input-row">
+            <span class="topkek-terminal-prompt" data-terminal-prompt>&gt;</span>
+            <input type="text" class="topkek-terminal-input" data-terminal-input autocomplete="off" spellcheck="false" aria-label="Console command" />
+        </div>
     </div>
     </div>
 

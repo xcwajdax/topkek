@@ -35,6 +35,8 @@ export const CONFIG = {
     textSize: IS_MOBILE ? 2.5 : 3, // Smaller text on mobile
     textHeight: IS_MOBILE ? 0.1 : 0.5,
     particleSize: 0.1,
+    // loadParticles(JSON): symmetric ±Z nudge. Use 0 for baked particles_*.json (non-zero pushes z≥0 toward +Z → wystaje „z przodu”).
+    innerCubeZBias: 0,
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: IS_MOBILE ? 15000 : 50000, // Reduced particle count for mobile
     particlesFile: IS_MOBILE ? 'particles_mobile.json' : 'particles_pc.json', // File to load particles from
@@ -413,10 +415,11 @@ export const SHADER_CONFIG = {
         flickerAmount: IS_MOBILE ? 0 : 0.02
     },
     bloom: {
-        threshold: 0.3,
-        strength: 1, // Domyślna siła bloom
-        alternateStrength: 0.3, // Siła bloom po naciśnięciu spacji
-        radius: 1
+        // Kompromis: niższy próg niż 0.6 przywraca poświatę inner cubes; siła umiarkowana żeby skorupa nie przepalała.
+        threshold: 0.48,
+        strength: 0.72,
+        alternateStrength: 0.32, // Siła bloom po naciśnięciu spacji
+        radius: 0.85
     },
     sao: {
         saoBias: 1,                 // Odchylenie cienia (unika artefaktów/shadow acne)
@@ -430,6 +433,15 @@ export const SHADER_CONFIG = {
         saoBlurDepthCutoff: 0.05    // Odcięcie głębi (chroni krawędzie przed rozmyciem na tło)
     }
 
+};
+
+/** Terminal shell UI (bottom of #right-panel): prompt, log limits, welcome text — no logic. */
+export const TERMINAL_CONFIG = {
+    maxLogLines: 200,
+    prompt: '>',
+    welcomeLines: [
+        'TOPKEK console — type help for commands.'
+    ]
 };
 
 // Debug-only flags (default: off). Keep this as data-only: no side effects.
@@ -464,13 +476,13 @@ export const MATERIALS = {
         envMapIntensity: 0.5
     },
     innerCubes: {
-        color: 0xffffff,
-        // Reduce "mirror-like" look so emissive glow dominates.
-        roughness: 0.8,
-        metalness: 0.2,
+        // Jaśniejsze albedo + silniejszy emissive niż 2.4: czytelna siatka w środku bez „białej plamy” (łagodny lift w shaderze).
+        color: 0x5a5a5a,
+        envMapIntensity: 0.52,
+        roughness: 0.88,
+        metalness: 0.06,
         emissive: 0xffffff,
-        // Boost so emissive is visible even with bloom threshold/ACES.
-        emissiveIntensity: 5.0,
+        emissiveIntensity: 4.2,
         toneMapped: false
     }
 };
@@ -484,6 +496,13 @@ export const SHAPE_DEFINITIONS = [
     { id: '1x2', w: 1, h: 2, d: 1, offsets: [[0, 0], [0, 1]] },
     { id: '1x1', w: 1, h: 1, d: 1, offsets: [[0, 0]] }
 ];
+
+// After loader: fly camera from far radius to CONFIG.initialZoom (manual path, ease-in)
+export const INTRO_CAMERA_CONFIG = {
+    durationMs: 3000,
+    /** Must be > CONFIG.initialZoom; keep < camera far plane (0.1..100) */
+    startRadius: 80
+};
 
 // Cinematic Camera Shots
 // Procedural Cinematic Camera Configuration

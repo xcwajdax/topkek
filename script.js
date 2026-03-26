@@ -12,7 +12,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
+import { initTopkekTerminalShell } from './terminal-shell.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
 
 function resolvePerformanceMode() {
     const params = new URLSearchParams(window.location.search);
@@ -165,6 +166,9 @@ const CRTShader = {
 
 // State
 let scene, camera, renderer, composer, crtPass, bloomPass;
+let saoPass = null;
+let keyDirectionalLight = null;
+let fillDirectionalLight = null;
 let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
 let innerCubeInstancedMesh;
 let dummy = new THREE.Object3D();
@@ -540,6 +544,11 @@ let cinematicSwitchTime = 0;
 let lastInteractionTime = Date.now();
 let isInitialSequence = true;
 
+// Intro fly-in (after loader): radius eases from INTRO_CAMERA_CONFIG.startRadius to CONFIG.initialZoom
+let introCameraFlyInActive = false;
+let introFlyInStartTime = 0;
+let introFlyInStartRadius = INTRO_CAMERA_CONFIG.startRadius;
+
 // Cinematic Camera State (Shots imported)
 let cinematicDollySpeed = 0; // Speed of radius change
 let currentShotSpeedMult = 0.2; // Speed of orbit
@@ -733,7 +742,7 @@ function initSceneAndLoad() {
     composer.addPass(renderScene);
 
     if (performanceRuntime.enableSao) {
-        const saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
+        saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
         saoPass.params.saoBias = SHADER_CONFIG.sao.saoBias;
         saoPass.params.saoIntensity = SHADER_CONFIG.sao.saoIntensity;
         saoPass.params.saoScale = SHADER_CONFIG.sao.saoScale;
@@ -744,6 +753,8 @@ function initSceneAndLoad() {
         saoPass.params.saoBlurStdDev = SHADER_CONFIG.sao.saoBlurStdDev;
         saoPass.params.saoBlurDepthCutoff = SHADER_CONFIG.sao.saoBlurDepthCutoff;
         composer.addPass(saoPass);
+    } else {
+        saoPass = null;
     }
 
     if (performanceRuntime.enableBloom) {
@@ -775,18 +786,18 @@ function initSceneAndLoad() {
         });
 
     // Keep a subtle Directional Light1 for sharp shadows
-    const dirLight1 = new THREE.DirectionalLight(0xFF0000, 15);
-    dirLight1.position.set(-10, 1-0, 10);
-    dirLight1.castShadow = true;
-    dirLight1.shadow.mapSize.width = performanceRuntime.shadowMapSize;
-    dirLight1.shadow.mapSize.height = performanceRuntime.shadowMapSize;
-    const dirLight2 = new THREE.DirectionalLight(0x0000FF, 1);
-    dirLight2.position.set(10, 10, 10);
-    dirLight2.castShadow = performanceRuntime.secondLightCastShadow;
-    dirLight2.shadow.mapSize.width = performanceRuntime.shadowMapSize;
-    dirLight2.shadow.mapSize.height = performanceRuntime.shadowMapSize;
-    scene.add(dirLight1);
-    scene.add(dirLight2);
+    keyDirectionalLight = new THREE.DirectionalLight(0xFF0000, 15);
+    keyDirectionalLight.position.set(-10, 1-0, 10);
+    keyDirectionalLight.castShadow = true;
+    keyDirectionalLight.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    keyDirectionalLight.shadow.mapSize.height = performanceRuntime.shadowMapSize;
+    fillDirectionalLight = new THREE.DirectionalLight(0x0000FF, 1);
+    fillDirectionalLight.position.set(10, 10, 10);
+    fillDirectionalLight.castShadow = performanceRuntime.secondLightCastShadow;
+    fillDirectionalLight.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    fillDirectionalLight.shadow.mapSize.height = performanceRuntime.shadowMapSize;
+    scene.add(keyDirectionalLight);
+    scene.add(fillDirectionalLight);
 
     // Debug Cursor
     const debugGeo = new THREE.SphereGeometry(0.2, 16, 16);
@@ -907,6 +918,11 @@ function initSceneAndLoad() {
 
             // Loader is about to disappear; stop fake progress to avoid running in background.
             stopLoaderSimulation({ finalize: true });
+            introFlyInStartRadius = INTRO_CAMERA_CONFIG.startRadius;
+            cameraRadius = introFlyInStartRadius;
+            targetCameraRadius = introFlyInStartRadius;
+            introFlyInStartTime = performance.now();
+            introCameraFlyInActive = true;
             loaderContainer.classList.add('hidden');
             if (backgroundVideoEl) {
                 backgroundVideoEl.play().catch(() => {});
@@ -1009,8 +1025,148 @@ function openPortfolioDetailModal(item) {
 const clock = new THREE.Clock();
 let glitchVolumeNextTrigger = 0; // next time (s) to auto-trigger volumetric glitch
 
+function parseTerminalHexColor(token) {
+    if (!token) return null;
+    let t = token.trim();
+    if (t.toLowerCase().startsWith('0x')) t = t.slice(2);
+    else if (t.startsWith('#')) t = t.slice(1);
+    if (!/^[0-9a-fA-F]{6}$/.test(t)) return null;
+    return parseInt(t, 16);
+}
+
+function passEnabledLine(name, pass) {
+    if (!pass) return `${name}: n/a`;
+    return `${name}: ${pass.enabled ? 'on' : 'off'}`;
+}
+
+function runTopkekTerminalCommand(line) {
+    const parts = line.trim().split(/\s+/).filter(Boolean);
+    const cmd = parts[0].toLowerCase();
+
+    if (cmd === 'help') {
+        return [
+            'help — this list',
+            'clear — clear log',
+            'vajbuj | vajbuj start — start VAJBUJ',
+            'vajbuj stop — stop VAJBUJ',
+            'bloom on | off | strength <n>',
+            'sao on | off (full perf only)',
+            'crt on | off',
+            'light <1|2> color <#rrggbb|0xrrggbb>',
+            'light <1|2> intensity <n>',
+            'postproc status'
+        ];
+    }
+
+    if (cmd === 'vajbuj') {
+        const sub = (parts[1] || 'start').toLowerCase();
+        if (sub === 'stop') {
+            stopVajbujMode();
+            return ['VAJBUJ: stopping…'];
+        }
+        if (sub !== 'start' && parts.length > 1) {
+            return ['Usage: vajbuj | vajbuj start | vajbuj stop'];
+        }
+        if (!VAJBUJ_CONFIG.enabled) return ['VAJBUJ disabled in config.'];
+        if (!vajbujState.audio) return ['VAJBUJ audio not ready yet.'];
+        if (typeof portfolioSceneActive !== 'undefined' && portfolioSceneActive) {
+            exitPortfolioScene();
+            const ap = document.getElementById('term-anim-portfolio');
+            if (ap) ap.classList.remove('portfolio-active');
+        }
+        if (vajbujState.active && !vajbujState.isStopping) {
+            return ['VAJBUJ already active. Use: vajbuj stop'];
+        }
+        if (vajbujState.active) return ['VAJBUJ is stopping, wait…'];
+        startVajbujMode();
+        return ['VAJBUJ started.'];
+    }
+
+    if (cmd === 'bloom') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!bloomPass) return ['Bloom pass not active in this profile.'];
+        if (sub === 'on') {
+            bloomPass.enabled = true;
+            return ['Bloom on.'];
+        }
+        if (sub === 'off') {
+            bloomPass.enabled = false;
+            return ['Bloom off.'];
+        }
+        if (sub === 'strength' && parts[2] !== undefined) {
+            const n = parseFloat(parts[2]);
+            if (!Number.isFinite(n)) return ['Usage: bloom strength <number>'];
+            bloomPass.strength = Math.max(0, Math.min(3, n));
+            return [`Bloom strength = ${bloomPass.strength}`];
+        }
+        return ['Usage: bloom on | off | strength <n>'];
+    }
+
+    if (cmd === 'sao') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!saoPass) return ['SAO not available (lite/mobile or disabled). Try ?perf=full on desktop.'];
+        if (sub === 'on') {
+            saoPass.enabled = true;
+            return ['SAO on.'];
+        }
+        if (sub === 'off') {
+            saoPass.enabled = false;
+            return ['SAO off.'];
+        }
+        return ['Usage: sao on | off'];
+    }
+
+    if (cmd === 'crt') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!crtPass) return ['CRT pass not active in this profile.'];
+        if (sub === 'on') {
+            crtPass.enabled = true;
+            return ['CRT on.'];
+        }
+        if (sub === 'off') {
+            crtPass.enabled = false;
+            return ['CRT off.'];
+        }
+        return ['Usage: crt on | off'];
+    }
+
+    if (cmd === 'light') {
+        const idx = parts[1];
+        const op = (parts[2] || '').toLowerCase();
+        const light = idx === '1' ? keyDirectionalLight : idx === '2' ? fillDirectionalLight : null;
+        if (!light) return ['Usage: light <1|2> color <#hex> | light <1|2> intensity <n>'];
+        if (op === 'color' && parts[3]) {
+            const hex = parseTerminalHexColor(parts[3]);
+            if (hex === null) return ['Invalid color. Use #rrggbb or 0xrrggbb (6 hex digits).'];
+            light.color.setHex(hex);
+            return [`Light ${idx} color set.`];
+        }
+        if (op === 'intensity' && parts[3] !== undefined) {
+            const n = parseFloat(parts[3]);
+            if (!Number.isFinite(n) || n < 0) return ['Invalid intensity.'];
+            light.intensity = n;
+            return [`Light ${idx} intensity = ${n}`];
+        }
+        return ['Usage: light <1|2> color <#hex> | light <1|2> intensity <n>'];
+    }
+
+    if (cmd === 'postproc') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub !== 'status') return ['Usage: postproc status'];
+        return [
+            passEnabledLine('bloom', bloomPass),
+            passEnabledLine('sao', saoPass),
+            passEnabledLine('crt', crtPass)
+        ];
+    }
+
+    return [`Unknown command: ${cmd}. Type help.`];
+}
+
+
 init();
 animate();
+
 
 function createUI() {
     const rightPanel = document.getElementById('right-panel');
@@ -1245,23 +1401,6 @@ function createUI() {
     const termVajbuj = document.getElementById('term-vajbuj');
     if (termVajbuj) {
         window.vajbujButton = termVajbuj;
-        termVajbuj.addEventListener('click', () => {
-            if (!VAJBUJ_CONFIG.enabled || !vajbujState.audio) {
-                console.warn('[VAJBUJ] Disabled or not initialized');
-                return;
-            }
-            if (portfolioSceneActive) {
-                exitPortfolioScene();
-                if (termAnimPortfolio) termAnimPortfolio.classList.remove('portfolio-active');
-            }
-            if (vajbujState.active && !vajbujState.isStopping) {
-                stopVajbujMode();
-                return;
-            }
-            if (vajbujState.active) return;
-            startVajbujMode();
-            termVajbuj.classList.add('vajbuj-active');
-        });
     }
 
     if (termAppstain) {
@@ -1562,6 +1701,8 @@ function createUI() {
 
     // --- END NEW UI ELEMENTS ---
 
+    initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+
     if (IS_MOBILE) {
         const info = document.createElement('div');
         info.className = 'mobile-info';
@@ -1855,6 +1996,7 @@ function triggerVolumetricGlitch(time) {
 
 function setCameraMode(mode) {
     if (mode === 'free') {
+        introCameraFlyInActive = false;
         isFreeCam = true;
         controls.enabled = true;
         controls.target.copy(cameraFocusPoint);
@@ -1862,6 +2004,7 @@ function setCameraMode(mode) {
         isCinematic = false;
         isDragging = false; // Stop any custom dragging
     } else if (mode === 'dynamic') {
+        introCameraFlyInActive = false;
         isFreeCam = false;
         controls.enabled = false;
         isCinematic = true;
@@ -1906,6 +2049,10 @@ function setCameraMode(mode) {
 
 function easeInOutCubic(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeInCubic(t) {
+    return t * t * t;
 }
 
 function computeMotionDesignTargets(font) {
@@ -2636,7 +2783,8 @@ async function generateParticles(font, fontRegular) {
             shader.vertexShader.includes('vInstanceColor') ||
             shader.fragmentShader.includes('vInstanceColor');
         const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        const perInstanceFactor = `(${colorVarying} * 0.4 + vec3(0.2))`;
+        // Mild lift vs raw tint: weaker than old `* 0.4 + vec3(0.2)` so hues stay saturated but dark instance colors still glow inside the shell.
+        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
 
         const before = shader.fragmentShader;
         let after = before;
@@ -2977,6 +3125,19 @@ function animate() {
             camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
             camera.lookAt(cameraFocusPoint);
         } else {
+        if (introCameraFlyInActive) {
+            const nowIntro = performance.now();
+            const ic = INTRO_CAMERA_CONFIG;
+            const tIntro = Math.min(1, (nowIntro - introFlyInStartTime) / ic.durationMs);
+            const eIntro = easeInCubic(tIntro);
+            cameraRadius = introFlyInStartRadius + (CONFIG.initialZoom - introFlyInStartRadius) * eIntro;
+            targetCameraRadius = CONFIG.initialZoom;
+            if (tIntro >= 1) {
+                introCameraFlyInActive = false;
+                cameraRadius = CONFIG.initialZoom;
+            }
+        }
+
         // Cinematic Mode Logic
         if (isCinematic) {
             if (isInitialSequence) {
@@ -3037,9 +3198,11 @@ function animate() {
 
         } else {
             // Smooth Camera Rotation (User Control)
-            cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
-            cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
-            cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+            if (!introCameraFlyInActive) {
+                cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
+                cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
+                cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+            }
 
             // Auto-switch back to dynamic if idle - DISABLED
             /*
@@ -3986,6 +4149,8 @@ function createVajbujBackgroundCubes() {
 function startVajbujMode() {
     if (vajbujState.active) return;
 
+    introCameraFlyInActive = false;
+
     console.log('[VAJBUJ] Starting music video mode!');
     vajbujState.active = true;
     vajbujState.startTime = Date.now();
@@ -4067,6 +4232,8 @@ function startVajbujMode() {
     setTimeout(() => {
         stopVajbujMode();
     }, duration * 1000);
+
+    if (window.vajbujButton) window.vajbujButton.classList.add('vajbuj-active');
 }
 
 function fadeAudio(audio, fromVol, toVol, duration) {
@@ -4787,7 +4954,7 @@ async function loadParticles(data) {
             shader.vertexShader.includes('vInstanceColor') ||
             shader.fragmentShader.includes('vInstanceColor');
         const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        const perInstanceFactor = `(${colorVarying} * 0.8 + vec3(0.2))`;
+        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
 
         const before = shader.fragmentShader;
         let after = before;
@@ -4846,6 +5013,8 @@ async function loadParticles(data) {
     let sIdx = 0;
     data.inner.forEach(p => {
         const pos = new THREE.Vector3(p.p[0], p.p[1], p.p[2]);
+        const zBias = CONFIG.innerCubeZBias ?? 0;
+        pos.z += (pos.z >= 0 ? 1 : -1) * zBias;
 
         dummy.position.copy(pos);
         dummy.scale.setScalar(1);

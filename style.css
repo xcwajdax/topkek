@@ -1392,3 +1392,81 @@ body {
     width: 100%;
     margin-top: 10px;
 }
+
+/* TOPKEK command console (bottom of #right-panel) */
+.topkek-terminal-shell {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: rgba(200, 255, 200, 0.9);
+    background: #0a0a0a;
+    border: 1px solid #4CAF50;
+    border-radius: 4px;
+    padding: 8px;
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.15);
+    pointer-events: auto;
+}
+
+.topkek-terminal-shell-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(76, 175, 80, 0.75);
+    margin-bottom: 6px;
+}
+
+.topkek-terminal-log {
+    max-height: 140px;
+    overflow-y: auto;
+    margin-bottom: 6px;
+    padding: 4px 2px;
+    border: 1px solid rgba(76, 175, 80, 0.25);
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.45);
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.topkek-terminal-log-line {
+    margin: 0 0 2px 0;
+    white-space: pre-wrap;
+}
+
+.topkek-terminal-log-line.topkek-terminal-welcome {
+    color: rgba(129, 199, 132, 0.85);
+}
+
+.topkek-terminal-log-line.topkek-terminal-err {
+    color: #ff8a80;
+}
+
+.topkek-terminal-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.topkek-terminal-prompt {
+    color: #4CAF50;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.topkek-terminal-input {
+    flex: 1;
+    min-width: 0;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(76, 175, 80, 0.4);
+    border-radius: 2px;
+    padding: 4px 6px;
+    outline: none;
+}
+
+.topkek-terminal-input:focus {
+    border-color: #81C784;
+    box-shadow: 0 0 6px rgba(76, 175, 80, 0.25);
+}
