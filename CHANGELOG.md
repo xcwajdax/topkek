@@ -44,6 +44,7 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 - Usunięto tymczasową instrumentację debug (żądania HTTP do serwera ingest, zmienne `_agentLog*`, regiony `agent log`) z `script.js`.
 
 ### Changed
+- Rozszerzono `.gitignore` o projekty Audacity (`.aup3`, `.aup`), logi `.cursor/debug-*.log` oraz katalog `.cursor/skills/`; przestano wersjonować pliki `.aup3` w `ASSETS/mysen` oraz historyczne logi debug w `.cursor/` (pliki zostają tylko lokalnie). W `ASSETS/mysen/README.md` dopisano informację o trzymaniu projektów Audacity poza Gitem.
 - Panel FX dev: zmiana kolejności aktywnych instancji (↑↓); przykładowe presety wybierane z dropdownu + przycisk „Add loop” zamiast trzech osobnych przycisków.
 - Panel FX dev (`/fx dev`): menubar (Minimize, Export all, zamknięcie × dwuklikowe z uzbrojeniem na czerwono), UI po angielsku; aktywne instancje po lewej, edytor po prawej; parametry w wierszach po 3 sloty [nazwa|pole|zakres]; „Export preset” pod blokiem parametrów; import „Choose file” + Apply; własny scrollbar; większe etykiety/hinty; `FX_SAMPLE_PRESETS` — angielskie etykiety.
 - Uaktualniono plan fragmentacji struktury (`docs/plans/2026_03/2026-03-28-plan-fragmentacji-struktury.md`): cienki katalog główny, moduły pod `src/`, agregacja CSS w root, strategia partiali HTML, doprecyzowanie zasady 8–12 granic domenowych vs liczba plików.

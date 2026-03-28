@@ -1,5 +1,7 @@
 # MYSEN — remiks / audio na stronę
 
+Projekty **Audacity** (`.aup3`, `.aup`) trzymaj lokalnie — są w `.gitignore` (duży rozmiar). W repozytorium wystarczy eksport audio (np. `.mp3`).
+
 Umieść tutaj plik audio remiksu (np. `mysen-remix.mp3`) i ustaw `MYSEN_CONFIG.audioFile` w [`config.js`](../../config.js) na tę samą ścieżkę względem rootu strony (np. `ASSETS/mysen/mysen-remix.mp3`).
 
 Jeśli tego pliku nie ma (404), aplikacja spróbuje **`MYSEN_CONFIG.audioFileFallback`** (domyślnie `VAJBUJ_TRIMMED.mp3` w katalogu głównym strony), żeby tryb dało się odpalić podczas testów. Ustaw `audioFileFallback: null`, gdy nie chcesz zapasowej ścieżki.
