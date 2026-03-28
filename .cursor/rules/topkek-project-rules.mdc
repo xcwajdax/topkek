@@ -65,6 +65,11 @@ globs:
     - Jeśli jest ściśle powiązana z TOPKEK sceną, importujemy ją jako moduł.
     - Jeśli jest odrębnym „mini-projektem”, może mieć własne `index.html`/`script.js` w swoim podfolderze.
 
+- **`docs/plans/`**
+  - **Plany implementacji** (specyfikacje, kroki, checklisty przed kodem) zapisujemy w repozytorium w tym katalogu — nie w `.cursor/plans/`, chyba że narzędzie wymusza inną lokalizację.
+  - **Podfoldery według okresu**: `YYYY_MM` (rok i miesiąc ze znakiem podkreślenia), np. `docs/plans/2026_03/` dla marca 2026. Nowy plan tworzymy w podfolderze odpowiadającym dacie rozpoczęcia / miesiącowi pracy.
+  - **Nazwa pliku**: krótki, opisowy slug w kebab-case, preferowany prefix daty `YYYY-MM-DD-` (np. `2026-03-27-buuch-chat-implementation-plan.md`), żeby pliki sortowały się chronologicznie.
+
 ## 3. Zasady dla JavaScript (vanilla, ES modules)
 
 - **Moduły ES**

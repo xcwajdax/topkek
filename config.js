@@ -7,7 +7,8 @@ export const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Ope
 export const PERFORMANCE_CONFIG = {
     storageKey: 'topkek-performance',
     urlParam: 'perf',
-    autoLiteMaxDeviceMemoryGb: 4,
+    // ≤3 GB → lite; 4 GB often reported on capable desktops (see auto perf heuristic)
+    autoLiteMaxDeviceMemoryGb: 3,
     autoLiteMaxHardwareConcurrency: 4,
     profiles: {
         full: {
@@ -151,6 +152,11 @@ export const CONFIG = {
             innerCubes: 0.1,
             heart: 1.35,
             vajbujBgCubes: 2.0
+        },
+        bpmControl: {
+            baseBpm: 120,
+            defaultBpm: 120,
+            options: [60, 75, 90, 100, 110, 120, 128, 140, 160]
         }
     }
 };
@@ -273,6 +279,107 @@ export const GLITCH_VOLUME_PRESETS = {
 
 export const GLITCH_VOLUME_STATE = {
     currentPreset: 'subtelny'
+};
+
+// Base of volumetric effects controlled from terminal (MVP).
+export const FX_CONFIG = {
+    global: {
+        enabled: true,
+        defaultBpm: 120,
+        timeMode: 'hybrid',
+        maxActiveInstances: 24
+    },
+    registry: {
+        scatterBurst: {
+            label: 'Scatter Burst',
+            aliases: ['sc', 'scatter'],
+            defaults: {
+                frequency: '1/4',
+                scale: 1.0,
+                speed: 1.0,
+                spread: 0.55,
+                decay: 0.6,
+                easing: 'outCubic',
+                variation: 'radial'
+            },
+            ranges: {
+                scale: { min: 0.1, max: 5.0 },
+                speed: { min: 0.1, max: 8.0 },
+                spread: { min: 0.05, max: 1.0 },
+                decay: { min: 0.05, max: 3.0 }
+            }
+        },
+        letterEmission: {
+            label: 'Letter Emission',
+            aliases: ['le', 'emit'],
+            defaults: {
+                target: 'both',
+                distribution: 'sequential',
+                color: '#66ccff',
+                duration: '1/8',
+                frequency: '1/8',
+                falloff: 0.65,
+                gain: 1.0,
+                easing: 'inOutCubic'
+            },
+            ranges: {
+                falloff: { min: 0.05, max: 1.5 },
+                gain: { min: 0.1, max: 4.0 }
+            }
+        },
+        repulsionSwarm: {
+            label: 'Repulsion Swarm',
+            aliases: ['rp', 'swarm'],
+            defaults: {
+                count: 3,
+                radius: 3.0,
+                speed: 1.2,
+                turnRate: 1.0,
+                pattern: 'wander',
+                easing: 'linear'
+            },
+            ranges: {
+                count: { min: 1, max: 12 },
+                radius: { min: 0.5, max: 12.0 },
+                speed: { min: 0.1, max: 6.0 },
+                turnRate: { min: 0.1, max: 6.0 }
+            }
+        },
+        gridNoiseMask: {
+            label: 'Grid Noise Mask',
+            aliases: ['gn', 'gridnoise'],
+            defaults: {
+                noiseType: 'sine',
+                loopLength: '2b',
+                clampUp: 1.0,
+                clampDown: 0.0,
+                brightness: 0.5,
+                contrast: 1.0,
+                speed: 1.0,
+                threshold: 0.6,
+                bpmSync: 1
+            },
+            ranges: {
+                clampUp: { min: 0.0, max: 1.0 },
+                clampDown: { min: 0.0, max: 1.0 },
+                brightness: { min: 0.0, max: 2.0 },
+                contrast: { min: 0.1, max: 3.0 },
+                speed: { min: 0.1, max: 6.0 },
+                threshold: { min: 0.0, max: 1.0 }
+            }
+        }
+    },
+    aliasCommands: {
+        sc_trig: 'fx trigger scatterBurst',
+        sc_start: 'fx start scatterBurst',
+        rp_trig: 'fx trigger repulsionSwarm',
+        rp_start: 'fx start repulsionSwarm',
+        gn_trig: 'fx trigger gridNoiseMask',
+        gn_start: 'fx start gridNoiseMask',
+        le_trig: 'fx trigger letterEmission',
+        le_start: 'fx start letterEmission',
+        fx_bpm: 'fx bpm'
+    }
 };
 
 // VAJBUJ SZMATO Mode Configuration
@@ -438,11 +545,85 @@ export const SHADER_CONFIG = {
 /** Terminal shell UI (bottom of #right-panel): prompt, log limits, welcome text — no logic. */
 export const TERMINAL_CONFIG = {
     maxLogLines: 200,
-    prompt: '>',
+    /** Shown before typed input and echoed user lines in the log. */
+    prompt: 'U >',
+    /** Prefix before Buuch chat replies in the log (space added before body). */
+    buuchLogPrefix: 'B >',
     welcomeLines: [
-        'TOPKEK console — type help for commands.'
-    ]
+        'TOPKEK console — /help for a short list, /help full for every command line.'
+    ],
+    timestamp: {
+        enabled: true,
+        locale: 'en-GB',
+        hour12: false,
+        showSeconds: true
+    },
+    stream: {
+        enabled: true,
+        /** Conversational replies (Buuch, default command output). */
+        charDelayMs: 8,
+        lineDelayMs: 45,
+        /** Long listings e.g. /help full — character typing uses this profile in terminal-shell. */
+        fastCharDelayMs: 2,
+        fastLineDelayMs: 15
+    },
+    shellUi: {
+        maximizedClass: 'topkek-terminal-shell--maximized',
+        collapsedClass: 'topkek-terminal-shell--collapsed'
+    }
 };
+
+/** Short `/help` listing (console). Full reference: `/help full`. */
+export const TERMINAL_HELP_LINES_COMPACT = [
+    '/help // Short list. ex: /help',
+    '/help full // Every command line + FX aliases. ex: /help full',
+    '/clear // Clears console log. ex: /clear',
+    '/vajbuj [start|stop] // VAJBUJ mode. ex: /vajbuj start',
+    '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
+    '/postproc <status> // Bloom / SAO / CRT pass states. ex: /postproc status',
+    '/material <toggle|default|alt|status> // TOP/KEK materials. ex: /material toggle',
+    '/light <1|2> color <#rrggbb|0xrrggbb> | /light <1|2> intensity <value> // Lights.',
+    '/fx list // Effect ids and aliases (use for shortcut names). ex: /fx list',
+    '/fx dev // Toggle FX developer panel (params + preset). ex: /fx dev',
+    '/fx on | /fx off // Enable or disable FX runtime. ex: /fx off',
+    '/fx status | /fx bpm | /fx set | /fx trigger | /fx start | /fx stop // FX control.',
+    'FX time tokens: 0.25s | 2s | 1b | 2b | 1/4 | 1/8'
+];
+
+/** Full `/help full` listing (same content as former default /help). */
+export const TERMINAL_HELP_LINES_FULL = [
+    '/help // Short list. ex: /help',
+    '/help full // This full list. ex: /help full',
+    '/clear // Clears console log. ex: /clear',
+    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode. ex: /vajbuj start',
+    '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
+    '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
+    '/crt <on|off> // Toggles CRT pass. ex: /crt off',
+    '/postproc <status> // Prints pass states. ex: /postproc status',
+    '/material <toggle|default|alt|status> // Switches TOP/KEK material mode. ex: /material toggle',
+    '/light <1|2> color <#rrggbb|0xrrggbb> // Sets light color. ex: /light 1 color #66ccff',
+    '/light <1|2> intensity <value> // Sets light intensity. ex: /light 2 intensity 1.8',
+    '/fx list // Lists effect ids and aliases. ex: /fx list',
+    '/fx dev // Toggles FX developer panel (defaults, Trigger / Start / Stop, JSON preset). ex: /fx dev',
+    '/fx on // Enables FX runtime (same as panel checkbox). ex: /fx on',
+    '/fx off // Disables FX runtime. ex: /fx off',
+    '/fx status // Shows FX runtime and active instances. ex: /fx status',
+    '/fx bpm <value> // Sets global FX BPM (20..300). ex: /fx bpm 128',
+    '/fx set <effectId.param> <value> // Sets default FX parameter. ex: /fx set scatterBurst.speed 2.1',
+    '/fx trigger <effectId> [param=value ...] // Runs one-shot effect. ex: /fx trigger scatterBurst speed=2',
+    '/fx start <effectId> [param=value ...] // Starts looped effect. ex: /fx start repulsionSwarm count=4',
+    '/fx stop <instanceId|effectId|all> // Stops matching FX instances. ex: /fx stop all',
+    '/sc_trig // Alias: /fx trigger scatterBurst. ex: /sc_trig speed=2',
+    '/sc_start // Alias: /fx start scatterBurst. ex: /sc_start speed=2',
+    '/rp_trig // Alias: /fx trigger repulsionSwarm. ex: /rp_trig count=3',
+    '/rp_start // Alias: /fx start repulsionSwarm. ex: /rp_start radius=3',
+    '/gn_trig // Alias: /fx trigger gridNoiseMask. ex: /gn_trig threshold=0.6',
+    '/gn_start // Alias: /fx start gridNoiseMask. ex: /gn_start speed=1.4',
+    '/le_trig // Alias: /fx trigger letterEmission. ex: /le_trig distribution=random',
+    '/le_start // Alias: /fx start letterEmission. ex: /le_start target=both',
+    '/fx_bpm <value> // Alias: /fx bpm <value>. ex: /fx_bpm 140',
+    'FX time tokens: 0.25s | 2s | 1b | 2b | 1/4 | 1/8'
+];
 
 // Debug-only flags (default: off). Keep this as data-only: no side effects.
 export const DEBUG_FLAGS = {
@@ -524,6 +705,23 @@ export const POST_INTRO_UI_CONFIG = {
 export const CAMERA_HUD_CONFIG = {
     coordinateDecimals: 2,
     defaultFov: 45
+};
+
+// Performance HUD (FPS + mini graph highs/lows)
+export const PERF_HUD_CONFIG = {
+    enabled: true,
+    updateIntervalMs: 120,
+    smoothingAlpha: 0.2,
+    graph: {
+        width: 180,
+        height: 54,
+        maxSamples: 72,
+        yMaxFps: 60
+    },
+    thresholds: {
+        goodFps: 58,
+        warnFps: 45
+    }
 };
 
 // Cinematic Camera Shots

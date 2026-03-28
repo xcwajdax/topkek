@@ -13,7 +13,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
 import { initTopkekTerminalShell } from './terminal-shell.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG, DEBUG_FLAGS } from './config.js';
+import { initFxDevPanel } from './fx-dev-panel.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
 
 const CUSTOM_TEXT_QUERY_PARAM = 'text';
 const MAX_CUSTOM_TEXT_LENGTH = 10;
@@ -207,6 +208,9 @@ let backgroundVideoTexture = null;
 /** Drugi VideoTexture z mapping equirect — nie ruszamy UV płaszczyzny tła */
 let backgroundVideoTextureEnv = null;
 let backgroundVideoMesh = null;
+/** Użytkownik świadomie wstrzymał wideo tła — nie wymuszaj odtwarzania po loaderze. */
+let backgroundVideoUserPaused = false;
+let backgroundVideoPlayToggleBtn = null;
 
 // Frame-sync helpers for video-based lighting (reduces perceived lag)
 let videoFrameCounter = 0;
@@ -228,6 +232,9 @@ let videoAmbientLight = null;
 
 // Active profile for currently playing background video (used for per-BG intensity "emission" tuning).
 let activeBackgroundVideoSource = null;
+let currentBackgroundBpm = CONFIG.backgroundVideo?.bpmControl?.defaultBpm ?? CONFIG.backgroundVideo?.bpmControl?.baseBpm ?? 120;
+let backgroundBeatSegments = [];
+let backgroundBeatLastStep = -1;
 
 function getActiveHemisphereCfg() {
     const base = CONFIG.backgroundVideo?.hemisphereFromVideo ?? {};
@@ -241,22 +248,75 @@ function getActiveEnvMapIntensityBoost() {
     return { ...base, ...override };
 }
 
-function cycleBackgroundVideo() {
+function normalizeBackgroundVideoSrc(src) {
+    return typeof src === 'string' ? src.replace(/^\//, '') : '';
+}
+
+function getBackgroundVideoLabel(src) {
+    const normalized = normalizeBackgroundVideoSrc(src);
+    if (!normalized) return 'Unknown BG';
+    const parts = normalized.split('/');
+    return parts[parts.length - 1] || normalized;
+}
+
+function getBackgroundPlaybackRateFromBpm(bpm) {
+    const bgCfg = CONFIG.backgroundVideo;
+    const bpmCfg = bgCfg?.bpmControl ?? {};
+    const baseBpm = Number(bpmCfg.baseBpm) || 120;
+    const safeBpm = Number(bpm) || baseBpm;
+    return Math.max(0.1, safeBpm / baseBpm);
+}
+
+function applyBackgroundVideoPlaybackRate(bpm) {
+    currentBackgroundBpm = Number(bpm) || currentBackgroundBpm;
+    if (!backgroundVideoEl) return;
+    backgroundVideoEl.playbackRate = getBackgroundPlaybackRateFromBpm(currentBackgroundBpm);
+}
+
+function updateBackgroundVideoPlayToggleUi() {
+    if (!backgroundVideoPlayToggleBtn || !backgroundVideoEl) return;
+    const paused = backgroundVideoEl.paused;
+    backgroundVideoPlayToggleBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    const resume = 'Wznów wideo tła';
+    const pause = 'Wstrzymaj wideo tła';
+    backgroundVideoPlayToggleBtn.title = paused ? resume : pause;
+    backgroundVideoPlayToggleBtn.setAttribute('aria-label', paused ? resume : pause);
+    backgroundVideoPlayToggleBtn.textContent = paused ? '▶' : '⏸';
+}
+
+function updateBackgroundBeatIndicator(elapsedSeconds) {
+    if (!Array.isArray(backgroundBeatSegments) || backgroundBeatSegments.length !== 4) return;
+    if (backgroundVideoEl && backgroundVideoEl.paused) {
+        backgroundBeatSegments.forEach((segment) => segment.classList.remove('is-active'));
+        backgroundBeatLastStep = -1;
+        return;
+    }
+    const safeBpm = Math.max(1, Number(currentBackgroundBpm) || 120);
+    const beatSec = 60 / safeBpm;
+    const step = Math.floor(elapsedSeconds / beatSec) % 4;
+    if (step === backgroundBeatLastStep) return;
+    backgroundBeatLastStep = step;
+    backgroundBeatSegments.forEach((segment, index) => {
+        segment.classList.toggle('is-active', index === step);
+    });
+}
+
+function setBackgroundVideoBySrc(nextSrc) {
     const bgCfg = CONFIG.backgroundVideo;
     const sources = bgCfg?.sources;
-    if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0) return;
-    const currentSrc = backgroundVideoEl.src ? new URL(backgroundVideoEl.src, window.location.origin).pathname.replace(/^\//, '') : '';
-    const normalizeSrc = (src) => (typeof src === 'string' ? src.replace(/^\//, '') : '');
+    if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0 || !nextSrc) return;
 
-    const others = sources.filter(s => normalizeSrc(s?.src) !== currentSrc);
-    const pool = others.length ? others : sources;
-    const next = pool[Math.floor(Math.random() * pool.length)];
+    const normalizedTarget = normalizeBackgroundVideoSrc(nextSrc);
+    const next = sources.find(s => normalizeBackgroundVideoSrc(s?.src) === normalizedTarget);
     if (!next?.src) return;
 
     activeBackgroundVideoSource = next;
+    backgroundVideoUserPaused = false;
     backgroundVideoEl.src = next.src;
     backgroundVideoEl.load();
+    applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
     backgroundVideoEl.play().catch(() => {});
+    updateBackgroundVideoPlayToggleUi();
     videoIblLastPmremTime = 0;
     videoIblLastHemisphereSampleTime = 0;
     lastHemiSampleFrameCounter = -1;
@@ -573,6 +633,18 @@ let currentShotSpeedMult = 0.2; // Speed of orbit
 let cameraHudModeEl = null;
 let cameraHudPosEl = null;
 let cameraHudTgtEl = null;
+let perfHudRootEl = null;
+let perfHudFpsEl = null;
+let perfHudHighEl = null;
+let perfHudLowEl = null;
+let perfHudCanvasEl = null;
+let perfHudCtx = null;
+const perfHudState = {
+    lastFrameTs: 0,
+    lastUiTs: 0,
+    smoothedFps: 0,
+    samples: []
+};
 
 // DOM Elements
 const container = document.getElementById('canvas-container');
@@ -879,6 +951,7 @@ function initSceneAndLoad() {
         backgroundVideoEl.preload = 'auto';
         backgroundVideoEl.crossOrigin = 'anonymous';
         backgroundVideoEl.src = bgSrc;
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
         backgroundVideoEl.load();
 
         const updateVideoProgress = () => {
@@ -898,6 +971,8 @@ function initSceneAndLoad() {
         backgroundVideoEl.addEventListener('progress', updateVideoProgress);
         backgroundVideoEl.addEventListener('loadedmetadata', updateVideoProgress);
         backgroundVideoEl.addEventListener('loadeddata', updateVideoProgress);
+        backgroundVideoEl.addEventListener('play', () => updateBackgroundVideoPlayToggleUi());
+        backgroundVideoEl.addEventListener('pause', () => updateBackgroundVideoPlayToggleUi());
 
         videoReadyPromise = new Promise((resolve) => {
             const onReady = () => {
@@ -983,7 +1058,7 @@ function initSceneAndLoad() {
                 revealPostIntroUi();
             }, INTRO_CAMERA_CONFIG.durationMs + 200);
             loaderContainer.classList.add('hidden');
-            if (backgroundVideoEl) {
+            if (backgroundVideoEl && !backgroundVideoUserPaused) {
                 backgroundVideoEl.play().catch(() => {});
             }
             setTimeout(() => {
@@ -1023,6 +1098,60 @@ function initSceneAndLoad() {
     }, cinematicConfig.initialDelay);
 
     createUI();
+}
+
+function makeSectionCollapsible(sectionEl, label) {
+    if (!sectionEl || sectionEl.dataset.sectionToggleBound === '1') return;
+
+    const content = document.createElement('div');
+    content.className = 'menu-section-content';
+    while (sectionEl.firstChild) {
+        content.appendChild(sectionEl.firstChild);
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'menu-section-toggle';
+
+    const applyCollapsedState = (collapsed) => {
+        sectionEl.classList.toggle('menu-section-collapsed', collapsed);
+        btn.textContent = collapsed ? '+' : '−';
+        const action = collapsed ? 'Expand' : 'Collapse';
+        btn.setAttribute('aria-label', `${action} ${label}`);
+        btn.title = `${action} ${label}`;
+    };
+
+    btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        applyCollapsedState(!sectionEl.classList.contains('menu-section-collapsed'));
+    });
+
+    sectionEl.classList.add('menu-collapsible-section');
+    sectionEl.appendChild(btn);
+    sectionEl.appendChild(content);
+    sectionEl.dataset.sectionToggleBound = '1';
+    applyCollapsedState(false);
+}
+
+function initSectionMenuToggles() {
+    const cameraHud = document.getElementById('camera-hud');
+    if (cameraHud) {
+        const cameraHudSections = Array.from(cameraHud.querySelectorAll('.controls-section'));
+        cameraHudSections.forEach((section, index) => {
+            makeSectionCollapsible(section, `left section ${index + 1}`);
+        });
+    }
+
+    const perfHud = document.getElementById('perf-hud');
+    if (perfHud) makeSectionCollapsible(perfHud, 'performance panel');
+
+    const uiContainer = document.getElementById('ui-container');
+    if (uiContainer) makeSectionCollapsible(uiContainer, 'right controls');
+
+    const terminalMenu = document.getElementById('terminal-menu');
+    if (terminalMenu) makeSectionCollapsible(terminalMenu, 'terminal menu');
+
+    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see terminal-shell.js */
 }
 
 // --- Portfolio Vimeo helpers ---
@@ -1069,6 +1198,362 @@ function openPortfolioDetailModal(item) {
 
 const clock = new THREE.Clock();
 let glitchVolumeNextTrigger = 0; // next time (s) to auto-trigger volumetric glitch
+/** @type {{ toggle: () => void, isVisible: () => boolean, syncFromRuntime: () => void } | null} */
+let fxDevPanelControl = null;
+
+const fxRuntime = {
+    enabled: FX_CONFIG?.global?.enabled !== false,
+    bpm: FX_CONFIG?.global?.defaultBpm || 120,
+    nextInstanceId: 1,
+    activeInstances: [],
+    defaults: {}
+};
+Object.keys(FX_CONFIG?.registry || {}).forEach((effectId) => {
+    fxRuntime.defaults[effectId] = { ...(FX_CONFIG.registry[effectId]?.defaults || {}) };
+});
+
+const fxTmpVec = new THREE.Vector3();
+
+function normalizeFxAlias(line) {
+    if (!line) return line;
+    const trimmed = line.trim();
+    const firstToken = trimmed.split(/\s+/)[0]?.toLowerCase();
+    const alias = FX_CONFIG?.aliasCommands?.[firstToken];
+    if (!alias) return line;
+    const rest = trimmed.slice(firstToken.length).trim();
+    return `${alias}${rest ? ` ${rest}` : ''}`;
+}
+
+function resolveFxSeconds(value, bpm = fxRuntime.bpm) {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const token = String(value).trim().toLowerCase();
+    if (!token) return null;
+    if (/^\d+(\.\d+)?s$/.test(token)) return parseFloat(token.slice(0, -1));
+    if (/^\d+(\.\d+)?b$/.test(token)) {
+        const beats = parseFloat(token.slice(0, -1));
+        return beats * 60 / Math.max(1, bpm);
+    }
+    if (/^\d+\/\d+$/.test(token)) {
+        const [aRaw, bRaw] = token.split('/');
+        const a = parseFloat(aRaw);
+        const b = parseFloat(bRaw);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || b <= 0) return null;
+        return (a / b) * 4 * 60 / Math.max(1, bpm);
+    }
+    const numeric = parseFloat(token);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseFxParams(rawParts, fromIndex = 0) {
+    const params = {};
+    for (let i = fromIndex; i < rawParts.length; i++) {
+        const t = rawParts[i];
+        const eq = t.indexOf('=');
+        if (eq <= 0) continue;
+        const key = t.slice(0, eq).trim();
+        const valueRaw = t.slice(eq + 1).trim();
+        if (!key) continue;
+        if (valueRaw === 'true' || valueRaw === 'false') {
+            params[key] = valueRaw === 'true';
+            continue;
+        }
+        if (/^#?[0-9a-f]{6}$/i.test(valueRaw) || /^0x[0-9a-f]{6}$/i.test(valueRaw)) {
+            params[key] = valueRaw;
+            continue;
+        }
+        const num = parseFloat(valueRaw);
+        params[key] = Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(valueRaw) ? num : valueRaw;
+    }
+    return params;
+}
+
+function getFxRegistryConfig(effectId) {
+    return FX_CONFIG?.registry?.[effectId] || null;
+}
+
+function resolveFxEffectId(inputId) {
+    const id = String(inputId || '').trim();
+    if (!id) return null;
+    if (FX_CONFIG?.registry?.[id]) return id;
+    const low = id.toLowerCase();
+    const keys = Object.keys(FX_CONFIG?.registry || {});
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const aliases = FX_CONFIG.registry[key]?.aliases || [];
+        if (aliases.some((a) => String(a).toLowerCase() === low)) return key;
+    }
+    return null;
+}
+
+function clampFxParam(effectId, key, value) {
+    const effectCfg = getFxRegistryConfig(effectId);
+    const range = effectCfg?.ranges?.[key];
+    if (!range || typeof value !== 'number' || !Number.isFinite(value)) return value;
+    return Math.max(range.min, Math.min(range.max, value));
+}
+
+function getSubtitleSplitY() {
+    const offsetY = CONFIG?.subtitle?.offsetY;
+    if (!Number.isFinite(offsetY)) return -1.5;
+    return offsetY * 0.5;
+}
+
+function getGroupLayer(group) {
+    return group.originalPos.y < getSubtitleSplitY() ? 'subtitle' : 'main';
+}
+
+function getTargetGroupsByMode(targetMode) {
+    const mode = String(targetMode || 'both').toLowerCase();
+    if (mode === 'main') return cubeGroups.filter((g) => getGroupLayer(g) === 'main');
+    if (mode === 'subtitle') return cubeGroups.filter((g) => getGroupLayer(g) === 'subtitle');
+    return cubeGroups;
+}
+
+function resolveFxParams(effectId, overrides = {}) {
+    const defaults = fxRuntime.defaults[effectId] || getFxRegistryConfig(effectId)?.defaults || {};
+    const merged = { ...defaults, ...overrides };
+    const normalized = {};
+    Object.keys(merged).forEach((k) => {
+        normalized[k] = clampFxParam(effectId, k, merged[k]);
+    });
+    return normalized;
+}
+
+function nextFxIntervalSeconds(params) {
+    return Math.max(0.03, resolveFxSeconds(params.frequency, fxRuntime.bpm) || 0.25);
+}
+
+function applyScatterBurst(params) {
+    const spread = Math.max(0.05, Math.min(1, params.spread ?? 0.5));
+    const speed = Math.max(0.1, params.speed ?? 1);
+    const scale = Math.max(0.1, params.scale ?? 1);
+    const count = Math.max(4, Math.floor(cubeGroups.length * Math.min(0.6, spread * 0.35)));
+    for (let i = 0; i < count; i++) {
+        const idx = Math.floor(Math.random() * cubeGroups.length);
+        const group = cubeGroups[idx];
+        if (!group) continue;
+        fxTmpVec.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(0.08 * speed * scale);
+        group.isFlying = true;
+        group.velocity.add(fxTmpVec);
+        group.returnStartTime = (Date.now() * 0.001) + 0.25 + (params.decay || 0.5);
+    }
+}
+
+function applyRepulsionSwarm(instance, dt) {
+    if (!instance.state.points || instance.state.points.length === 0) return;
+    const params = instance.params;
+    const radius = Math.max(0.2, params.radius ?? 3);
+    const speed = Math.max(0.1, params.speed ?? 1);
+    const turnRate = Math.max(0.05, params.turnRate ?? 1);
+    const now = instance.elapsed;
+    for (let i = 0; i < instance.state.points.length; i++) {
+        const p = instance.state.points[i];
+        p.phase += dt * turnRate;
+        const r = radius * (0.65 + 0.35 * Math.sin(p.seed + now * 0.3));
+        p.pos.set(
+            Math.sin(p.phase + p.seed) * r,
+            Math.cos(p.phase * 1.7 + p.seed) * r * 0.7,
+            Math.cos(p.phase + p.seed) * r
+        );
+        for (let g = 0; g < cubeGroups.length; g++) {
+            const group = cubeGroups[g];
+            const dist = group.currentPos.distanceTo(p.pos);
+            if (dist > radius) continue;
+            fxTmpVec.subVectors(group.currentPos, p.pos);
+            if (fxTmpVec.lengthSq() < 1e-6) continue;
+            fxTmpVec.normalize().multiplyScalar((1 - dist / radius) * 0.06 * speed);
+            group.velocity.add(fxTmpVec);
+        }
+    }
+}
+
+function applyLetterEmission(instance) {
+    const params = instance.params;
+    const groups = getTargetGroupsByMode(params.target);
+    if (!groups.length) return;
+    const distribution = String(params.distribution || 'sequential');
+    let chosen = null;
+    if (distribution === 'random') {
+        chosen = groups[Math.floor(Math.random() * groups.length)];
+    } else if (distribution === 'pingpong') {
+        const n = groups.length;
+        const idx = instance.state.index % (n * 2 - 2 || 1);
+        const mirrored = idx < n ? idx : (2 * n - 2 - idx);
+        chosen = groups[Math.max(0, Math.min(n - 1, mirrored))];
+        instance.state.index += 1;
+    } else {
+        chosen = groups[instance.state.index % groups.length];
+        instance.state.index += 1;
+    }
+    if (!chosen) return;
+    chosen.fxGlowUntil = instance.now + Math.max(0.04, resolveFxSeconds(params.duration, fxRuntime.bpm) || 0.2);
+    chosen.fxGlowGain = Math.max(0.1, params.gain ?? 1);
+}
+
+function noiseAt(x, y, t, speed = 1) {
+    return 0.5 + 0.5 * Math.sin((x * 1.7 + y * 1.2) + t * speed);
+}
+
+function applyGridNoiseMask(instance) {
+    const params = instance.params;
+    const threshold = Math.max(0, Math.min(1, params.threshold ?? 0.6));
+    const speed = Math.max(0.1, params.speed ?? 1);
+    let hits = 0;
+    for (let i = 0; i < cubeGroups.length; i++) {
+        const g = cubeGroups[i];
+        const n = noiseAt(g.originalPos.x, g.originalPos.y, instance.elapsed, speed);
+        if (n < threshold) continue;
+        hits++;
+        if (hits > 120) break;
+        g.glitchDisplayOffset.set(
+            (Math.random() - 0.5) * 0.12,
+            (Math.random() - 0.5) * 0.12,
+            (Math.random() - 0.5) * 0.12
+        );
+        g.glitchEndTime = instance.now + 0.08;
+    }
+}
+
+function buildFxInstance(effectId, mode, params) {
+    return {
+        id: `fx-${fxRuntime.nextInstanceId++}`,
+        effectId,
+        mode,
+        params,
+        createdAt: clock.getElapsedTime(),
+        now: clock.getElapsedTime(),
+        elapsed: 0,
+        nextFireAt: clock.getElapsedTime(),
+        state: {
+            index: 0,
+            points: []
+        }
+    };
+}
+
+function startFxEffect(effectId, mode = 'trigger', overrides = {}) {
+    if (!fxRuntime.enabled) return { ok: false, lines: ['FX runtime is disabled.'] };
+    const resolvedId = resolveFxEffectId(effectId);
+    if (!resolvedId) return { ok: false, lines: [`Unknown effect: ${effectId}`] };
+    const params = resolveFxParams(resolvedId, overrides);
+    if (fxRuntime.activeInstances.length >= (FX_CONFIG?.global?.maxActiveInstances || 24)) {
+        return { ok: false, lines: ['Too many active FX instances. Stop some effects first.'] };
+    }
+    const instance = buildFxInstance(resolvedId, mode, params);
+    if (resolvedId === 'repulsionSwarm') {
+        const count = Math.round(params.count || 3);
+        instance.state.points = Array.from({ length: Math.max(1, count) }, (_, idx) => ({
+            seed: Math.random() * Math.PI * 2 + idx,
+            phase: Math.random() * Math.PI * 2,
+            pos: new THREE.Vector3()
+        }));
+    }
+    fxRuntime.activeInstances.push(instance);
+    return { ok: true, instance, lines: [`FX ${mode}: ${resolvedId} (${instance.id})`] };
+}
+
+function stopFxEffects(target = 'all') {
+    const low = String(target || 'all').toLowerCase();
+    if (low === 'all') {
+        const count = fxRuntime.activeInstances.length;
+        fxRuntime.activeInstances = [];
+        return [`Stopped ${count} FX instance(s).`];
+    }
+    const before = fxRuntime.activeInstances.length;
+    fxRuntime.activeInstances = fxRuntime.activeInstances.filter((inst) => inst.id !== target && inst.effectId !== target);
+    return [`Stopped ${before - fxRuntime.activeInstances.length} FX instance(s).`];
+}
+
+function listFxEffects() {
+    return Object.entries(FX_CONFIG?.registry || {}).map(([id, cfg]) => {
+        const aliases = (cfg.aliases || []).join(', ');
+        return `${id}${aliases ? ` (aliases: ${aliases})` : ''}`;
+    });
+}
+
+function updateFxRuntime(now, dt) {
+    if (!fxRuntime.enabled || fxRuntime.activeInstances.length === 0) return;
+    for (let i = fxRuntime.activeInstances.length - 1; i >= 0; i--) {
+        const inst = fxRuntime.activeInstances[i];
+        inst.now = now;
+        inst.elapsed = now - inst.createdAt;
+        const shouldFire = now >= inst.nextFireAt;
+        if (!shouldFire) {
+            if (inst.effectId === 'repulsionSwarm') applyRepulsionSwarm(inst, dt);
+            continue;
+        }
+        if (inst.effectId === 'scatterBurst') applyScatterBurst(inst.params);
+        else if (inst.effectId === 'letterEmission') applyLetterEmission(inst);
+        else if (inst.effectId === 'repulsionSwarm') applyRepulsionSwarm(inst, dt);
+        else if (inst.effectId === 'gridNoiseMask') applyGridNoiseMask(inst);
+
+        if (inst.mode === 'trigger') {
+            fxRuntime.activeInstances.splice(i, 1);
+        } else {
+            inst.nextFireAt = now + nextFxIntervalSeconds(inst.params);
+        }
+    }
+}
+
+function fxStatusLines() {
+    const header = `FX runtime: ${fxRuntime.enabled ? 'on' : 'off'} | bpm=${fxRuntime.bpm} | active=${fxRuntime.activeInstances.length}`;
+    const lines = fxRuntime.activeInstances.slice(0, 10).map((inst) =>
+        `${inst.id}: ${inst.effectId} [${inst.mode}] next=${Math.max(0, inst.nextFireAt - clock.getElapsedTime()).toFixed(2)}s`
+    );
+    return [header, ...lines];
+}
+
+function fxDevGetRuntime() {
+    return {
+        enabled: fxRuntime.enabled,
+        bpm: fxRuntime.bpm,
+        defaults: JSON.parse(JSON.stringify(fxRuntime.defaults))
+    };
+}
+
+function fxDevSetEnabled(v) {
+    fxRuntime.enabled = !!v;
+}
+
+function fxDevSetBpm(n) {
+    fxRuntime.bpm = Math.max(20, Math.min(300, n));
+}
+
+function fxDevApplyDefaultKey(effectId, key, rawStr) {
+    if (rawStr === '') return false;
+    const parsed = parseFxParams([`${key}=${rawStr}`], 0);
+    if (parsed[key] == null) return false;
+    fxRuntime.defaults[effectId] = resolveFxParams(effectId, { [key]: parsed[key] });
+    return true;
+}
+
+function fxDevApplyPreset(data) {
+    if (!data || typeof data !== 'object') return { ok: false, error: 'not an object' };
+    if (data.topkekFxPreset !== 1) return { ok: false, error: 'topkekFxPreset must be 1' };
+    if (data.bpm != null) {
+        const n = Number(data.bpm);
+        if (Number.isFinite(n)) fxDevSetBpm(n);
+    }
+    if (data.fxEnabled != null) fxRuntime.enabled = !!data.fxEnabled;
+    if (data.defaults && typeof data.defaults === 'object') {
+        Object.entries(data.defaults).forEach(([id, params]) => {
+            if (!FX_CONFIG.registry[id]) return;
+            if (!params || typeof params !== 'object') return;
+            fxRuntime.defaults[id] = resolveFxParams(id, params);
+        });
+    }
+    return { ok: true };
+}
+
+function fxDevExportPreset() {
+    return {
+        topkekFxPreset: 1,
+        bpm: fxRuntime.bpm,
+        fxEnabled: fxRuntime.enabled,
+        defaults: JSON.parse(JSON.stringify(fxRuntime.defaults))
+    };
+}
 
 function parseTerminalHexColor(token) {
     if (!token) return null;
@@ -1096,23 +1581,84 @@ function setAlternateMaterialMode(nextState) {
 }
 
 function runTopkekTerminalCommand(line) {
-    const parts = line.trim().split(/\s+/).filter(Boolean);
+    const raw = String(line || '').trim();
+    if (!raw.startsWith('/')) {
+        return ['Commands require leading slash. Try: /help or /help full'];
+    }
+    const slashless = raw.slice(1).trim();
+    if (!slashless) return ['Usage: /help [full]'];
+
+    const normalizedLine = normalizeFxAlias(slashless);
+    const parts = normalizedLine.trim().split(/\s+/).filter(Boolean);
     const cmd = parts[0].toLowerCase();
 
     if (cmd === 'help') {
-        return [
-            'help — this list',
-            'clear — clear log',
-            'vajbuj | vajbuj start — start VAJBUJ',
-            'vajbuj stop — stop VAJBUJ',
-            'bloom on | off | strength <n>',
-            'sao on | off (full perf only)',
-            'crt on | off',
-            'material toggle | default | alt | status',
-            'light <1|2> color <#rrggbb|0xrrggbb>',
-            'light <1|2> intensity <n>',
-            'postproc status'
-        ];
+        const helpArg = (parts[1] || '').toLowerCase();
+        if (parts.length > 2 || (helpArg && helpArg !== 'full')) {
+            return ['Usage: /help [full]'];
+        }
+        // stream: true → fast character delay in terminal-shell (listings); not “enable streaming”.
+        // plainListing → one wrapper block, lines without per-line chip background.
+        const lines = helpArg === 'full' ? TERMINAL_HELP_LINES_FULL : TERMINAL_HELP_LINES_COMPACT;
+        return {
+            stream: true,
+            plainListing: true,
+            lines
+        };
+    }
+
+    if (cmd === 'fx') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub === 'dev') {
+            if (fxDevPanelControl && typeof fxDevPanelControl.toggle === 'function') {
+                fxDevPanelControl.toggle();
+                return ['FX dev panel toggled. Trigger / Start loop / Stop; Export / Import JSON preset.'];
+            }
+            return ['FX dev panel unavailable.'];
+        }
+        if (sub === 'on') {
+            fxRuntime.enabled = true;
+            if (fxDevPanelControl?.syncFromRuntime) fxDevPanelControl.syncFromRuntime();
+            return ['FX runtime on.'];
+        }
+        if (sub === 'off') {
+            fxRuntime.enabled = false;
+            if (fxDevPanelControl?.syncFromRuntime) fxDevPanelControl.syncFromRuntime();
+            return ['FX runtime off.'];
+        }
+        if (sub === 'list') return listFxEffects();
+        if (sub === 'status') return fxStatusLines();
+        if (sub === 'bpm') {
+            const n = parseFloat(parts[2]);
+            if (!Number.isFinite(n) || n <= 0) return ['Usage: /fx bpm <value>'];
+            fxRuntime.bpm = Math.max(20, Math.min(300, n));
+            return [`FX bpm = ${fxRuntime.bpm}`];
+        }
+        if (sub === 'set') {
+            const key = parts[2] || '';
+            const valueToken = parts[3];
+            if (!key.includes('.') || valueToken == null) return ['Usage: /fx set <effectId.param> <value>'];
+            const [rawEffectId, param] = key.split('.');
+            const effectId = resolveFxEffectId(rawEffectId);
+            if (!effectId || !param) return ['Unknown effect or param path.'];
+            const parsedParams = parseFxParams([`${param}=${valueToken}`], 0);
+            if (parsedParams[param] == null) return ['Invalid value.'];
+            const current = resolveFxParams(effectId);
+            current[param] = clampFxParam(effectId, param, parsedParams[param]);
+            fxRuntime.defaults[effectId] = current;
+            return [`FX default ${effectId}.${param} = ${current[param]}`];
+        }
+        if (sub === 'trigger' || sub === 'start') {
+            const effectId = parts[2];
+            if (!effectId) return [`Usage: /fx ${sub} <effectId> [param=value ...]`];
+            const overrides = parseFxParams(parts, 3);
+            const result = startFxEffect(effectId, sub === 'trigger' ? 'trigger' : 'loop', overrides);
+            return result.lines;
+        }
+        if (sub === 'stop') {
+            return stopFxEffects(parts[2] || 'all');
+        }
+        return ['Usage: /fx <list|status|bpm|set|trigger|start|stop|dev|on|off> ...'];
     }
 
     if (cmd === 'vajbuj') {
@@ -1122,7 +1668,7 @@ function runTopkekTerminalCommand(line) {
             return ['VAJBUJ: stopping…'];
         }
         if (sub !== 'start' && parts.length > 1) {
-            return ['Usage: vajbuj | vajbuj start | vajbuj stop'];
+            return ['Usage: /vajbuj [start|stop]'];
         }
         if (!VAJBUJ_CONFIG.enabled) return ['VAJBUJ disabled in config.'];
         if (!vajbujState.audio) return ['VAJBUJ audio not ready yet.'];
@@ -1152,11 +1698,11 @@ function runTopkekTerminalCommand(line) {
         }
         if (sub === 'strength' && parts[2] !== undefined) {
             const n = parseFloat(parts[2]);
-            if (!Number.isFinite(n)) return ['Usage: bloom strength <number>'];
+            if (!Number.isFinite(n)) return ['Usage: /bloom strength <value>'];
             bloomPass.strength = Math.max(0, Math.min(3, n));
             return [`Bloom strength = ${bloomPass.strength}`];
         }
-        return ['Usage: bloom on | off | strength <n>'];
+        return ['Usage: /bloom <on|off|strength> [value]'];
     }
 
     if (cmd === 'sao') {
@@ -1170,7 +1716,7 @@ function runTopkekTerminalCommand(line) {
             saoPass.enabled = false;
             return ['SAO off.'];
         }
-        return ['Usage: sao on | off'];
+        return ['Usage: /sao <on|off>'];
     }
 
     if (cmd === 'crt') {
@@ -1184,7 +1730,7 @@ function runTopkekTerminalCommand(line) {
             crtPass.enabled = false;
             return ['CRT off.'];
         }
-        return ['Usage: crt on | off'];
+        return ['Usage: /crt <on|off>'];
     }
 
     if (cmd === 'material') {
@@ -1204,14 +1750,14 @@ function runTopkekTerminalCommand(line) {
         if (sub === 'status') {
             return [`Material mode: ${isAlternateMaterial ? 'alt' : 'default'}.`];
         }
-        return ['Usage: material toggle | default | alt | status'];
+        return ['Usage: /material <toggle|default|alt|status>'];
     }
 
     if (cmd === 'light') {
         const idx = parts[1];
         const op = (parts[2] || '').toLowerCase();
         const light = idx === '1' ? keyDirectionalLight : idx === '2' ? fillDirectionalLight : null;
-        if (!light) return ['Usage: light <1|2> color <#hex> | light <1|2> intensity <n>'];
+        if (!light) return ['Usage: /light <1|2> <color|intensity> <value>'];
         if (op === 'color' && parts[3]) {
             const hex = parseTerminalHexColor(parts[3]);
             if (hex === null) return ['Invalid color. Use #rrggbb or 0xrrggbb (6 hex digits).'];
@@ -1224,12 +1770,12 @@ function runTopkekTerminalCommand(line) {
             light.intensity = n;
             return [`Light ${idx} intensity = ${n}`];
         }
-        return ['Usage: light <1|2> color <#hex> | light <1|2> intensity <n>'];
+        return ['Usage: /light <1|2> <color|intensity> <value>'];
     }
 
     if (cmd === 'postproc') {
         const sub = (parts[1] || 'status').toLowerCase();
-        if (sub !== 'status') return ['Usage: postproc status'];
+        if (sub !== 'status') return ['Usage: /postproc <status>'];
         return [
             passEnabledLine('bloom', bloomPass),
             passEnabledLine('sao', saoPass),
@@ -1237,7 +1783,7 @@ function runTopkekTerminalCommand(line) {
         ];
     }
 
-    return [`Unknown command: ${cmd}. Type help.`];
+    return [`Unknown command: /${cmd}. Type /help or /help full.`];
 }
 
 
@@ -1289,22 +1835,30 @@ function createUI() {
     // --- Camera HUD (top-left; live coords + mode + reset) ---
     const cameraHud = document.createElement('div');
     cameraHud.id = 'camera-hud';
-    const hudTitle = document.createElement('div');
-    hudTitle.className = 'camera-hud-title';
-    hudTitle.textContent = 'Camera';
-    cameraHud.appendChild(hudTitle);
+    const cameraSection = document.createElement('div');
+    cameraSection.className = 'controls-section controls-section--camera';
+
+    const cameraTitle = document.createElement('div');
+    cameraTitle.className = 'controls-category-title';
+    cameraTitle.textContent = 'Camera';
+    cameraSection.appendChild(cameraTitle);
+
+    const cameraMeta = document.createElement('div');
+    cameraMeta.className = 'camera-hud-meta';
 
     cameraHudModeEl = document.createElement('div');
     cameraHudModeEl.className = 'camera-hud-mode';
-    cameraHud.appendChild(cameraHudModeEl);
+    cameraMeta.appendChild(cameraHudModeEl);
 
     cameraHudPosEl = document.createElement('pre');
     cameraHudPosEl.className = 'camera-hud-coords';
-    cameraHud.appendChild(cameraHudPosEl);
+    cameraMeta.appendChild(cameraHudPosEl);
 
     cameraHudTgtEl = document.createElement('pre');
     cameraHudTgtEl.className = 'camera-hud-coords';
-    cameraHud.appendChild(cameraHudTgtEl);
+    cameraMeta.appendChild(cameraHudTgtEl);
+
+    cameraSection.appendChild(cameraMeta);
 
     const hudItems = document.createElement('div');
     hudItems.className = 'controls-category-items';
@@ -1336,7 +1890,8 @@ function createUI() {
     hudItems.appendChild(btnFreeCam);
     hudItems.appendChild(btnCinematic);
     hudItems.appendChild(btnResetCam);
-    cameraHud.appendChild(hudItems);
+    cameraSection.appendChild(hudItems);
+    cameraHud.appendChild(cameraSection);
     cameraHud.appendChild(mouseModeWrap);
     
     // --- Glitch Volumetric ---
@@ -1379,9 +1934,13 @@ function createUI() {
     // --- Change text ---
     const sectionText = document.createElement('div');
     sectionText.className = 'controls-section';
+    const textTitle = document.createElement('div');
+    textTitle.className = 'controls-category-title';
+    textTitle.textContent = 'Change text';
+    sectionText.appendChild(textTitle);
     const btnCustomText = document.createElement('button');
     btnCustomText.className = 'mode-btn';
-    btnCustomText.innerText = 'Change text';
+    btnCustomText.innerText = '> Edit text';
 
     const customTextInlineControls = document.createElement('div');
     customTextInlineControls.className = 'inline-text-regen hidden';
@@ -1435,20 +1994,129 @@ function createUI() {
     sectionText.appendChild(customTextInlineControls);
     cameraHud.appendChild(sectionText);
 
-    // --- Change BG ---
+    // --- BG controls ---
     const bgCfg = CONFIG.backgroundVideo;
     if (bgCfg && Array.isArray(bgCfg.sources) && bgCfg.sources.length > 0) {
         const sectionBg = document.createElement('div');
         sectionBg.className = 'controls-section';
-        const btnBgVideo = document.createElement('button');
-        btnBgVideo.className = 'mode-btn';
-        btnBgVideo.innerText = 'Change BG';
-        btnBgVideo.title = 'Zmień wideo w tle';
-        btnBgVideo.onclick = cycleBackgroundVideo;
-        sectionBg.appendChild(btnBgVideo);
+        const bgControlsRow = document.createElement('div');
+        bgControlsRow.className = 'camera-hud-bg-row';
+        const bgControlsLeft = document.createElement('div');
+        bgControlsLeft.className = 'camera-hud-bg-controls';
+
+        const bgSelectLabel = document.createElement('label');
+        bgSelectLabel.className = 'camera-hud-control-label';
+        bgSelectLabel.innerText = 'Background';
+        bgSelectLabel.htmlFor = 'bg-video-select';
+        bgControlsLeft.appendChild(bgSelectLabel);
+
+        const bgSelect = document.createElement('select');
+        bgSelect.id = 'bg-video-select';
+        bgSelect.className = 'camera-hud-select';
+        bgCfg.sources.forEach((source) => {
+            if (!source?.src) return;
+            const option = document.createElement('option');
+            option.value = normalizeBackgroundVideoSrc(source.src);
+            option.textContent = getBackgroundVideoLabel(source.src);
+            bgSelect.appendChild(option);
+        });
+        const activeSrc = activeBackgroundVideoSource?.src ?? bgCfg.sources[0]?.src;
+        bgSelect.value = normalizeBackgroundVideoSrc(activeSrc);
+        bgSelect.title = 'Wybierz wideo tła';
+        bgSelect.addEventListener('change', () => setBackgroundVideoBySrc(bgSelect.value));
+
+        const bgSelectRow = document.createElement('div');
+        bgSelectRow.className = 'camera-hud-bg-select-row';
+        bgSelectRow.appendChild(bgSelect);
+
+        const bgPlayToggle = document.createElement('button');
+        bgPlayToggle.type = 'button';
+        bgPlayToggle.id = 'bg-video-play-toggle';
+        bgPlayToggle.className = 'camera-hud-bg-play-toggle';
+        bgPlayToggle.addEventListener('click', () => {
+            if (!backgroundVideoEl) return;
+            if (backgroundVideoEl.paused) {
+                backgroundVideoUserPaused = false;
+                backgroundVideoEl.play().catch(() => {});
+            } else {
+                backgroundVideoUserPaused = true;
+                backgroundVideoEl.pause();
+            }
+            updateBackgroundVideoPlayToggleUi();
+        });
+        backgroundVideoPlayToggleBtn = bgPlayToggle;
+        bgSelectRow.appendChild(bgPlayToggle);
+        bgControlsLeft.appendChild(bgSelectRow);
+        updateBackgroundVideoPlayToggleUi();
+
+        const bpmControlCfg = bgCfg.bpmControl ?? {};
+        const bpmOptions = Array.isArray(bpmControlCfg.options) && bpmControlCfg.options.length
+            ? bpmControlCfg.options
+            : [60, 75, 90, 100, 120, 140];
+
+        const bpmLabel = document.createElement('label');
+        bpmLabel.className = 'camera-hud-control-label';
+        bpmLabel.innerText = 'Background BPM';
+        bpmLabel.htmlFor = 'bg-bpm-select';
+        bgControlsLeft.appendChild(bpmLabel);
+
+        const bpmSelect = document.createElement('select');
+        bpmSelect.id = 'bg-bpm-select';
+        bpmSelect.className = 'camera-hud-select';
+        bpmOptions.forEach((bpm) => {
+            const bpmValue = Number(bpm);
+            if (!Number.isFinite(bpmValue) || bpmValue <= 0) return;
+            const option = document.createElement('option');
+            option.value = String(bpmValue);
+            option.textContent = `${bpmValue} BPM`;
+            bpmSelect.appendChild(option);
+        });
+
+        const desiredBpm = Number(currentBackgroundBpm);
+        if (Array.from(bpmSelect.options).some(opt => Number(opt.value) === desiredBpm)) {
+            bpmSelect.value = String(desiredBpm);
+        } else if (bpmSelect.options.length) {
+            bpmSelect.selectedIndex = 0;
+            applyBackgroundVideoPlaybackRate(Number(bpmSelect.value));
+        }
+
+        bpmSelect.title = 'Tempo animacji tła';
+        bpmSelect.addEventListener('change', () => {
+            applyBackgroundVideoPlaybackRate(Number(bpmSelect.value));
+        });
+        bgControlsLeft.appendChild(bpmSelect);
+
+        const bpmIndicatorWrap = document.createElement('div');
+        bpmIndicatorWrap.className = 'camera-hud-bpm-indicator-wrap';
+        bpmIndicatorWrap.setAttribute('aria-label', 'Background beat indicator');
+        const bpmIndicatorLabel = document.createElement('div');
+        bpmIndicatorLabel.className = 'camera-hud-control-label camera-hud-bpm-indicator-label';
+        bpmIndicatorLabel.textContent = 'Beat';
+        bpmIndicatorWrap.appendChild(bpmIndicatorLabel);
+        const bpmGrid = document.createElement('div');
+        bpmGrid.className = 'camera-hud-bpm-grid';
+        backgroundBeatSegments = [];
+        for (let i = 0; i < 4; i++) {
+            const segment = document.createElement('span');
+            segment.className = 'camera-hud-bpm-segment';
+            bpmGrid.appendChild(segment);
+            backgroundBeatSegments.push(segment);
+        }
+        backgroundBeatLastStep = -1;
+        bpmIndicatorWrap.appendChild(bpmGrid);
+
+        bgControlsRow.appendChild(bgControlsLeft);
+        bgControlsRow.appendChild(bpmIndicatorWrap);
+        sectionBg.appendChild(bgControlsRow);
+
         cameraHud.appendChild(sectionBg);
+        initPerformanceHud(cameraHud);
+    }
+    if (!cameraHud.querySelector('#perf-hud')) {
+        initPerformanceHud(cameraHud);
     }
     document.body.appendChild(cameraHud);
+    initSectionMenuToggles();
 
     // --- Glitch volumetryczne ---
     const btnGlitchTrigger = document.getElementById('btn-glitch-trigger');
@@ -1836,6 +2504,28 @@ function createUI() {
 
     initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
 
+    const termLogEl = document.querySelector('#topkek-terminal-shell [data-terminal-log]');
+    if (termLogEl) {
+        fxDevPanelControl = initFxDevPanel({
+            mountAfter: termLogEl,
+            api: {
+                getRuntime: fxDevGetRuntime,
+                setEnabled: fxDevSetEnabled,
+                setBpm: fxDevSetBpm,
+                applyDefaultKey: fxDevApplyDefaultKey,
+                runStart: (effectId, mode, overrides) => {
+                    const res = startFxEffect(effectId, mode, overrides);
+                    return res.lines || [];
+                },
+                runStop: stopFxEffects,
+                parseFxParamsFromParts: (parts) => parseFxParams(parts, 0),
+                applyPreset: fxDevApplyPreset,
+                exportPreset: fxDevExportPreset,
+                log: (msg) => console.log('[FX dev]', msg)
+            }
+        });
+    }
+
     if (IS_MOBILE) {
         const info = document.createElement('div');
         info.className = 'mobile-info';
@@ -1856,6 +2546,160 @@ function createUI() {
 
         document.body.appendChild(letterContainer);
     }
+}
+
+function initPerformanceHud(parentEl) {
+    if (!PERF_HUD_CONFIG.enabled) return;
+    if (document.getElementById('perf-hud')) return;
+    if (!parentEl) return;
+
+    const hud = document.createElement('div');
+    hud.id = 'perf-hud';
+    hud.className = 'perf-hud perf-hud--good';
+
+    const title = document.createElement('div');
+    title.className = 'perf-hud-title';
+    title.textContent = 'Performance';
+    hud.appendChild(title);
+
+    const row = document.createElement('div');
+    row.className = 'perf-hud-row';
+    const fps = document.createElement('span');
+    fps.className = 'perf-hud-fps';
+    fps.textContent = 'FPS: --';
+    const high = document.createElement('span');
+    high.className = 'perf-hud-stat';
+    high.textContent = 'H: --';
+    const low = document.createElement('span');
+    low.className = 'perf-hud-stat';
+    low.textContent = 'L: --';
+    row.appendChild(fps);
+    row.appendChild(high);
+    row.appendChild(low);
+    hud.appendChild(row);
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'perf-hud-graph';
+    canvas.width = PERF_HUD_CONFIG.graph.width;
+    canvas.height = PERF_HUD_CONFIG.graph.height;
+    hud.appendChild(canvas);
+
+    parentEl.appendChild(hud);
+
+    perfHudRootEl = hud;
+    perfHudFpsEl = fps;
+    perfHudHighEl = high;
+    perfHudLowEl = low;
+    perfHudCanvasEl = canvas;
+    perfHudCtx = canvas.getContext('2d');
+}
+
+function getPerfStatusClass(fpsValue) {
+    if (fpsValue >= PERF_HUD_CONFIG.thresholds.goodFps) return 'perf-hud--good';
+    if (fpsValue >= PERF_HUD_CONFIG.thresholds.warnFps) return 'perf-hud--warn';
+    return 'perf-hud--bad';
+}
+
+function drawPerformanceGraph() {
+    if (!perfHudCtx || !perfHudCanvasEl || perfHudState.samples.length < 2) return;
+    const ctx = perfHudCtx;
+    const w = perfHudCanvasEl.width;
+    const h = perfHudCanvasEl.height;
+    const yMax = Math.max(1, PERF_HUD_CONFIG.graph.yMaxFps);
+    const warnY = h - (Math.min(PERF_HUD_CONFIG.thresholds.warnFps, yMax) / yMax) * h;
+    const goodY = h - (Math.min(PERF_HUD_CONFIG.thresholds.goodFps, yMax) / yMax) * h;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(255, 204, 0, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, warnY);
+    ctx.lineTo(w, warnY);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(0, 255, 153, 0.35)';
+    ctx.beginPath();
+    ctx.moveTo(0, goodY);
+    ctx.lineTo(w, goodY);
+    ctx.stroke();
+
+    const samples = perfHudState.samples;
+    const len = samples.length;
+    const stepX = len > 1 ? w / (len - 1) : w;
+    let lowIdx = 0;
+    let highIdx = 0;
+    for (let i = 1; i < len; i++) {
+        if (samples[i] < samples[lowIdx]) lowIdx = i;
+        if (samples[i] > samples[highIdx]) highIdx = i;
+    }
+
+    ctx.strokeStyle = 'rgba(160, 255, 190, 0.95)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < len; i++) {
+        const sample = Math.max(0, Math.min(yMax, samples[i]));
+        const x = i * stepX;
+        const y = h - (sample / yMax) * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const drawMarker = (index, color) => {
+        const sample = Math.max(0, Math.min(yMax, samples[index]));
+        const x = index * stepX;
+        const y = h - (sample / yMax) * h;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+    };
+
+    drawMarker(highIdx, '#00ff99');
+    drawMarker(lowIdx, '#ff3b3b');
+}
+
+function updatePerformanceHud(frameNowMs) {
+    if (!PERF_HUD_CONFIG.enabled || !perfHudRootEl) return;
+    if (perfHudState.lastFrameTs === 0) {
+        perfHudState.lastFrameTs = frameNowMs;
+        return;
+    }
+
+    const deltaMs = frameNowMs - perfHudState.lastFrameTs;
+    perfHudState.lastFrameTs = frameNowMs;
+    if (deltaMs <= 0) return;
+
+    const instFps = 1000 / deltaMs;
+    const alpha = Math.max(0.01, Math.min(1, PERF_HUD_CONFIG.smoothingAlpha));
+    perfHudState.smoothedFps = perfHudState.smoothedFps > 0
+        ? perfHudState.smoothedFps + (instFps - perfHudState.smoothedFps) * alpha
+        : instFps;
+
+    if ((frameNowMs - perfHudState.lastUiTs) < PERF_HUD_CONFIG.updateIntervalMs) return;
+    perfHudState.lastUiTs = frameNowMs;
+
+    const maxSamples = Math.max(8, PERF_HUD_CONFIG.graph.maxSamples);
+    perfHudState.samples.push(perfHudState.smoothedFps);
+    if (perfHudState.samples.length > maxSamples) {
+        perfHudState.samples.splice(0, perfHudState.samples.length - maxSamples);
+    }
+
+    const roundedCurrent = Math.round(perfHudState.smoothedFps);
+    const roundedHigh = Math.round(Math.max(...perfHudState.samples));
+    const roundedLow = Math.round(Math.min(...perfHudState.samples));
+    const statusClass = getPerfStatusClass(perfHudState.smoothedFps);
+
+    perfHudRootEl.classList.remove('perf-hud--good', 'perf-hud--warn', 'perf-hud--bad');
+    perfHudRootEl.classList.add(statusClass);
+    perfHudFpsEl.textContent = `FPS: ${roundedCurrent}`;
+    perfHudHighEl.textContent = `H: ${roundedHigh}`;
+    perfHudLowEl.textContent = `L: ${roundedLow}`;
+
+    drawPerformanceGraph();
 }
 
 // Helper to load and render markdown
@@ -3240,8 +4084,10 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!camera || !scene || !renderer) return;
+    updatePerformanceHud(performance.now());
 
     updateVideoBasedLighting(performance.now());
+    updateBackgroundBeatIndicator(performance.now() * 0.001);
 
     if (isFreeCam && controls) {
         controls.update();
@@ -3453,6 +4299,7 @@ function animate() {
 
         const time = Date.now() * 0.001;
         const delta = clock.getDelta();
+        updateFxRuntime(time, delta);
 
         if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState && motionDesignState.heartMesh && motionDesignState.heartCubes.length > 0) {
             const psc = PORTFOLIO_SCENE_CONFIG;
@@ -3793,6 +4640,14 @@ function animate() {
                 dummy.scale.copy(group.baseScale).multiply(group.glitchScale);
             } else {
                 dummy.scale.copy(group.baseScale);
+            }
+            if (group.fxGlowUntil && time < group.fxGlowUntil) {
+                const gain = group.fxGlowGain || 1;
+                const pulse = 1 + 0.12 * gain;
+                dummy.scale.multiplyScalar(pulse);
+            } else if (group.fxGlowUntil) {
+                group.fxGlowUntil = 0;
+                group.fxGlowGain = 0;
             }
             dummy.updateMatrix();
 

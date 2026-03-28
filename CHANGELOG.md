@@ -24,7 +24,22 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 
 ## [Unreleased]
 
+### Fixed
+- Poprawiono heurystykę `perf=auto`: profil lite włącza się przy `navigator.deviceMemory` ≤ 3 GB zamiast ≤ 4 GB, żeby na desktopie (np. Brave/Chrome raportujące 4 GB) nie wyłączać SAO i CRT.
+
+### Changed
+- Konsola poleceń: maximize, restore i zwijanie logu to trzy osobne przyciski z ikonami SVG w jednym rzędzie (bez nachodzącego `.menu-section-toggle`); zwijanie obsługuje `terminal-shell.js` i klasa `topkek-terminal-shell--collapsed` z `TERMINAL_CONFIG.shellUi`.
+- Rozszerzono `knowledge_base.json` dla Buucha (GENIMG, tryb wydajności, FX, scena i tryby myszy, portfolio 3D vs Vimeo, slash vs czat, stack, podziękowania) oraz doprecyzowano APPSTAIN, Glitch Lab i SCNDBREJN — otwieranie z menu terminala po prawej zamiast nieobecnych w handlerze komend `/<nazwa>`.
+- Rozdzielono pomoc konsoli: domyślne `/help` pokazuje skróconą listę komend, `/help full` — pełną dokumentację (w tym aliasy FX); treści w `TERMINAL_HELP_LINES_COMPACT` / `TERMINAL_HELP_LINES_FULL` w `config.js`; komunikaty Usage/Buuch/welcome wskazują obie ścieżki; blok `.topkek-terminal-help-block` ma ograniczoną wysokość z przewijaniem pionowym.
+
 ### Added
+- Dodano panel deweloperski FX w konsoli (`/fx dev`): przełącznik runtime, BPM, Trigger / Start loop / Stop na efekt, pola parametrów, eksport/import presetu JSON (plik, schowek, wklejka); polecenia `/fx on` i `/fx off` włączają lub wyłączają runtime FX.
+- Dodano polskie odpowiedniki fraz w `knowledge_base.json` (Buuch dopasowuje też zapytania po polsku).
+- Dodano przycisk wstrzymania / wznowienia wideo tła w HUD (obok listy „Background”).
+- Dodano wizualne „chipy” w logu konsoli: tło i lewa obwódka zależnie od typu linii (komenda, odpowiedź, info, błąd, Buuch).
+- Dodano drugi profil streamu (`fastCharDelayMs` / `fastLineDelayMs` w `TERMINAL_CONFIG`) dla długich listingów `/help`; domyślne odpowiedzi i Buuch używają wolniejszego tempa znak po znaku.
+- Dodano bezstanowy chat Buuch w konsoli: linie bez `/` dopasowywane do `knowledge_base.json` (`buuch-chat.js`), komendy `/` bez zmian.
+- Dodano panel Performance HUD (`#perf-hud`) z bieżącym FPS, kolorami statusu (zielony/żółty/czerwony według progów) i miniwykresem highs/lows, konfigurowany przez `PERF_HUD_CONFIG` w `config.js`.
 - Dodano szablon wdrożenia SFTP dla Cursor/VS Code (`.vscode/sftp.json.example`) oraz wpis w `.gitignore` dla lokalnego `.vscode/sftp.json` z hasłem.
 - Dodano dokument `docs/SFTP_Deploy.md` z instrukcją wdrożenia strony przez SFTP w Cursorze/VS Code.
 - Dodano animowane pojawianie się UI po zakończeniu lotu intro kamery: HUD kamery z góry, etykieta „TOP KEK Productions…” z dołu, panel kontrolek + konsola i wiersze menu z prawej (stagger + krótki efekt „glitch” na liniach); parametry w `POST_INTRO_UI_CONFIG` (`config.js`); tryb `prefers-reduced-motion` pomija ukrywanie i animacje.
@@ -33,8 +48,25 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 - Dodano intro kamery po ukryciu loadera: zbliżanie z dużej odległości do pozycji startowej z ease-in (`INTRO_CAMERA_CONFIG` w `config.js`; czas trwania w konfiguracji).
 - Dodano `CONFIG.innerCubeZBias` (opcjonalny offset Z inner cubes przy `loadParticles` z JSON; domyślnie 0 — zgodność z zbakowanym `particles_*.json`).
 - Dodano możliwość sterowania „mocą emmisji” (envMapIntensity + intensity/ambient z próbkowania wideo) osobno dla każdego background video.
+- Dodano wskaźnik beatu BPM w HUD przy kontrolkach tła: licznik 2x2 zapala kolejne pola w rytmie wybranego BPM.
+- Dodano bazę efektów volumetrycznych sterowaną z terminala (`fx`) z registry efektów, parametrami modyfikowalnymi komendami, trybami `trigger/loop` oraz hybrydowym parserem czasu (sekundy i beaty).
+- Dodano subtelne przyciski zwijania/rozwijania dla każdej sekcji menu osobno (lewy HUD i prawy panel), widoczne dopiero po najechaniu kursorem na daną sekcję.
 
 ### Changed
+- Konsola: prompt i echo użytkownika `U >` (fioletowy, wyższa saturacja), odpowiedzi Buucha z prefiksem `B >` i zielonym tłem bez zmian; `/help` w jednym obramowanym bloku bez tła na pojedynczych liniach (`plainListing`); limit linii logu liczy też linie wewnątrz bloku pomocy.
+- Zmieniono `knowledge_base.json` Buuch chata na wersję w całości po angielsku (odpowiedzi i słowa kluczowe).
+- Rozszerzono stream logu konsoli: powitanie, odpowiedzi komend (poza `{ stream: false }`) i Buuch piszą się znak po znaku w wolnym tempie; `/help` korzysta z szybszego profilu.
+- Przypięto konsolę (`#topkek-terminal-shell`) do prawego dolnego rogu ekranu; tryb `maximize` zachowuje tę pozycję i jedynie poszerza panel.
+- Przeniesiono obramowania z kontenerów całych menu na poziom pojedynczych sekcji (lewy panel: `Camera`, `Mouse`, `Glitch`, `Change text`; prawy panel: `Vajbuj`, `Games`, `Software`) oraz ujednolicono typografię nagłówków sekcji.
+- Ujednolicono styl wszystkich menu (w tym `#camera-hud`, `#perf-hud`, `#ui-container`, `#terminal-menu` i `.topkek-terminal-shell`) do wspólnego shella wizualnego wzorowanego na sekcjach `Background` i `Performance`.
+- Dopasowano sekcję `Background BPM` w lewym HUD: wyrównano etykiety `Background` i `Beat` do jednego wiersza oraz powiększono licznik beatów 2x2, aby lepiej odpowiadał wysokości kontrolek dropdown.
+- Ujednolicono składnię komend konsoli do formatu z prefiksem slash (`/help`, `/fx ...`, `/material ...`) i zaktualizowano komunikaty `Usage`.
+- Dodano symulowany streaming odpowiedzi dla `/help`, aby linie pomocy pojawiały się progresywnie jak w terminalu.
+- Rozbudowano komendę `help` w konsoli o sekcyjny opis wszystkich komend (działanie, składnia i przykłady) oraz ujednolicono komunikaty `Usage`.
+- Poprawiono czytelność logu konsoli przez dodanie timestampu do każdej linii i kolorystyczne rozróżnienie komend użytkownika, odpowiedzi, informacji i błędów.
+- Przeniesiono panel Performance HUD (`#perf-hud`) pod sekcję opcji tła w lewym `#camera-hud`, aby metryki FPS były obok kontrolek background video/BPM.
+- Zmieniono nagłówek konsoli TOPKEK: przyciski `maximize` i `restore` umieszczono w tym samym wierszu co napis `console`, a stan maksymalizacji przenosi panel na dół ekranu, centruje go i zwiększa rozmiar.
+- Zastąpiono przycisk `Change BG` dwoma listami wyboru w HUD kamery: wybór konkretnego tła oraz wybór BPM sterującego tempem animacji tła (mapowanie BPM na `playbackRate` wideo).
 - Przeniesiono kontrolki `Glitch Volumetric`, `Change text` i `Change BG` do lewego HUD kamery pod sekcję „Mouse animation Mode”; sekcja glitch nie jest już renderowana statycznie w `index.html`.
 - Przeniesiono przełączanie materiałów napisu z klawisza spacji do komendy terminala `material toggle | default | alt | status`.
 - Zmieniono domyślny `CONFIG.animationMode` na `scatter` dla trybu animacji myszy.
@@ -59,6 +91,10 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 - Dodano statyczny tytuł `T O P K E K` nad loaderem i wymuszono jednowierszowy `loading-text`.
 
 ### Fixed
+- Poprawiono przedwczesne pojawianie się pustych ramek prawego menu przed końcem intro kamery: w stanie `post-intro-ui-pending` ukrywany jest cały `#terminal-menu`, a nie tylko jego linie.
+- Poprawiono logikę zwijania menu przez usunięcie globalnych przycisków krawędziowych i zastąpienie ich niezależnym zwijaniem sekcji.
+- Poprawiono duplikowanie panelu Performance HUD: inicjalizacja sprawdza teraz obecność `#perf-hud` w `camera-hud` przed fallbackowym wywołaniem.
+- Poprawiono przewijanie logu konsoli: kółko myszy nad oknem konsoli przewija teraz wyświetlany tekst logu zamiast tła strony.
 - Wygładzono animacje wejścia menu/UI: ustawiono `animation-fill-mode: both` i `will-change` dla elementów reveal, aby wyeliminować „skakanie” przy opóźnieniach i staggerze.
 - Poprawiono brak animacji wejścia menu/UI na systemach z aktywną preferencją `prefers-reduced-motion`: reveal po intro kamery ponownie wymusza animacje.
 - Poprawiono przedwczesne pojawianie się menu/UI: reveal nie uruchamia się już przy przełączaniu trybu kamery i innych akcjach pobocznych, tylko po zakończeniu intro kamery (z krótkim fallbackiem czasowym względem `INTRO_CAMERA_CONFIG.durationMs`).
