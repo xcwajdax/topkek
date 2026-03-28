@@ -1,6 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Always run from this batch file's folder (so python finds server.py / project root).
+cd /d "%~dp0"
+
 echo ==========================================
 echo    TOPKEK Productions - Quick Start
 echo ==========================================

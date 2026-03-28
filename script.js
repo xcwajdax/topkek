@@ -229,6 +229,8 @@ let videoIblSamplingCanvas = null;
 let videoIblSamplingCtx = null;
 let videoHemisphereLight = null;
 let videoAmbientLight = null;
+/** PMREM env sphere material — same mapColorGain as background plane for brighter video → IBL bake */
+let videoIblEnvSphereMaterial = null;
 
 // Active profile for currently playing background video (used for per-BG intensity "emission" tuning).
 let activeBackgroundVideoSource = null;
@@ -246,6 +248,24 @@ function getActiveEnvMapIntensityBoost() {
     const base = CONFIG.backgroundVideo?.envMapIntensityBoost ?? {};
     const override = activeBackgroundVideoSource?.envMapIntensityBoost ?? {};
     return { ...base, ...override };
+}
+
+function getActiveMapColorGain() {
+    const override = activeBackgroundVideoSource?.mapColorGain;
+    const base = CONFIG.backgroundVideo?.mapColorGain;
+    const raw = override != null && override !== '' ? Number(override) : Number(base);
+    if (!Number.isFinite(raw) || raw <= 0) return 1;
+    return Math.min(3, Math.max(0.25, raw));
+}
+
+function applyBackgroundVideoMapColorGain() {
+    const g = getActiveMapColorGain();
+    if (backgroundVideoMesh?.material?.color) {
+        backgroundVideoMesh.material.color.setScalar(g);
+    }
+    if (videoIblEnvSphereMaterial?.color) {
+        videoIblEnvSphereMaterial.color.setScalar(g);
+    }
 }
 
 function normalizeBackgroundVideoSrc(src) {
@@ -324,6 +344,7 @@ function setBackgroundVideoBySrc(nextSrc) {
 
     // Apply tuning immediately (without waiting for the next sampling tick).
     applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
     const hemiCfg = getActiveHemisphereCfg();
     if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
         videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
@@ -495,7 +516,10 @@ function initBackgroundVideoIbl() {
             side: THREE.BackSide,
             toneMapped: false
         });
+        videoIblEnvSphereMaterial = envSphereMat;
         videoIblEnvScene.add(new THREE.Mesh(sphereGeo, envSphereMat));
+    } else {
+        videoIblEnvSphereMaterial = null;
     }
 
     const hemiCfg = getActiveHemisphereCfg();
@@ -548,6 +572,7 @@ function setFakeGiEnabled(wantOn) {
             videoAmbientLight.intensity = h.ambientIntensity ?? 0.32;
         }
         applyVideoIblMaterialBoost();
+        applyBackgroundVideoMapColorGain();
         return ['Fake GI ON (video PMREM + hemisphere / ambient z klatki wideo, boost envMapIntensity).'];
     }
 
@@ -558,6 +583,7 @@ function setFakeGiEnabled(wantOn) {
     if (videoHemisphereLight) videoHemisphereLight.intensity = 0;
     if (videoAmbientLight) videoAmbientLight.intensity = 0;
     resetLetterMaterialsEnvMapIntensityToDefaults();
+    applyBackgroundVideoMapColorGain();
     return ['Fake GI OFF (scene.environment → HDRI; światła wideo wyłączone; envMapIntensity jak w MATERIALS).'];
 }
 
@@ -569,10 +595,10 @@ function getFakeGiStatusLines() {
         `  PMREM: usePmrem=${vi?.usePmrem !== false} replaceSceneEnvironment=${vi?.replaceSceneEnvironment !== false} mobile=${IS_MOBILE}`
     ];
     if (videoHemisphereLight) {
-        lines.push(`  videoHemisphere: intensity=${videoHemisphereLight.intensity.toFixed(2)}`);
+        lines.push(`  videoHemisphere: intensity=${videoHemisphereLight.intensity.toFixed(1.2)}`);
     }
     if (videoAmbientLight) {
-        lines.push(`  videoAmbient: intensity=${videoAmbientLight.intensity.toFixed(2)}`);
+        lines.push(`  videoAmbient: intensity=${videoAmbientLight.intensity.toFixed(1.22)}`);
     }
     lines.push(`  scene.environment: ${scene?.environment ? 'yes' : 'no'}`);
     if (defaultBoxMaterial) {
@@ -675,6 +701,11 @@ let vajbujState = {
 let vajbujFinalizeTimerId = null;
 let mysenFinalizeTimerId = null;
 
+/** Hide right-panel menu + left HUD during VAJBUJ/MYSEN; keep #topkek-terminal-shell visible. */
+function setMusicShowcaseMenuUiHidden(hidden) {
+    document.body.classList.toggle('music-showcase-ui-minimal', !!hidden);
+}
+
 // MYSEN remix mode state (separate voxel cache from VAJBUJ)
 let mysenState = {
     active: false,
@@ -694,8 +725,23 @@ let mysenState = {
     generationQueue: [],
     playbackDurationSec: null,
     _fadeTimeoutId: null,
-    _stopTimeoutId: null
+    _stopTimeoutId: null,
+    /** Parsed lines from timestampLyricsUrl (fetch). */
+    timestampLyricsParsed: [],
+    /** First line index where timestamp / random-fly lyrics start. */
+    firstTimestampLineIndex: 99999,
+    savedBgSrcForMysen: null,
+    /** Promise — czekamy w startMysenMode, żeby prepareMysenWords miał timestampy. */
+    _timestampLoadPromise: null,
+    /** Parsed `wordAnimationUrl` (defaults + overrides). */
+    wordAnimationDoc: null,
+    _wordAnimationLoadPromise: null,
+    /** Shallow merge: MYSEN_CONFIG + JSON `defaults` (tylko dozwolone klucze), ustawiane przy starcie MYSEN. */
+    mergedMysenConfig: null
 };
+
+const _mysenFrustumTmp = new THREE.Vector3();
+const _mysenFrustumDir = new THREE.Vector3();
 
 function clearMysenPlaybackTimers() {
     if (mysenState._fadeTimeoutId) {
@@ -706,6 +752,332 @@ function clearMysenPlaybackTimers() {
         clearTimeout(mysenState._stopTimeoutId);
         mysenState._stopTimeoutId = null;
     }
+}
+
+/** Keys from JSON `defaults` merged into effective MYSEN config (lyric animation tuning). */
+const MYSEN_WORD_ANIM_SCALAR_KEYS = [
+    'wordAssemblyDuration',
+    'lyricsStartDelay',
+    'scatterRadius',
+    'lyricsOffsetY',
+    'lineSpacing',
+    'wordSpacing',
+    'wordSize',
+    'wordHeight',
+    'wordThickness',
+    'slowPhaseEnd',
+    'slowPhaseSpeed'
+];
+
+const MYSEN_WORD_ANIM_NEST_KEYS = [
+    'randomFly',
+    'spread',
+    'introOutroSpread',
+    'lyricSpread',
+    'introAssembly',
+    'lyricAssembly'
+];
+
+const MYSEN_MATCH_AT_EPSILON = 0.02;
+
+/** @param {unknown} v */
+function parseMysenAnimColor(v) {
+    if (v == null) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string') {
+        let s = v.trim();
+        if (s.startsWith('#')) s = s.slice(1);
+        const n = parseInt(s, 16);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
+}
+
+function buildMysenEffectiveConfig() {
+    const doc = mysenState.wordAnimationDoc;
+    if (!doc || typeof doc !== 'object' || !doc.defaults || typeof doc.defaults !== 'object') {
+        return MYSEN_CONFIG;
+    }
+    const d = doc.defaults;
+    const out = { ...MYSEN_CONFIG };
+    for (let i = 0; i < MYSEN_WORD_ANIM_SCALAR_KEYS.length; i++) {
+        const k = MYSEN_WORD_ANIM_SCALAR_KEYS[i];
+        if (d[k] !== undefined) out[k] = d[k];
+    }
+    for (let i = 0; i < MYSEN_WORD_ANIM_NEST_KEYS.length; i++) {
+        const k = MYSEN_WORD_ANIM_NEST_KEYS[i];
+        const baseNest = MYSEN_CONFIG[k];
+        if (d[k] != null && typeof d[k] === 'object' && baseNest != null && typeof baseNest === 'object') {
+            out[k] = { ...baseNest, ...d[k] };
+        } else if (d[k] != null && typeof d[k] === 'object') {
+            out[k] = { ...d[k] };
+        }
+    }
+    return out;
+}
+
+/**
+ * Mutates merged lyric items before `prepareMusicLyricWords` (scale → poprawne width / voxele).
+ * @param {object[]} merged
+ * @param {unknown} overridesRaw
+ */
+function applyMysenWordAnimationToMergedLyrics(merged, overridesRaw) {
+    if (!Array.isArray(merged) || !Array.isArray(overridesRaw) || !overridesRaw.length) return;
+    const startT = MYSEN_CONFIG.audioStartTime || 0;
+    let globalIdx = 0;
+    for (let i = 0; i < merged.length; i++) {
+        const item = merged[i];
+        if (item.lineBreak) continue;
+
+        const atSrc = Number.isFinite(item.atSourceSec)
+            ? item.atSourceSec
+            : startT + (Number.isFinite(item.at) ? item.at : 0);
+
+        for (let oi = 0; oi < overridesRaw.length; oi++) {
+            const o = overridesRaw[oi];
+            if (!o || typeof o !== 'object') continue;
+            const m = o.match;
+            if (!m || typeof m !== 'object') continue;
+            let hit = false;
+            if (Number.isFinite(m.globalIndex) && m.globalIndex === globalIdx) {
+                hit = true;
+            } else if (typeof m.text === 'string' && Number.isFinite(m.at)) {
+                if (
+                    Number.isFinite(atSrc) &&
+                    Math.abs(atSrc - m.at) < MYSEN_MATCH_AT_EPSILON &&
+                    item.text === m.text
+                ) {
+                    hit = true;
+                }
+            }
+            if (!hit) continue;
+
+            const sp = o.spawn;
+            if (sp && typeof sp === 'object') {
+                if (Number.isFinite(sp.x) && Number.isFinite(sp.y) && Number.isFinite(sp.z)) {
+                    item.spawnX = sp.x;
+                    item.spawnY = sp.y;
+                    item.spawnZ = sp.z;
+                }
+            }
+            if (Number.isFinite(o.offsetX)) item.offsetX = (item.offsetX || 0) + o.offsetX;
+            if (Number.isFinite(o.offsetY)) item.offsetY = (item.offsetY || 0) + o.offsetY;
+            if (Number.isFinite(o.offsetZ)) item.offsetZ = (item.offsetZ || 0) + o.offsetZ;
+
+            const cs = parseMysenAnimColor(o.colorStart);
+            const ce = parseMysenAnimColor(o.colorEnd);
+            if (cs != null) item._assemblyColorStart = cs;
+            if (ce != null) {
+                item._assemblyColorEnd = ce;
+                item.color = ce;
+            }
+
+            if (Number.isFinite(o.assembledScale) && o.assembledScale > 0) item.assembledScale = o.assembledScale;
+            if (Number.isFinite(o.scale) && o.scale > 0) item.scale = o.scale;
+            break;
+        }
+        globalIdx++;
+    }
+}
+
+async function ensureMysenWordAnimationLoaded() {
+    if (!MYSEN_CONFIG.wordAnimationEnabled || !MYSEN_CONFIG.wordAnimationUrl) return;
+    try {
+        await mysenState._wordAnimationLoadPromise;
+    } catch (e) {
+        console.warn('[MYSEN] Word animation await failed:', e);
+    }
+}
+
+function queueMysenVoxelPregenForPreparedWords(state, lyricsConfig) {
+    if (!loadedFontRegular || !state.words?.length) return;
+    const seen = new Set();
+    const styleSlice = {
+        wordSize: lyricsConfig.wordSize,
+        wordHeight: lyricsConfig.wordHeight,
+        wordThickness: lyricsConfig.wordThickness
+    };
+    state.words.forEach((w) => {
+        if (!w.text) return;
+        const sc = w.scale || 1;
+        const key = `${w.text}§${sc}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        state.generationQueue.push(
+            createVoxelGenerationTask(w.text, sc, loadedFontRegular, state.voxelCache, styleSlice)
+        );
+    });
+}
+
+/** @returns {{ text: string, at: number, color?: number }[]} */
+function parseMysenTimestampLyricsFile(text) {
+    const out = [];
+    if (!text || typeof text !== 'string') return out;
+    const re = /^\s*([\d.]+)\s*-->\s*([\d.]+)\s*\|\s*(.+)$/;
+    // CRLF: split(/\n/) leaves trailing \r; . in regex does not match \r, so lines never matched.
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(re);
+        if (!m) continue;
+        const start = parseFloat(m[1]);
+        const label = m[3].trim();
+        if (!label || /^muzyka$/i.test(label)) continue;
+        if (!Number.isFinite(start)) continue;
+        out.push({ text: label, at: start });
+    }
+    return out;
+}
+
+/** Highest lineIndex that would be assigned to a word in this lyric list (no trailing lineBreak after last word). */
+function lastFilledLineIndexInLyrics(lyrics) {
+    let currentLineIdx = 0;
+    let maxL = -1;
+    if (!Array.isArray(lyrics)) return -1;
+    for (let i = 0; i < lyrics.length; i++) {
+        const item = lyrics[i];
+        if (item.lineBreak) currentLineIdx++;
+        else maxL = Math.max(maxL, currentLineIdx);
+    }
+    return maxL;
+}
+
+/** Merge intro + timestamp words; opcjonalnie grupy w jednym wierszu (`mysenTimestampLineGroups`). */
+function buildMergedMysenLyrics() {
+    const intro = MYSEN_CONFIG.introLyrics || MYSEN_CONFIG.lyrics;
+    const merged = intro.slice();
+    const ts = mysenState.timestampLyricsParsed;
+    const startT = MYSEN_CONFIG.audioStartTime || 0;
+    const grpCfg = MYSEN_CONFIG.mysenTimestampLineGroups;
+    const groups =
+        grpCfg && grpCfg.enabled !== false && Array.isArray(grpCfg.groups) ? grpCfg.groups : null;
+
+    if (MYSEN_CONFIG.timestampLyricsEnabled && Array.isArray(ts) && ts.length) {
+        merged.push({ lineBreak: true });
+        let i = 0;
+        while (i < ts.length) {
+            const row = ts[i];
+            const gr = findMysenTsLineGroup(row.at, groups);
+
+            if (!gr) {
+                merged.push({
+                    text: row.text,
+                    color: row.color ?? MYSEN_CONFIG.timestampWordColor,
+                    at: row.at - startT,
+                    atSourceSec: row.at
+                });
+                merged.push({ lineBreak: true });
+                i++;
+                continue;
+            }
+
+            while (i < ts.length && findMysenTsLineGroup(ts[i].at, groups) === gr) {
+                const r = ts[i];
+                merged.push({
+                    text: r.text,
+                    color: r.color ?? MYSEN_CONFIG.timestampWordColor,
+                    at: r.at - startT,
+                    atSourceSec: r.at,
+                    lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
+                    mysenGroupedLine: true
+                });
+                i++;
+            }
+            merged.push({ lineBreak: true });
+        }
+    }
+    return merged;
+}
+
+function queueMysenTimestampVoxelPregen() {
+    if (!loadedFontRegular || !mysenState.timestampLyricsParsed?.length) return;
+    const items = mysenState.timestampLyricsParsed.map((row) => ({ text: row.text, scale: 1 }));
+    queueLyricVoxelPregeneration(items, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN-ts');
+}
+
+function sampleMysenRandomFrustumPoint(distance) {
+    const m = MYSEN_CONFIG.randomFly?.ndcMargin ?? 0.1;
+    const ndcX = (Math.random() * 2 - 1) * (1 - m);
+    const ndcY = (Math.random() * 2 - 1) * (1 - m);
+    _mysenFrustumTmp.set(ndcX, ndcY, 0.5);
+    _mysenFrustumTmp.unproject(camera);
+    _mysenFrustumDir.subVectors(_mysenFrustumTmp, camera.position).normalize().multiplyScalar(distance);
+    return camera.position.clone().add(_mysenFrustumDir);
+}
+
+/** FNV-1a–style hash for stable spawn seeds (MYSEN timestamp words). */
+function mysenHashSeedU32(str) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+}
+
+/** Mulberry32 PRNG in [0, 1). */
+function mysenMulberry32Next(stateRef) {
+    let t = (stateRef.s += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/**
+ * Jak `sampleMysenRandomFrustumPoint`, ale odległość + NDC z jednego strumienia Mulberry32 (stabilny spawn per seed).
+ */
+function sampleMysenSeededRandomFlySpawn(d0, d1, ndcMargin, seedU32) {
+    const stateRef = { s: seedU32 >>> 0 };
+    const dist = d0 + mysenMulberry32Next(stateRef) * Math.max(0.01, d1 - d0);
+    const m = ndcMargin ?? 0.1;
+    const ndcX = (mysenMulberry32Next(stateRef) * 2 - 1) * (1 - m);
+    const ndcY = (mysenMulberry32Next(stateRef) * 2 - 1) * (1 - m);
+    _mysenFrustumTmp.set(ndcX, ndcY, 0.5);
+    _mysenFrustumTmp.unproject(camera);
+    _mysenFrustumDir.subVectors(_mysenFrustumTmp, camera.position).normalize().multiplyScalar(dist);
+    return camera.position.clone().add(_mysenFrustumDir);
+}
+
+/**
+ * @param {number} atMediaSec
+ * @param {object[]|undefined} groups
+ * @returns {object|null}
+ */
+function findMysenTsLineGroup(atMediaSec, groups) {
+    if (!groups || !groups.length) return null;
+    for (let i = 0; i < groups.length; i++) {
+        const gr = groups[i];
+        const lo = gr.tMin;
+        const hi = gr.tMax;
+        if (Number.isFinite(lo) && Number.isFinite(hi) && atMediaSec >= lo && atMediaSec <= hi) {
+            return gr;
+        }
+    }
+    return null;
+}
+
+async function ensureMysenTimestampsLoaded() {
+    if (!MYSEN_CONFIG.timestampLyricsEnabled || !MYSEN_CONFIG.timestampLyricsUrl) return;
+    try {
+        if (!mysenState._timestampLoadPromise) {
+            mysenState._timestampLoadPromise = fetch(MYSEN_CONFIG.timestampLyricsUrl)
+                .then((r) => (r.ok ? r.text() : ''))
+                .then((text) => {
+                    mysenState.timestampLyricsParsed = parseMysenTimestampLyricsFile(text);
+                    if (mysenState.timestampLyricsParsed.length) {
+                        console.log('[MYSEN] Loaded', mysenState.timestampLyricsParsed.length, 'timestamp lyric tokens');
+                    }
+                    queueMysenTimestampVoxelPregen();
+                });
+        }
+        await mysenState._timestampLoadPromise;
+    } catch (e) {
+        console.warn('[MYSEN] Timestamp lyrics fetch failed:', e);
+    }
+}
+
+function mysenHideBackgroundVideoWhileActive() {
+    if (MYSEN_CONFIG.showBackgroundVideoDuringMysen === true) return false;
+    return MYSEN_CONFIG.hideBackgroundVideo === true;
 }
 
 /** Length of the played window in seconds (from audioStartTime), or null if unknown. */
@@ -1185,6 +1557,7 @@ function initSceneAndLoad() {
         scene.add(backgroundVideoMesh);
 
         initBackgroundVideoIbl();
+        applyBackgroundVideoMapColorGain();
     }
 
     // 5. Load Fonts and Generate Text
@@ -1971,7 +2344,7 @@ function runTopkekTerminalCommand(line) {
             return ['MYSEN already active. Use: /mysen stop'];
         }
         if (mysenState.active) return ['MYSEN is stopping, wait…'];
-        startMysenMode();
+        startMysenMode().catch((e) => console.warn('[MYSEN] start failed:', e));
         return ['MYSEN started.'];
     }
 
@@ -3657,6 +4030,66 @@ function generateReturnPath(startPos, startRot, endPos) {
     return steps;
 }
 
+/** Per-instance HSL for inner cubes: horizontal rainbow + slight vertical spread (see CONFIG.innerCubeHueGradient). */
+function setInnerCubeInstanceHue(color, x, y, minX, maxX, minY, maxY) {
+    const g = CONFIG.innerCubeHueGradient;
+    const w = maxX - minX || 1;
+    const h = maxY - minY || 1;
+    const nx = THREE.MathUtils.clamp((x - minX) / w, 0, 1);
+    const ny = THREE.MathUtils.clamp((y - minY) / h, 0, 1);
+    if (!g?.enabled) {
+        const hue = nx - Math.floor(nx);
+        color.setHSL(hue, 1.0, 0.5);
+        return;
+    }
+    const xW = g.xWeight ?? 0.78;
+    const yW = g.yWeight ?? 0.22;
+    let hue = nx * xW + ny * yW;
+    hue -= Math.floor(hue);
+    color.setHSL(hue, g.saturation ?? 1.0, g.lightness ?? 0.52);
+}
+
+function attachInnerCubeGradientShader(innerCubeMat) {
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        const perInstanceFactor = `(${colorVarying} * 0.96 + vec3(0.04))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        if (!emissiveRadiancePatched && totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', { colorVarying, shaderPatched: after !== before });
+        }
+        shader.fragmentShader = after;
+    };
+}
+
 function onMouseDown(event) {
     // Ignore clicks on UI buttons
     if (event.target.closest('button') || event.target.closest('.mode-btn') || event.target.closest('.letter-btn')) {
@@ -3738,7 +4171,8 @@ async function generateParticles(font, fontRegular) {
     geometry.computeBoundingBox();
     const minX = geometry.boundingBox.min.x;
     const maxX = geometry.boundingBox.max.x;
-    const textWidth = maxX - minX;
+    const minY = geometry.boundingBox.min.y;
+    const maxY = geometry.boundingBox.max.y;
 
     // Sample points
     const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
@@ -4129,60 +4563,7 @@ async function generateParticles(font, fontRegular) {
     const innerCubeCount = 2000;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
-    // Enable instanceColor tinting for the shader (instancing color varying).
-    innerCubeMat.vertexColors = true;
-    innerCubeMat.onBeforeCompile = (shader) => {
-        // Three.js r0.160: InstancedMesh `instanceColor` is exposed via `vInstanceColor` (not `vColor`).
-        // Robust varying selection: in some material/shader variants the token may appear only in vertex or fragment shader.
-        const hasInstanceColor =
-            shader.vertexShader.includes('vInstanceColor') ||
-            shader.fragmentShader.includes('vInstanceColor');
-        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        // Mild lift vs raw tint: weaker than old `* 0.4 + vec3(0.2)` so hues stay saturated but dark instance colors still glow inside the shell.
-        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
-
-        const before = shader.fragmentShader;
-        let after = before;
-
-        // Prefer patching `emissiveRadiance` (earlier in shader flow), so later assignments can't “wash out” the tint.
-        // Only multiply `totalEmissiveRadiance = emissiveRadiance * factor` when `emissiveRadiance` was NOT already patched.
-        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
-        let emissiveRadiancePatched = false;
-        if (emissiveRadianceToken.test(after)) {
-            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
-            emissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
-        let totalFromEmissiveRadiancePatched = false;
-        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
-            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
-            totalFromEmissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
-        let totalFromEmissivePatched = false;
-        if (totalFromEmissiveToken.test(after)) {
-            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
-            totalFromEmissivePatched = true;
-        }
-
-        if (after === before) {
-            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
-        }
-
-        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
-            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
-            console.log('[innerCubes] emissive patch debug', {
-                colorVarying,
-                emissiveRadiancePatched,
-                totalFromEmissiveRadiancePatched,
-                totalFromEmissivePatched,
-                shaderPatched: after !== before
-            });
-        }
-        shader.fragmentShader = after;
-    };
+    attachInnerCubeGradientShader(innerCubeMat);
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCubeCount);
     const color = new THREE.Color();
@@ -4199,8 +4580,7 @@ async function generateParticles(font, fontRegular) {
         dummy.updateMatrix();
         innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
 
-        const hue = (tempPosition.x - minX) / textWidth;
-        color.setHSL(hue, 1.0, 0.5);
+        setInnerCubeInstanceHue(color, tempPosition.x, tempPosition.y, minX, maxX, minY, maxY);
         innerCubeInstancedMesh.setColorAt(sIdx, color);
 
         innerCubeParticles.push({
@@ -5532,6 +5912,7 @@ function createMusicModeBackgroundCubes(state, cfg) {
 function startVajbujMode() {
     if (vajbujState.active) return;
 
+    setMusicShowcaseMenuUiHidden(true);
     forceStopMysenSilent();
 
     introCameraFlyInActive = false;
@@ -5656,14 +6037,15 @@ function fadeVisualOpacity(material, fromOpacity, toOpacity, duration) {
 /**
  * @param {'vajbuj'|'mysen'} timingKind — vajbuj uses wordTimings (frames); mysen uses `at` or wordTimesSec
  */
-function prepareMusicLyricWords(config, state, timingKind) {
+function prepareMusicLyricWords(config, state, timingKind, lyricsSource) {
     state.words = [];
 
     const allWords = [];
     let currentLineIdx = 0;
     let wordInLineIdx = 0;
+    const src = lyricsSource || config.lyrics;
 
-    config.lyrics.forEach((item) => {
+    src.forEach((item) => {
         if (item.lineBreak) {
             currentLineIdx++;
             wordInLineIdx = 0;
@@ -5734,8 +6116,13 @@ function prepareMusicLyricWords(config, state, timingKind) {
 
         const startSeconds = Math.max(0, assembledAtSeconds - config.wordAssemblyDuration);
 
+        const atSrc = Number.isFinite(wordData.atSourceSec)
+            ? wordData.atSourceSec
+            : startT + (Number.isFinite(wordData.at) ? wordData.at : 0);
+
         state.words.push({
             ...wordData,
+            atSourceSec: atSrc,
             startTime: startSeconds,
             assembledTime: assembledAtSeconds,
             state: 'waiting',
@@ -5753,9 +6140,42 @@ function prepareVajbujWords() {
 }
 
 function prepareMysenWords() {
-    prepareMusicLyricWords(MYSEN_CONFIG, mysenState, 'mysen');
+    const eff = mysenState.mergedMysenConfig || MYSEN_CONFIG;
+    const merged = buildMergedMysenLyrics();
+    const lastIntro = lastFilledLineIndexInLyrics(eff.introLyrics || eff.lyrics);
+    mysenState.firstTimestampLineIndex = lastIntro >= 0 ? lastIntro + 1 : 6;
+
+    applyMysenWordAnimationToMergedLyrics(merged, mysenState.wordAnimationDoc?.overrides);
+    prepareMusicLyricWords(eff, mysenState, 'mysen', merged);
+    queueMysenVoxelPregenForPreparedWords(mysenState, eff);
+
+    const firstTs = mysenState.firstTimestampLineIndex;
+    const introStagger = eff.introAssembly?.lineStaggerSec ?? 0;
+    if (introStagger > 0) {
+        for (let i = 0; i < mysenState.words.length; i++) {
+            const w = mysenState.words[i];
+            if (w.lineIndex < firstTs) {
+                const off = w.lineIndex * introStagger;
+                w.startTime += off;
+                w.assembledTime += off;
+            }
+        }
+    }
+
+    const lineStaggerLyrics = eff.lyricAssembly?.lineStaggerSec ?? 0;
+    if (lineStaggerLyrics > 0) {
+        for (let i = 0; i < mysenState.words.length; i++) {
+            const w = mysenState.words[i];
+            if (w.lineIndex >= firstTs) {
+                const k = w.lineIndex - firstTs;
+                w.startTime += k * lineStaggerLyrics;
+                w.assembledTime += k * lineStaggerLyrics;
+            }
+        }
+    }
+
     const lineCount = mysenState.words.length ? mysenState.words[mysenState.words.length - 1].lineIndex + 1 : 0;
-    console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines.`);
+    console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines (timestamp line ≥ ${mysenState.firstTimestampLineIndex}).`);
 }
 
 function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
@@ -5932,14 +6352,68 @@ function getWordPulseScaleMul(wordData) {
     return 1 + (wordData._pulseScaleMax - 1) * p;
 }
 
+/** Mysen lyric timing uses wall `elapsed` from mode start; keep spread/vanish on same axis as `assembledTime` (not raw audio.currentTime, which can lag or differ with fallback clip). */
+function getMysenSpreadDurationSec(config) {
+    const v = config.spread?.durationSec;
+    if (Number.isFinite(v) && v > 0) return v;
+    const fb = MYSEN_CONFIG.spread?.durationSec;
+    return Number.isFinite(fb) && fb > 0 ? fb : 1.35;
+}
+
+/** Approximate media timeline position on file (s) — matches how word `startTime` / `at` are interpreted vs `elapsed`. */
+function getMysenApproxMediaSec(config, elapsed) {
+    const startT = config.audioStartTime || 0;
+    return startT + elapsed;
+}
+
 function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
-    const { consoleTag = 'MUSIC', enablePulse = false } = options;
+    const { consoleTag = 'MUSIC', enablePulse = false, mysenMode = false, deltaSec = 1 / 60 } = options;
     const tempColor = new THREE.Color();
-    const targetWhite = new THREE.Color(0xffffff);
-    const startDark = new THREE.Color(0x050505);
+    const asmEndCol = new THREE.Color();
+    const asmStartCol = new THREE.Color();
     const vStyle = voxelStyleFromMusicConfig(config);
+    const firstTs = mysenState.firstTimestampLineIndex ?? 99999;
 
     state.words.forEach((wordData) => {
+        if (wordData.state === 'done') return;
+
+        const wordScaleMul = wordData.assembledScale > 0 ? wordData.assembledScale : 1;
+
+        if (wordData.state === 'spreading' && wordData.mesh && wordData.cubes) {
+            const introDur = config.introOutroSpread?.spreadDurationSec;
+            const dur = wordData._introOutroSpread && Number.isFinite(introDur) && introDur > 0
+                ? introDur
+                : getMysenSpreadDurationSec(config);
+            wordData._spreadT = (wordData._spreadT || 0) + deltaSec;
+            const u = dur > 0 ? wordData._spreadT / dur : 1;
+            const t = Math.min(1, Math.max(0, u));
+            const amp = (config.spread?.amplitude ?? 4) * t;
+            const pulseMul = enablePulse ? getWordPulseScaleMul(wordData) : 1;
+            const px = wordData.posX || 0;
+            const py = wordData.posY || 0;
+            const pz = wordData.posZ || 0;
+
+            wordData.cubes.forEach((cube, i) => {
+                const sx = cube.targetPos.x !== 0 ? Math.sign(cube.targetPos.x) : (i % 2 === 0 ? 1 : -1);
+                const sy = cube.targetPos.y !== 0 ? Math.sign(cube.targetPos.y) : (i % 3 === 0 ? 1 : -1);
+                dummy.position.set(
+                    cube.targetPos.x + sx * amp * 0.2 + px,
+                    cube.targetPos.y + sy * amp * 0.2 + py,
+                    cube.targetPos.z + pz
+                );
+                dummy.scale.setScalar(pulseMul * (1 - t) * wordScaleMul);
+                dummy.rotation.set(0, 0, 0);
+                dummy.updateMatrix();
+                wordData.mesh.setMatrixAt(i, dummy.matrix);
+            });
+            wordData.mesh.instanceMatrix.needsUpdate = true;
+            if (t >= 1) {
+                wordData.state = 'done';
+                wordData.mesh.visible = false;
+            }
+            return;
+        }
+
         if (wordData.state === 'waiting' && elapsed >= wordData.startTime) {
             wordData.state = 'assembling';
 
@@ -5955,23 +6429,69 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
 
                 for (let i = 0; i < currentWordIdxInLine; i++) {
                     const prevWord = wordsInThisLine[i];
-                    if (prevWord && prevWord.width) {
-                        lineX += prevWord.width + config.wordSpacing;
-                    } else {
-                        lineX += 1.5;
-                    }
+                    const pw = prevWord && prevWord.width ? prevWord.width : 1.5;
+                    const extra = prevWord && prevWord.extraWordSpacingAfter ? prevWord.extraWordSpacingAfter : 0;
+                    lineX += pw + config.wordSpacing + extra;
                 }
 
                 let totalLineWidth = 0;
-                wordsInThisLine.forEach(w => {
-                    totalLineWidth += (w.width || 1.5) + config.wordSpacing;
-                });
-                totalLineWidth -= config.wordSpacing;
+                for (let wi = 0; wi < wordsInThisLine.length; wi++) {
+                    const w = wordsInThisLine[wi];
+                    totalLineWidth += (w.width || 1.5);
+                    if (wi < wordsInThisLine.length - 1) {
+                        totalLineWidth += config.wordSpacing + (w.extraWordSpacingAfter || 0);
+                    }
+                }
 
                 const startX = -totalLineWidth / 2;
                 wordData.posX = startX + lineX + (wordData.width / 2) + (wordData.offsetX || 0);
                 wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
-                wordData.posZ = 0;
+                wordData.posZ = wordData.offsetZ || 0;
+
+                const isTsWord = mysenMode && state === mysenState && wordData.lineIndex >= firstTs;
+                const groupedTsLine = wordData.mysenGroupedLine === true;
+                const hasFixedSpawn =
+                    Number.isFinite(wordData.spawnX) &&
+                    Number.isFinite(wordData.spawnY) &&
+                    Number.isFinite(wordData.spawnZ);
+                const useFly =
+                    isTsWord && !groupedTsLine && (hasFixedSpawn || config.randomFly?.enabled);
+                if (useFly) {
+                    wordData._railX = wordData.posX;
+                    wordData._railY = wordData.posY;
+                    wordData._railZ = wordData.posZ;
+                    if (hasFixedSpawn) {
+                        wordData._spawnX = wordData.spawnX;
+                        wordData._spawnY = wordData.spawnY;
+                        wordData._spawnZ = wordData.spawnZ;
+                        wordData.posX = wordData.spawnX;
+                        wordData.posY = wordData.spawnY;
+                        wordData.posZ = wordData.spawnZ;
+                    } else {
+                        const d0 = config.randomFly.spawnDistanceMin ?? 25;
+                        const d1 = config.randomFly.spawnDistanceMax ?? 40;
+                        const margin = config.randomFly?.ndcMargin ?? 0.1;
+                        const useSeeded =
+                            config.mysenTimestampLineGroups?.seededRandomFly !== false &&
+                            Number.isFinite(wordData.atSourceSec);
+                        const spawn = useSeeded
+                            ? sampleMysenSeededRandomFlySpawn(
+                                  d0,
+                                  d1,
+                                  margin,
+                                  mysenHashSeedU32(`${wordData.text}|${wordData.atSourceSec}`)
+                              )
+                            : sampleMysenRandomFrustumPoint(
+                                  d0 + Math.random() * Math.max(0.01, d1 - d0)
+                              );
+                        wordData._spawnX = spawn.x;
+                        wordData._spawnY = spawn.y;
+                        wordData._spawnZ = spawn.z;
+                        wordData.posX = spawn.x;
+                        wordData.posY = spawn.y;
+                        wordData.posZ = spawn.z;
+                    }
+                }
 
                 scene.add(wordData.mesh);
                 wordData.mesh.visible = true;
@@ -5987,12 +6507,34 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
             if (wordData.posY === undefined) wordData.posY = config.lyricsOffsetY;
             wordData.posY += (targetLineY - wordData.posY) * 0.1;
 
+            const isTsWord = mysenMode && state === mysenState && wordData.lineIndex >= firstTs;
+            if (isTsWord && wordData._railX != null && wordData.state === 'assembling') {
+                const flyBlend = wordData.progress ?? 0;
+                wordData.posX = THREE.MathUtils.lerp(wordData._spawnX, wordData._railX, flyBlend);
+                wordData.posY = THREE.MathUtils.lerp(wordData._spawnY, wordData._railY, flyBlend);
+                wordData.posZ = THREE.MathUtils.lerp(wordData._spawnZ, wordData._railZ, flyBlend);
+            }
+
             const pulseMul = enablePulse ? getWordPulseScaleMul(wordData) : 1;
+            const jx = 0;
+            const jy = 0;
+            const jz = 0;
 
             if (wordData.state === 'assembling') {
                 const assemblyElapsed = elapsed - wordData.startTime;
                 const assemblyDuration = config.wordAssemblyDuration;
                 wordData.progress = Math.min(assemblyElapsed / assemblyDuration, 1);
+
+                const hexAsmEnd =
+                    wordData._assemblyColorEnd != null
+                        ? wordData._assemblyColorEnd
+                        : wordData.color != null
+                          ? wordData.color
+                          : 0xffffff;
+                const hexAsmStart =
+                    wordData._assemblyColorStart != null ? wordData._assemblyColorStart : 0x050505;
+                asmEndCol.setHex(hexAsmEnd);
+                asmStartCol.setHex(hexAsmStart);
 
                 if (wordData.mesh && wordData.cubes) {
                     wordData.cubes.forEach((cube, i) => {
@@ -6026,22 +6568,22 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                             const transitionWindow = 0.5;
 
                             if (effectiveProgress >= 1) {
-                                tempColor.copy(targetWhite);
+                                tempColor.copy(asmEndCol);
                             } else if (timeRemaining <= transitionWindow && timeRemaining > 0) {
-                                const t = 1 - (timeRemaining / transitionWindow);
-                                tempColor.copy(startDark).lerp(targetWhite, t);
+                                const tt = 1 - (timeRemaining / transitionWindow);
+                                tempColor.copy(asmStartCol).lerp(asmEndCol, tt);
                             } else {
-                                tempColor.copy(startDark);
+                                tempColor.copy(asmStartCol);
                             }
                             wordData.mesh.setColorAt(i, tempColor);
                         }
 
                         dummy.position.set(
-                            cube.currentPos.x + (wordData.posX || 0),
-                            cube.currentPos.y + (wordData.posY || 0),
-                            cube.currentPos.z + (wordData.posZ || 0)
+                            cube.currentPos.x + (wordData.posX || 0) + jx,
+                            cube.currentPos.y + (wordData.posY || 0) + jy,
+                            cube.currentPos.z + (wordData.posZ || 0) + jz
                         );
-                        dummy.scale.setScalar(cube.currentScale * pulseMul);
+                        dummy.scale.setScalar(cube.currentScale * pulseMul * wordScaleMul);
                         dummy.rotation.set(0, 0, 0);
                         dummy.updateMatrix();
                         wordData.mesh.setMatrixAt(i, dummy.matrix);
@@ -6061,15 +6603,64 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                         state.completedLines = wordData.lineIndex + 1;
                         console.log(`[${consoleTag}] Line ${wordData.lineIndex} completed. Shifting up!`);
                     }
+
+                    const vanishAtMedia = wordData.lineVanishAtSourceSec;
+                    const spreadDur = getMysenSpreadDurationSec(config);
+                    const goSpreadTs =
+                        mysenMode &&
+                        state === mysenState &&
+                        isTsWord &&
+                        spreadDur > 0 &&
+                        !Number.isFinite(vanishAtMedia);
+                    if (goSpreadTs) {
+                        wordData.state = 'spreading';
+                        const lst = config.lyricSpread?.lineStaggerSec ?? 0;
+                        const li = Math.max(0, wordData.lineIndex - firstTs);
+                        wordData._spreadT = lst > 0 ? -li * lst : 0;
+                        wordData._introOutroSpread = false;
+                    }
                 }
             } else if (wordData.mesh && wordData.cubes) {
+                if (wordData.state === 'assembled' && mysenMode && state === mysenState && wordData.lineIndex < firstTs) {
+                    const ios = config.introOutroSpread;
+                    if (
+                        ios &&
+                        ios.enabled !== false &&
+                        (getMysenSpreadDurationSec(config) > 0 ||
+                            (Number.isFinite(ios.spreadDurationSec) && ios.spreadDurationSec > 0))
+                    ) {
+                        const wall = (Date.now() - mysenState.startTime) / 1000;
+                        const d = ios.delaySec ?? 4;
+                        const st = ios.lineStaggerSec ?? 0.35;
+                        if (wall >= d + wordData.lineIndex * st) {
+                            wordData.state = 'spreading';
+                            wordData._spreadT = 0;
+                            wordData._introOutroSpread = true;
+                        }
+                    }
+                }
+                if (
+                    wordData.state === 'assembled' &&
+                    mysenMode &&
+                    state === mysenState &&
+                    isTsWord &&
+                    Number.isFinite(wordData.lineVanishAtSourceSec) &&
+                    getMysenSpreadDurationSec(config) > 0
+                ) {
+                    const mediaSec = getMysenApproxMediaSec(config, elapsed);
+                    if (mediaSec >= wordData.lineVanishAtSourceSec) {
+                        wordData.state = 'spreading';
+                        wordData._spreadT = 0;
+                        wordData._introOutroSpread = false;
+                    }
+                }
                 wordData.cubes.forEach((cube, i) => {
                     dummy.position.set(
-                        cube.targetPos.x + (wordData.posX || 0),
-                        cube.targetPos.y + (wordData.posY || 0),
-                        cube.targetPos.z + (wordData.posZ || 0)
+                        cube.targetPos.x + (wordData.posX || 0) + jx,
+                        cube.targetPos.y + (wordData.posY || 0) + jy,
+                        cube.targetPos.z + (wordData.posZ || 0) + jz
                     );
-                    dummy.scale.setScalar(pulseMul);
+                    dummy.scale.setScalar(pulseMul * wordScaleMul);
                     dummy.rotation.set(0, 0, 0);
                     dummy.updateMatrix();
                     wordData.mesh.setMatrixAt(i, dummy.matrix);
@@ -6128,6 +6719,7 @@ function updateVajbujMode(delta) {
 function updateMysenMode(delta) {
     if (!mysenState.active) return;
 
+    const eff = mysenState.mergedMysenConfig || MYSEN_CONFIG;
     const elapsed = (Date.now() - mysenState.startTime) / 1000;
     let fragmentDuration = mysenState.playbackDurationSec;
     if (!Number.isFinite(fragmentDuration) || fragmentDuration <= 0) {
@@ -6136,11 +6728,23 @@ function updateMysenMode(delta) {
     const progressNormalized = fragmentDuration > 0 ? elapsed / fragmentDuration : 0;
 
     let tempoMultiplier = 1.0;
-    if (progressNormalized < MYSEN_CONFIG.slowPhaseEnd) {
-        tempoMultiplier = MYSEN_CONFIG.slowPhaseSpeed;
+    if (progressNormalized < eff.slowPhaseEnd) {
+        tempoMultiplier = eff.slowPhaseSpeed;
     }
 
-    stepMusicLyricWords(mysenState, MYSEN_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'MYSEN', enablePulse: true });
+    if (backgroundVideoEl && MYSEN_CONFIG.mysenVideoPlaybackRate?.enabled) {
+        const pr = MYSEN_CONFIG.mysenVideoPlaybackRate;
+        const r0 = pr.start ?? 1;
+        const r1 = pr.end ?? 0.35;
+        backgroundVideoEl.playbackRate = r0 + (r1 - r0) * Math.min(1, progressNormalized);
+    }
+
+    stepMusicLyricWords(mysenState, eff, elapsed, tempoMultiplier, {
+        consoleTag: 'MYSEN',
+        enablePulse: true,
+        mysenMode: true,
+        deltaSec: delta
+    });
 }
 
 function finalizeVajbujCleanup() {
@@ -6165,6 +6769,7 @@ function finalizeVajbujCleanup() {
     vajbujState.active = false;
     vajbujState.isStopping = false;
     vajbujState.lastActivityTime = Date.now();
+    setMusicShowcaseMenuUiHidden(false);
 }
 
 function forceStopVajbujSilent() {
@@ -6249,10 +6854,18 @@ function finalizeMysenCleanup() {
     mysenState.isStopping = false;
     mysenState.lastActivityTime = Date.now();
 
+    if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        mysenState.savedBgSrcForMysen = null;
+    }
+    if (backgroundVideoEl) {
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    }
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
     if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
+    setMusicShowcaseMenuUiHidden(false);
 }
 
 function forceStopMysenSilent() {
@@ -6273,6 +6886,13 @@ function forceStopMysenSilent() {
     cleanupMysenWords();
     mysenState.active = false;
     mysenState.isStopping = false;
+    if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        mysenState.savedBgSrcForMysen = null;
+    }
+    if (backgroundVideoEl) {
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    }
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
     if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
     clearMysenPlaybackTimers();
@@ -6320,19 +6940,59 @@ function initMysenMode() {
 
     createMusicModeBackgroundCubes(mysenState, MYSEN_CONFIG);
 
+    mysenState.timestampLyricsParsed = [];
+    mysenState._timestampLoadPromise = Promise.resolve();
+    mysenState.wordAnimationDoc = null;
+    mysenState._wordAnimationLoadPromise = Promise.resolve();
     if (loadedFontRegular) {
-        queueLyricVoxelPregeneration(MYSEN_CONFIG.lyrics, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN');
+        queueLyricVoxelPregeneration(MYSEN_CONFIG.introLyrics || MYSEN_CONFIG.lyrics, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN');
+    }
+    if (MYSEN_CONFIG.timestampLyricsEnabled && MYSEN_CONFIG.timestampLyricsUrl) {
+        mysenState._timestampLoadPromise = fetch(MYSEN_CONFIG.timestampLyricsUrl)
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((text) => {
+                mysenState.timestampLyricsParsed = parseMysenTimestampLyricsFile(text);
+                if (mysenState.timestampLyricsParsed.length) {
+                    console.log('[MYSEN] Loaded', mysenState.timestampLyricsParsed.length, 'timestamp lyric tokens');
+                }
+                queueMysenTimestampVoxelPregen();
+            })
+            .catch(() => {});
+    }
+    if (MYSEN_CONFIG.wordAnimationEnabled && MYSEN_CONFIG.wordAnimationUrl) {
+        mysenState._wordAnimationLoadPromise = fetch(MYSEN_CONFIG.wordAnimationUrl)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                mysenState.wordAnimationDoc = data && typeof data === 'object' ? data : null;
+                if (mysenState.wordAnimationDoc?.version != null) {
+                    console.log('[MYSEN] Word animation JSON loaded, version', mysenState.wordAnimationDoc.version);
+                }
+            })
+            .catch((e) => {
+                console.warn('[MYSEN] Word animation JSON fetch/parse failed:', e);
+                mysenState.wordAnimationDoc = null;
+            });
     }
 
     console.log('[MYSEN] Mode initialized.');
 }
 
-function startMysenMode() {
+async function startMysenMode() {
     if (mysenState.active) return;
 
+    setMusicShowcaseMenuUiHidden(true);
     forceStopVajbujSilent();
 
     introCameraFlyInActive = false;
+
+    try {
+        await ensureMysenTimestampsLoaded();
+        await ensureMysenWordAnimationLoaded();
+    } catch (e) {
+        setMusicShowcaseMenuUiHidden(false);
+        throw e;
+    }
+    mysenState.mergedMysenConfig = buildMysenEffectiveConfig();
 
     console.log('[MYSEN] Starting remix mode');
     clearMysenPlaybackTimers();
@@ -6361,7 +7021,12 @@ function startMysenMode() {
     cleanupMysenWords();
     prepareMysenWords();
 
-    setMainTopkekSceneVisible(false, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
+    if (MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        mysenState.savedBgSrcForMysen = activeBackgroundVideoSource?.src ?? null;
+        setBackgroundVideoBySrc(MYSEN_CONFIG.mysenBackgroundVideoSrc);
+    }
+
+    setMainTopkekSceneVisible(false, { hideBackgroundVideo: mysenHideBackgroundVideoWhileActive() });
 
     if (mysenState.bgCubesMesh) {
         mysenState.bgCubesMesh.visible = true;
@@ -6628,68 +7293,25 @@ async function loadParticles(data) {
     const innerCount = data.inner.length;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
-    // Enable instanceColor tinting for the shader (instancing color varying).
-    innerCubeMat.vertexColors = true;
-    innerCubeMat.onBeforeCompile = (shader) => {
-        const hasInstanceColor =
-            shader.vertexShader.includes('vInstanceColor') ||
-            shader.fragmentShader.includes('vInstanceColor');
-        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
-
-        const before = shader.fragmentShader;
-        let after = before;
-
-        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
-        let emissiveRadiancePatched = false;
-        if (emissiveRadianceToken.test(after)) {
-            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
-            emissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
-        let totalFromEmissiveRadiancePatched = false;
-        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
-            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
-            totalFromEmissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
-        let totalFromEmissivePatched = false;
-        if (totalFromEmissiveToken.test(after)) {
-            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
-            totalFromEmissivePatched = true;
-        }
-
-        if (after === before) {
-            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
-        }
-
-        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
-            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
-            console.log('[innerCubes] emissive patch debug', {
-                colorVarying,
-                emissiveRadiancePatched,
-                totalFromEmissiveRadiancePatched,
-                totalFromEmissivePatched,
-                shaderPatched: after !== before
-            });
-        }
-        shader.fragmentShader = after;
-    };
+    attachInnerCubeGradientShader(innerCubeMat);
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCount);
     const color = new THREE.Color();
 
     let minX = Infinity;
     let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
     if (innerCount > 0) {
         data.inner.forEach(p => {
-            if (p.p[0] < minX) minX = p.p[0];
-            if (p.p[0] > maxX) maxX = p.p[0];
+            const px = p.p[0];
+            const py = p.p[1];
+            if (px < minX) minX = px;
+            if (px > maxX) maxX = px;
+            if (py < minY) minY = py;
+            if (py > maxY) maxY = py;
         });
     }
-    const textWidth = maxX - minX || 1;
 
     let sIdx = 0;
     data.inner.forEach(p => {
@@ -6702,8 +7324,7 @@ async function loadParticles(data) {
         dummy.updateMatrix();
         innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
 
-        const hue = (pos.x - minX) / textWidth;
-        color.setHSL(hue, 1.0, 0.5);
+        setInnerCubeInstanceHue(color, pos.x, pos.y, minX, maxX, minY, maxY);
         innerCubeInstancedMesh.setColorAt(sIdx, color);
 
         innerCubeParticles.push({

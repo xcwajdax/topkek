@@ -38,6 +38,14 @@ export const CONFIG = {
     particleSize: 0.1,
     // loadParticles(JSON): symmetric ±Z nudge. Use 0 for baked particles_*.json (non-zero pushes z≥0 toward +Z → wystaje „z przodu”).
     innerCubeZBias: 0,
+    /** Inner cubes: HSL instance tint (instanceColor + emissive patch). X = hue along letter span; Y adds variation. */
+    innerCubeHueGradient: {
+        enabled: true,
+        xWeight: 0.78,
+        yWeight: 0.22,
+        saturation: 1.0,
+        lightness: 0.52
+    },
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: IS_MOBILE ? 15000 : 50000, // Reduced particle count for mobile
     particlesFile: IS_MOBILE ? 'particles_mobile.json' : 'particles_pc.json', // File to load particles from
@@ -71,53 +79,58 @@ export const CONFIG = {
     },
     // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
     backgroundVideo: {
+        /** Mnożnik RGB na teksturze wideo (płaszczyzna + bake PMREM) — jaśniejsze tło i mocniejsze odbicia */
+        mapColorGain: 1.85,
         sources: [
             {
                 src: 'ASSETS/BGs/01_torus.mp4',
+                mapColorGain: 1.95,
                 envMapIntensityBoost: {
-                    defaultBox: 25.0,
-                    glass: 6.0,
-                    gold: 6.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,   
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 48.0,
+                    glass: 11.0,
+                    gold: 11.5,
+                    innerCubes: 1.1,
+                    heart: 4.2,
+                    vajbujBgCubes: 6.0,
+                    mysenBgCubes: 6.0
                 },
                 hemisphereFromVideo: {
-                    intensity: 2.0,
-                    ambientIntensity: 1
+                    intensity: 4.2,
+                    ambientIntensity: 1.65
                 }
             },
             {
                 src: 'ASSETS/BGs/02_bag_1.mp4',
+                mapColorGain: 1.75,
                 envMapIntensityBoost: {
-                    defaultBox: 5.0,
-                    glass: 2.0,
-                    gold: 2.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 16.0,
+                    glass: 6.5,
+                    gold: 7.0,
+                    innerCubes: 1.0,
+                    heart: 3.8,
+                    vajbujBgCubes: 5.5,
+                    mysenBgCubes: 5.5
                 },
                 hemisphereFromVideo: {
-                    intensity: 1.2,
-                    ambientIntensity: 1
+                    intensity: 3.0,
+                    ambientIntensity: 1.55
                 }
             },
             {
                 src: 'ASSETS/BGs/06_kostki_02.mp4',
+                mapColorGain: 1.9,
                 envMapIntensityBoost: {
-                    defaultBox: 5.0,
-                    glass: 2.0,
-                    gold: 2.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 15.0,
+                    glass: 6.2,
+                    gold: 6.8,
+                    innerCubes: 1.0,
+                    heart: 3.8,
+                    vajbujBgCubes: 5.5,
+                    mysenBgCubes: 5.5
                 },
                 hemisphereFromVideo: {
-                    intensity: 3,
-                    ambientIntensity: 0.5
+                    intensity: 5.5,
+                    ambientIntensity: 1.25
                 }
             }
         ],
@@ -140,8 +153,8 @@ export const CONFIG = {
             enabled: true,
             /** true na desktopie = zapasowy fill z kolorem wideo, gdy PMREM/ACES psuje jasność */
             always: !IS_MOBILE,
-            intensity: 0.85,
-            ambientIntensity: 0.6,
+            intensity: 2.15,
+            ambientIntensity: 1.35,
             // Szybsza reakcja kolorów (bez zbyt częstych próbek)
             intervalMs: 40,
             canvasWidth: 32,
@@ -149,13 +162,13 @@ export const CONFIG = {
         },
         /** Mnożniki envMapIntensity względem MATERIALS.* (żeby widać dynamiczne IBL) */
         envMapIntensityBoost: {
-            defaultBox: 5.0,
-            glass: 2.0,
-            gold: 2.2,
-            innerCubes: 0.1,
-            heart: 1.35,
-            vajbujBgCubes: 2.0,
-            mysenBgCubes: 2.0
+            defaultBox: 7.0,
+            glass: 5.5,
+            gold: 6.0,
+            innerCubes: 0.38,
+            heart: 3.2,
+            vajbujBgCubes: 5.5,
+            mysenBgCubes: 5.5
         },
         bpmControl: {
             baseBpm: 120,
@@ -579,17 +592,90 @@ export const MYSEN_CONFIG = {
     fadeInDuration: 1.5,
     fadeOutDuration: 1.5,
 
-    /** Hide the background video plane while MYSEN plays (reduces visual clash). */
+    /**
+     * When true, keep the background video plane visible during MYSEN (e.g. torus). When false, uses hideBackgroundVideo.
+     * If true, `hideBackgroundVideo` is ignored while MYSEN is active.
+     */
+    showBackgroundVideoDuringMysen: true,
+    /** Hide the background video plane while MYSEN plays (only if showBackgroundVideoDuringMysen is false). */
     hideBackgroundVideo: true,
+
+    /** Switch to this clip during MYSEN (must match an entry in CONFIG.backgroundVideo.sources). */
+    mysenBackgroundVideoSrc: 'ASSETS/BGs/01_torus.mp4',
+    /** Slow background video over the remix (playbackRate). */
+    mysenVideoPlaybackRate: {
+        enabled: true,
+        start: 1.0,
+        end: 0.35
+    },
+
+    /** Fetch and append word timings (skips lines labeled Muzyka). */
+    timestampLyricsEnabled: true,
+    timestampLyricsUrl: 'ASSETS/mysen/mysen_timestamps.txt',
+    timestampWordColor: 0xffffff,
+
+    /** Optional JSON: defaults (subset of animation keys) + per-word overrides (match by `at`+`text` or `globalIndex`). See ASSETS/mysen/README.md. */
+    wordAnimationEnabled: true,
+    wordAnimationUrl: 'ASSETS/mysen/mysen-word-animation.json',
+
+    /**
+     * Grupowanie słów z `mysen_timestamps.txt` w jeden wiersz (bez lotu z frustum), znikanie całej linii przy `lineVanishAtMediaSec` (sekundy na osi pliku audio).
+     * Słowa spoza przedziałów `tMin`–`tMax`: jedno słowo = jeden wiersz; przy `seededRandomFly` spawn jest deterministyczny per słowo (powtarzalny).
+     */
+    mysenTimestampLineGroups: {
+        enabled: true,
+        seededRandomFly: true,
+        groups: [
+            { tMin: 23.7, tMax: 30.36, lineVanishAtMediaSec: 31.5 },
+            { tMin: 31.84, tMax: 38.7, lineVanishAtMediaSec: 41.0 }
+        ]
+    },
+
+    /** Intro: wiersze z `introLyrics` przed timestampami; timestampy zaczynają się po `introLyrics` (auto: firstTimestampLineIndex). */
+
+    /** Opóźnienie startu składania kolejnych wierszy intro (sek). */
+    introAssembly: {
+        lineStaggerSec: 0.55
+    },
+
+    /** Opcjonalnie: dodatkowe opóźnienie kolejnych linii tekstu z timestampów (sek); 0 = wyłączone (tylko `at`). */
+    lyricAssembly: {
+        lineStaggerSec: 0
+    },
+
+    /** Po `delaySec` — znikanie intro przez rozłożenie wokseli, wiersz po wierszu z `lineStaggerSec`. */
+    introOutroSpread: {
+        enabled: true,
+        delaySec: 4.2,
+        lineStaggerSec: 0.4,
+        /** Jeśli ustawione > 0, inna długość animacji rozłożenia niż `spread.durationSec`. */
+        spreadDurationSec: 1.45
+    },
+
+    /** Opóźnienie startu rozłożenia kolejnych linii tekstu piosenki (sek, ujemne `_spreadT`). */
+    lyricSpread: {
+        lineStaggerSec: 0.07
+    },
+
+    /** Intro only (merged at runtime with timestamp words). Pierwsza linia: tytuł; TOPKEK mniejszy niż domyślny rozmiar słów. */
+    introLyrics: [
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22 },
+        { lineBreak: true },
+        { text: 'TOPKEK', color: 0xffffff, at: 0.52, scale: 0.72 },
+        { lineBreak: true },
+        { text: 'reimagined', color: 0xaaccff, at: 0.78 }
+    ],
 
     /**
      * Lyrics: same shape as VAJBUJ plus optional `at` (seconds from audioStartTime) for variable tempo.
-     * Optional per-word pulse after assemble: `pulseScale`, `pulseMs`.
+     * Runtime prepare uses introLyrics + timestamp file; this fallback lists intro for pregen queue before fetch completes.
      */
     lyrics: [
-        { text: 'BEZSEN - MYSEN', color: 0x66ccff, at: 0.6 },
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22 },
         { lineBreak: true },
-        { text: 'Topkek reimagined', color: 0xffffff, at: 2.2 }
+        { text: 'TOPKEK', color: 0xffffff, at: 0.52, scale: 0.72 },
+        { lineBreak: true },
+        { text: 'reimagined', color: 0xaaccff, at: 0.78 }
     ],
 
     /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
@@ -597,6 +683,18 @@ export const MYSEN_CONFIG = {
 
     /** Global matchers: pulse when a word finishes assembling (in addition to per-line pulseScale). */
     wordPulses: [],
+
+    /** Timestamp words: spawn in random FOV, fly into lyric rail while assembling, then symmetric XY spread. */
+    randomFly: {
+        enabled: true,
+        ndcMargin: 0.12,
+        spawnDistanceMin: 28,
+        spawnDistanceMax: 42
+    },
+    spread: {
+        durationSec: 1.35,
+        amplitude: 5.5
+    },
 
     wordAssemblyDuration: 1.8,
     lyricsStartDelay: 0,
@@ -626,8 +724,8 @@ export const MYSEN_CONFIG = {
     },
 
     /** 0 = no slow phase; else fraction of fragment duration with slowPhaseSpeed multiplier on bg cubes. */
-    slowPhaseEnd: 0,
-    slowPhaseSpeed: 0.2
+    slowPhaseEnd: 0.35,
+    slowPhaseSpeed: 0.22
 };
 
 // Shader Configuration
@@ -645,8 +743,8 @@ export const SHADER_CONFIG = {
     bloom: {
         // RenderPass zapisuje obraz już po tone mappingu (ACES na rendererze); wysoki próg (np. 0.48) odcina prawie cały bloom.
         // Oficjalny przykład three r160 używa threshold 0. Umiarkowany próg + siła utrzymują poświatę bez przepalenia.
-        threshold: 0.12,
-        strength: 0.82,
+        threshold: 0.15,
+        strength: 0.62,
         alternateStrength: 0.32, // Siła bloom po naciśnięciu spacji
         radius: 0.85
     },
@@ -783,13 +881,13 @@ export const MATERIALS = {
         envMapIntensity: 0.5
     },
     innerCubes: {
-        // Jaśniejsze albedo + silniejszy emissive niż 2.4: czytelna siatka w środku bez „białej plamy” (łagodny lift w shaderze).
-        color: 0x5a5a5a,
+        // Jaśniejsze albedo żeby mnożenie przez instanceColor (gradient HSL) nie gasiło barwy; emissive + patch w script.js.
+        color: 0xe4e4e4,
         envMapIntensity: 0.52,
         roughness: 0.88,
         metalness: 0.06,
         emissive: 0xffffff,
-        emissiveIntensity: 4.2,
+        emissiveIntensity: 3.65,
         toneMapped: false
     }
 };

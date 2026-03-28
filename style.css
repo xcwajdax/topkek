@@ -12,6 +12,11 @@ body {
     --menu-surface-shadow: 0 0 10px rgba(76, 175, 80, 0.12);
     --menu-label-color: rgba(200, 255, 200, 0.82);
     --menu-text-color: rgba(210, 255, 210, 0.9);
+    /* VAJBUJ / MYSEN: hide non-console UI */
+    --music-ui-reveal-dur: 0.48s;
+    --music-ui-reveal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --music-ui-collapse-dur: 0.52s;
+    --music-ui-collapse-ease: cubic-bezier(0.32, 0, 0.18, 1);
 }
 
 #canvas-container {
@@ -128,7 +133,13 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    transition: transform 0.26s ease, opacity 0.26s ease;
+    visibility: visible;
+    filter: blur(0);
+    transition:
+        transform var(--music-ui-reveal-dur, 0.45s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        opacity var(--music-ui-reveal-dur, 0.45s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        visibility 0s linear;
 }
 
 .menu-collapsible-section {
@@ -655,6 +666,88 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     will-change: transform, opacity, filter;
 }
 
+/* VAJBUJ / MYSEN: fade + slide + collapse; console stays visible (and eases up slightly) */
+body.music-showcase-ui-minimal #right-panel #terminal-menu,
+body.music-showcase-ui-minimal #ui-container {
+    max-height: 0 !important;
+    opacity: 0;
+    transform: translate3d(18px, -4px, 0) scale(0.985);
+    filter: blur(2px);
+    pointer-events: none !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    visibility: hidden;
+    transition:
+        max-height var(--music-ui-collapse-dur) var(--music-ui-collapse-ease),
+        opacity calc(var(--music-ui-reveal-dur) * 0.85) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        margin 0.42s var(--music-ui-reveal-ease),
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal #camera-hud {
+    opacity: 0;
+    transform: translate3d(-40px, -6px, 0) scale(0.98);
+    filter: blur(2px);
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal .prod-label {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.98);
+    filter: blur(1px);
+    visibility: hidden;
+    transition:
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal .topkek-fx-dev-shell {
+    opacity: 0;
+    transform: translate3d(-50%, -18px, 0) scale(0.96);
+    filter: blur(2px);
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal #topkek-terminal-shell {
+    transform: translate3d(0, -12px, 0);
+    box-shadow:
+        0 0 0 1px rgba(129, 199, 132, 0.22),
+        0 10px 28px rgba(0, 0, 0, 0.45),
+        0 0 22px rgba(76, 175, 80, 0.14);
+    transition:
+        transform var(--music-ui-collapse-dur) var(--music-ui-collapse-ease),
+        box-shadow var(--music-ui-collapse-dur) var(--music-ui-reveal-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.music-showcase-ui-minimal #right-panel #terminal-menu,
+    body.music-showcase-ui-minimal #ui-container,
+    body.music-showcase-ui-minimal #camera-hud,
+    body.music-showcase-ui-minimal .prod-label,
+    body.music-showcase-ui-minimal .topkek-fx-dev-shell,
+    body.music-showcase-ui-minimal #topkek-terminal-shell {
+        filter: none !important;
+        transition-duration: 0.01ms !important;
+        transition-delay: 0s !important;
+    }
+}
+
 #ui-container {
     width: 100%;
     box-sizing: border-box;
@@ -667,6 +760,18 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     padding: 0;
     border-radius: 0;
     font-family: 'Courier New', monospace;
+    max-height: 800px;
+    overflow: hidden;
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        max-height var(--music-ui-collapse-dur, 0.52s) var(--music-ui-collapse-ease, cubic-bezier(0.32, 0, 0.18, 1)),
+        opacity calc(var(--music-ui-reveal-dur, 0.48s) * 0.92) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        margin 0.4s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        visibility 0s linear;
 }
 
 .controls-category-items {
@@ -762,6 +867,13 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     background: rgba(0, 0, 0, 0.3);
     padding: 5px 10px;
     border-radius: 4px;
+    visibility: visible;
+    filter: blur(0);
+    transition:
+        opacity var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.3s ease,
+        visibility 0s linear;
 }
 
 /* APPSTAIN Modal – tło tlo.jpg */
@@ -1289,6 +1401,18 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     box-shadow: none;
     padding: 0;
     border-radius: 0;
+    max-height: min(78vh, 1200px);
+    overflow: hidden;
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        max-height var(--music-ui-collapse-dur, 0.52s) var(--music-ui-collapse-ease, cubic-bezier(0.32, 0, 0.18, 1)),
+        opacity calc(var(--music-ui-reveal-dur, 0.48s) * 0.92) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        margin 0.4s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        visibility 0s linear;
 }
 
 .term-line {
@@ -1905,7 +2029,14 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     box-shadow: var(--menu-surface-shadow);
     z-index: 110;
     pointer-events: auto;
-    transition: width 0.25s ease, max-height 0.25s ease, transform 0.25s ease, right 0.25s ease, bottom 0.25s ease;
+    transform: translate3d(0, 0, 0);
+    transition:
+        width 0.25s ease,
+        max-height 0.25s ease,
+        transform 0.25s ease,
+        right 0.25s ease,
+        bottom 0.25s ease,
+        box-shadow 0.45s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .topkek-terminal-shell-title {
@@ -1993,6 +2124,14 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     font-size: 10px;
     line-height: 1.3;
     color: var(--menu-text-color);
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        opacity var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        visibility 0s linear;
 }
 
 .topkek-fx-dev-shell--minimized {

@@ -24,14 +24,29 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 
 ## [Unreleased]
 
+### Added
+- MYSEN: `MYSEN_CONFIG.mysenTimestampLineGroups` — słowa z timestampów w przedziałach `tMin`–`tMax` składane w **jeden wiersz** (bez lotu z frustum), zbiorcze znikanie przy `lineVanishAtMediaSec` (warunek: `audio.currentTime`); pozostałe słowa: jeden token na wiersz z **seedowanym** spawnem (`seededRandomFly`, hash `tekst|at`) dla powtarzalnej „losowej” pozycji w FOV.
+- MYSEN: opcjonalny plik `ASSETS/mysen/mysen-word-animation.json` (`wordAnimationEnabled` / `wordAnimationUrl`) — sekcje `defaults` (dozwolone klucze animacji lyriców) oraz `overrides` z dopasowaniem `at`+`text` (czas jak w `mysen_timestamps.txt`) lub `globalIndex`; pola: `spawn`, `offsetX`/`Y`/`Z`, `colorStart`/`colorEnd`, `scale`, `assembledScale`; przy starcie MYSEN scalany jest `mergedMysenConfig` i kolor końcowy słów bierze się z `color`/`colorEnd` zamiast sztywnego białego.
+
 ### Changed
-- MYSEN: domyślny tekst wokseli w `MYSEN_CONFIG.lyrics` — „BEZSEN - MYSEN” / „Topkek reimagined” (zamiast oko/MYSEN/remix).
+- Podczas `/vajbuj` i `/mysen` ukrywane są menu terminala, lewy HUD (`#camera-hud`), etykieta produkcyjna i panel FX dev — widoczna zostaje wyłącznie konsola (`#topkek-terminal-shell`); przejścia: fade, lekki slide, blur i zwijanie `max-height`, konsola delikatnie „wypływa” w górę z mocniejszym cieniem; `prefers-reduced-motion` skraca animacje; po zakończeniu trybu UI wraca.
+- Inner cubes: czytelniejszy gradient HSL (pozycja X+Y), wspólny `attachInnerCubeGradientShader` / `setInnerCubeInstanceHue` w `script.js`, opcje w `CONFIG.innerCubeHueGradient`, jaśniejsze albedo i łagodniejsze `emissiveIntensity` w `MATERIALS.innerCubes`.
+- Wzmocniono bloom (`SHADER_CONFIG.bloom`: niższy próg, wyższa siła i promień, mocniejszy tryb alternate) oraz fake GI z wideo: domyślne `hemisphereFromVideo`, `envMapIntensityBoost` i wartości per-klip w `CONFIG.backgroundVideo.sources`.
+- Wideo tła: znacznie wyższy wpływ na scenę (`hemisphereFromVideo`, `envMapIntensityBoost`), opcjonalny `mapColorGain` globalnie i per-klip — rozświetla płaszczyznę wideo i bake PMREM (`applyBackgroundVideoMapColorGain` w `script.js`).
+- MYSEN: intro w `introLyrics` / `lyrics` — jedna linia „MYSEN - BEZSEN”, mniejszy „TOPKEK” (scale 0.72), potem „reimagined”; wokselowy pregen i przygotowanie słów używają `introLyrics`.
 
 ### Added
+- MYSEN: wczytywanie słów z `ASSETS/mysen/mysen_timestamps.txt` (pomija „Muzyka”), łączenie z intro; słowa z timestampów: losowy spawn w FOV, lot na szynę lyric, symetryczny rozlot i znikanie.
+- MYSEN: intro — osobne wiersze (bez nachodzenia), składanie wierszami ze staggerem; znikanie przez rozłożenie wokseli wiersz po wierszu (`introOutroSpread`); opcjonalny stagger rozłożenia linii piosenki (`lyricSpread`).
+- MYSEN: podczas trybu wymuszenie `01_torus.mp4`, widoczne tło wideo (`showBackgroundVideoDuringMysen`), `playbackRate` malejący wraz z postępem utworu; po stopie przywracany poprzedni klip i tempo z BPM.
 - Konsola: **`/fakegi <on|off|status>`** — przełączanie fake GI z wideo (PMREM → `scene.environment`, boost `envMapIntensity`, Hemisphere/Ambient z koloru klatki); **`/postproc status`** dopisuje ten sam stan.
-- Tryb **MYSEN** (`/mysen start` / `/mysen stop`): remiks z `ASSETS/mysen`, ukrycie napisu TOPKEK i wideo tła (opcjonalnie), wokselowe słowa zsynchronizowane polem `at` (sekundy) lub `wordTimesSec` w `MYSEN_CONFIG`; puls słów (`pulseScale` / `pulseMs` lub `wordPulses`); sekcja w menu pod Vajbuj; wzajemne wyłączanie z VAJBUJ.
+- Tryb **MYSEN** (`/mysen start` / `/mysen stop`): remiks z `ASSETS/mysen`, ukrycie napisu TOPKEK, wideo tła zależnie od `showBackgroundVideoDuringMysen` / `hideBackgroundVideo`, wokselowe słowa zsynchronizowane polem `at` (sekundy) lub `wordTimesSec` w `MYSEN_CONFIG`; puls słów (`pulseScale` / `pulseMs` lub `wordPulses`); sekcja w menu pod Vajbuj; wzajemne wyłączanie z VAJBUJ.
 
 ### Fixed
+- `server.py`: przy przerwaniu połączenia przez klienta podczas strumienia (np. MP4 w tle, seek, zamknięcie karty) Windows zgłasza `ConnectionAbortedError` / WinError 10053 — obsługa jak przy resetcie (bez pełnego tracebacka w konsoli).
+- MYSEN: znikanie grup linii (`lineVanishAtMediaSec`) i rozlot timestampów — warunek czasu używa tej samej osi co słowa (`audioStartTime` + `elapsed` od startu trybu), zamiast wyłącznie `audio.currentTime` (rozjazd przy opóźnieniu `play` / innym klipie); dodano `getMysenSpreadDurationSec` jako bezpieczny fallback długości rozlotu.
+- MYSEN: parsowanie `mysen_timestamps.txt` z końcami linii CRLF (Windows) — wcześniej `split('\n')` zostawiał `\r` na końcu wiersza, regex nie dopasowywał linii i nie wczytywało się żadne słowo z timestampów (tylko intro).
+- `server.py` / `start.bat`: jawny katalog serwowany (`directory=` przy Pythonie 3.7+) oraz `cd /d "%~dp0"` w batchu — uniknięcie listingu katalogu zamiast `index.html`, gdy CWD wskazywał niewłaściwy folder; przy „Directory listing” na `localhost:8002` sprawdź też, czy na porcie nie działa stary `python -m http.server` z katalogu nadrzędnego (zatrzymaj go i uruchom ponownie `start.bat`).
 - Glitch volumetryczny (HUD): trigger jednorazowy przekazuje czas ścienny (`Date.now()/1000`) jak pętla renderu — wcześniej `clock.getElapsedTime()` dawało `glitchEndTime` w skali ~sekund od startu strony przy `time` w skali Unix, więc efekt natychmiast wygasał i znikał.
 - Oświetlenie / bloom na napisie: cofnięto `vertexColors` na materiałach `defaultBox` / `glass` / `gold` oraz tint `setColorAt` przy Letter Emission (zostaje silniejszy puls skali + `pulseScale`) — `vertexColors` + instancje mogły obniżyć jasność w buforze i osłabić postprocess (bloom).
 - Bloom: obniżono `SHADER_CONFIG.bloom.threshold` (0.48 → 0.12) i lekko podniesiono `strength` — po `ACESFilmicToneMapping` w pierwszym przebiegu `RenderPass` bufor jest już ztone-mapowany; wysoki próg wycinał prawie całą poświatę (zgodnie z przykładem three.js z progiem ~0).
@@ -44,7 +59,7 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 - Poprawiono heurystykę `perf=auto`: profil lite włącza się przy `navigator.deviceMemory` ≤ 3 GB zamiast ≤ 4 GB, żeby na desktopie (np. Brave/Chrome raportujące 4 GB) nie wyłączać SAO i CRT.
 
 ### Removed
-- Usunięto tymczasową instrumentację debug (żądania HTTP do serwera ingest, zmienne `_agentLog*`, regiony `agent log`) z `script.js`.
+- Usunięto tymczasową instrumentację sesji debug: zapis NDJSON w `server.py`, fetch do ingest w `index.html` i `script.js`.
 
 ### Changed
 - Rozszerzono `.gitignore` o projekty Audacity (`.aup3`, `.aup`), logi `.cursor/debug-*.log` oraz katalog `.cursor/skills/`; przestano wersjonować pliki `.aup3` w `ASSETS/mysen` oraz historyczne logi debug w `.cursor/` (pliki zostają tylko lokalnie). W `ASSETS/mysen/README.md` dopisano informację o trzymaniu projektów Audacity poza Gitem.
