@@ -7,7 +7,8 @@ export const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Ope
 export const PERFORMANCE_CONFIG = {
     storageKey: 'topkek-performance',
     urlParam: 'perf',
-    autoLiteMaxDeviceMemoryGb: 4,
+    // ≤3 GB → lite; 4 GB often reported on capable desktops (see auto perf heuristic)
+    autoLiteMaxDeviceMemoryGb: 3,
     autoLiteMaxHardwareConcurrency: 4,
     profiles: {
         full: {
@@ -35,6 +36,8 @@ export const CONFIG = {
     textSize: IS_MOBILE ? 2.5 : 3, // Smaller text on mobile
     textHeight: IS_MOBILE ? 0.1 : 0.5,
     particleSize: 0.1,
+    // loadParticles(JSON): symmetric ±Z nudge. Use 0 for baked particles_*.json (non-zero pushes z≥0 toward +Z → wystaje „z przodu”).
+    innerCubeZBias: 0,
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: IS_MOBILE ? 15000 : 50000, // Reduced particle count for mobile
     particlesFile: IS_MOBILE ? 'particles_mobile.json' : 'particles_pc.json', // File to load particles from
@@ -43,10 +46,10 @@ export const CONFIG = {
     returnSpeed: 0.2,
     sampleDensity: 1, // Points per unit area (increase for more dense voxels)
     letterSpacing: 0.5, // Extra spacing between letters
-    animationMode: 'repulsion', // 'repulsion', 'scatter', or 'grid'
+    animationMode: 'scatter', // 'repulsion', 'scatter', or 'grid'
     gridCols: 10, // For grid calculation
     gridSpacing: 2,
-    shadowMapSize: IS_MOBILE ? 128 : 2048, // Reduced shadow map size for mobile
+    shadowMapSize: IS_MOBILE ? 128 : 1028, // Reduced shadow map size for mobile
     zoomSensitivity: 0.005, // Speed of zoom via scroll
     freeCamZoomSpeed: 0.005, // Szybkość zoomu w trybie Free Cam (OrbitControls)
     minZoom: 3, // Minimum camera distance
@@ -69,13 +72,96 @@ export const CONFIG = {
     // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
     backgroundVideo: {
         sources: [
-            'ASSETS/BGs/01_torus.mp4',
-            'ASSETS/BGs/02_bag_1.mp4',
-            'ASSETS/BGs/06_kostki_02.mp4'
+            {
+                src: 'ASSETS/BGs/01_torus.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 25.0,
+                    glass: 6.0,
+                    gold: 6.2,
+                    innerCubes: 0.5,
+                    heart: 1.35,   
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 2.0,
+                    ambientIntensity: 1
+                }
+            },
+            {
+                src: 'ASSETS/BGs/02_bag_1.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 5.0,
+                    glass: 2.0,
+                    gold: 2.2,
+                    innerCubes: 0.5,
+                    heart: 1.35,
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 1.2,
+                    ambientIntensity: 1
+                }
+            },
+            {
+                src: 'ASSETS/BGs/06_kostki_02.mp4',
+                envMapIntensityBoost: {
+                    defaultBox: 5.0,
+                    glass: 2.0,
+                    gold: 2.2,
+                    innerCubes: 0.5,
+                    heart: 1.35,
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
+                },
+                hemisphereFromVideo: {
+                    intensity: 3,
+                    ambientIntensity: 0.5
+                }
+            }
         ],
         positionZ: -20,
         width: 80,
-        height: 45
+        height: 45,
+        /** Fake GI z klatki wideo: PMREM (desktop) + próbkowanie koloru → Hemisphere/Ambient (mobile) */
+        videoIbl: {
+            enabled: true,
+            /** Na mobile domyślnie wyłączone (koszt GPU); Hemisphere wystarczy */
+            usePmrem: !IS_MOBILE,
+            /** false = scene.environment zostaje HDRI (odporność na czarny PMREM); wideo tylko Hemisphere + boost */
+            replaceSceneEnvironment: true,
+            // Mniej opóźnienia “fake GI” po klatkach w tle
+            intervalMs: IS_MOBILE ? 0 : 320,
+            /** Promień rozmycia w radianach — Three.js ogranicza ~20 próbek; >~0.1 zwykle klipuje (konsola). */
+            sigma: 0.04
+        },
+        hemisphereFromVideo: {
+            enabled: true,
+            /** true na desktopie = zapasowy fill z kolorem wideo, gdy PMREM/ACES psuje jasność */
+            always: !IS_MOBILE,
+            intensity: 0.85,
+            ambientIntensity: 0.6,
+            // Szybsza reakcja kolorów (bez zbyt częstych próbek)
+            intervalMs: 40,
+            canvasWidth: 32,
+            canvasHeight: 64
+        },
+        /** Mnożniki envMapIntensity względem MATERIALS.* (żeby widać dynamiczne IBL) */
+        envMapIntensityBoost: {
+            defaultBox: 5.0,
+            glass: 2.0,
+            gold: 2.2,
+            innerCubes: 0.1,
+            heart: 1.35,
+            vajbujBgCubes: 2.0,
+            mysenBgCubes: 2.0
+        },
+        bpmControl: {
+            baseBpm: 120,
+            defaultBpm: 120,
+            options: [60, 75, 90, 100, 110, 120, 128, 140, 160]
+        }
     }
 };
 
@@ -119,19 +205,19 @@ export const PORTFOLIO_SCENE_CONFIG = {
 // Glitch volumetryczne – blokowe przeskoki fragmentów napisu TOPKEK
 export const GLITCH_VOLUME_CONFIG = {
     enabled: false,
-    intervalMin: 2000,   // ms – min odstęp auto-triggera
-    intervalMax: 5000,   // ms – max odstęp auto-triggera
-    duration: 0.12,      // s – jak długo offset jest widoczny
+    intervalMin: 200,   // ms – min odstęp auto-triggera
+    intervalMax: 2000,   // ms – max odstęp auto-triggera
+    duration: 0.88,      // s – jak długo offset jest widoczny
     maxOffset: 0.4,      // maks. przesunięcie na oś
-    bandCount: 8,        // na ile pasów (X) dzielimy napis (pattern 'bands')
-    bandsPerGlitch: 2,   // ile pasów jednocześnie glitchować
+    bandCount: 32,        // na ile pasów (X) dzielimy napis (pattern 'bands')
+    bandsPerGlitch: 4,   // ile pasów jednocześnie glitchować
     includeInnerCubes: true,
 
     // Wspólne opcje zachowania
     pattern: 'bands', // 'bands' | 'grid2d' | 'clusters'
     useRotation: false,
-    useScale: false,
-    useColorFlicker: false,
+    useScale: true,
+    useColorFlicker: true,
 
     // Rotacja i skala
     rotationMaxAngle: Math.PI / 4,
@@ -139,14 +225,14 @@ export const GLITCH_VOLUME_CONFIG = {
     scaleMax: 1.15,
 
     // Parametry dla patternu 'grid2d'
-    gridCols: 4,
-    gridRows: 3,
-    tilesPerGlitch: 1,
+    gridCols: 25,
+    gridRows: 8,
+    tilesPerGlitch: 4,
 
     // Parametry dla patternu 'clusters'
     clusterFraction: 0.05,
     clusterMinCount: 50,
-    clusterMaxCount: 500,
+    clusterMaxCount: 300,
 
     // Kolor – używane w drugiej iteracji (color flicker)
     colorFlickerStrength: 0.2
@@ -156,47 +242,198 @@ export const GLITCH_VOLUME_CONFIG = {
 export const GLITCH_VOLUME_PRESETS = {
     subtelny: {
         pattern: 'bands',
-        duration: 0.08,
-        maxOffset: 0.25,
-        bandsPerGlitch: 1,
-        tilesPerGlitch: 1,
-        clusterFraction: 0.02,
-        intervalMin: 2200,
-        intervalMax: 5200,
+        duration: 0.2,
+        maxOffset: 1,
+        bandsPerGlitch: 0.3,
+        tilesPerGlitch: 0.2,
+        clusterFraction: 0.2,
+        intervalMin: 220,
+        intervalMax: 50,
         useRotation: false,
-        useScale: false,
+        useScale: true,
         useColorFlicker: false
     },
     mocny: {
         pattern: 'grid2d',
-        duration: 0.14,
+        duration: 0.80,
         maxOffset: 0.45,
-        bandsPerGlitch: 2,
-        tilesPerGlitch: 2,
-        clusterFraction: 0.06,
-        intervalMin: 1800,
-        intervalMax: 4200,
+        bandsPerGlitch: 6,
+        tilesPerGlitch: 3,
+        clusterFraction: 0.12,
+        intervalMin: 180,
+        intervalMax: 1200,
         useRotation: true,
         useScale: true,
         useColorFlicker: false
     },
     chaos: {
         pattern: 'clusters',
-        duration: 0.1,
-        maxOffset: 0.6,
-        bandsPerGlitch: 3,
+        duration: 0.3,
+        maxOffset: 0.4,
+        bandsPerGlitch: 5,
         tilesPerGlitch: 3,
         clusterFraction: 0.15,
-        intervalMin: 1200,
-        intervalMax: 3200,
+        intervalMin: 60,
+        intervalMax: 900,
         useRotation: true,
-        useScale: true,
-        useColorFlicker: true
+        useScale: false,
+        useColorFlicker: false
     }
 };
 
 export const GLITCH_VOLUME_STATE = {
     currentPreset: 'subtelny'
+};
+
+// Base of volumetric effects controlled from terminal (MVP).
+export const FX_CONFIG = {
+    global: {
+        enabled: true,
+        defaultBpm: 120,
+        timeMode: 'hybrid',
+        maxActiveInstances: 24
+    },
+    registry: {
+        scatterBurst: {
+            label: 'Scatter Burst',
+            aliases: ['sc', 'scatter'],
+            defaults: {
+                frequency: '1/4',
+                scale: 1.0,
+                speed: 1.0,
+                spread: 0.55,
+                decay: 0.6,
+                easing: 'outCubic',
+                variation: 'radial'
+            },
+            ranges: {
+                scale: { min: 0.1, max: 5.0 },
+                speed: { min: 0.1, max: 8.0 },
+                spread: { min: 0.05, max: 1.0 },
+                decay: { min: 0.05, max: 3.0 }
+            },
+            /** Krótkie podpowiedzi pod polem (parametry bez liczbowego ranges). */
+            paramHints: {
+                frequency: 'np. 1/4, 1/8 · 0.25s, 2s · 1b, 2b (sync BPM)',
+                easing: 'np. linear, outCubic, inOutCubic',
+                variation: 'np. radial'
+            }
+        },
+        letterEmission: {
+            label: 'Letter Emission',
+            aliases: ['le', 'emit'],
+            defaults: {
+                target: 'both',
+                distribution: 'sequential',
+                color: '#66ccff',
+                duration: '1/8',
+                frequency: '1/8',
+                falloff: 0.65,
+                gain: 1.0,
+                pulseScale: 0.32,
+                easing: 'inOutCubic'
+            },
+            ranges: {
+                falloff: { min: 0.05, max: 1.5 },
+                gain: { min: 0.1, max: 4.0 },
+                pulseScale: { min: 0.05, max: 0.65 }
+            },
+            paramHints: {
+                target: 'main · subtitle · both',
+                distribution: 'sequential · random · pingpong',
+                color: '#rrggbb lub 0xrrggbb',
+                duration: 'jak frequency (beat, s, b)',
+                frequency: 'np. 1/8, 1/4 · 0.2s · 1b',
+                pulseScale: 'mnożnik pulsu skali (gain × pulseScale, max +0.55)',
+                easing: 'np. linear, inOutCubic, outCubic'
+            }
+        },
+        repulsionSwarm: {
+            label: 'Repulsion Swarm',
+            aliases: ['rp', 'swarm'],
+            defaults: {
+                count: 3,
+                radius: 3.0,
+                speed: 1.2,
+                turnRate: 1.0,
+                pattern: 'wander',
+                easing: 'linear'
+            },
+            ranges: {
+                count: { min: 1, max: 12 },
+                radius: { min: 0.5, max: 12.0 },
+                speed: { min: 0.1, max: 6.0 },
+                turnRate: { min: 0.1, max: 6.0 }
+            },
+            paramHints: {
+                pattern: 'np. wander',
+                easing: 'np. linear, outCubic'
+            }
+        },
+        gridNoiseMask: {
+            label: 'Grid Noise Mask',
+            aliases: ['gn', 'gridnoise'],
+            defaults: {
+                noiseType: 'sine',
+                loopLength: '2b',
+                clampUp: 1.0,
+                clampDown: 0.0,
+                brightness: 0.5,
+                contrast: 1.0,
+                speed: 1.0,
+                threshold: 0.6,
+                bpmSync: 1
+            },
+            ranges: {
+                clampUp: { min: 0.0, max: 1.0 },
+                clampDown: { min: 0.0, max: 1.0 },
+                brightness: { min: 0.0, max: 2.0 },
+                contrast: { min: 0.1, max: 3.0 },
+                speed: { min: 0.1, max: 6.0 },
+                threshold: { min: 0.0, max: 1.0 },
+                bpmSync: { min: 0, max: 1 }
+            },
+            paramHints: {
+                noiseType: 'np. sine',
+                loopLength: 'np. 2b, 4b, 1s (faza / długość pętli)'
+            }
+        }
+    },
+    aliasCommands: {
+        sc_trig: 'fx trigger scatterBurst',
+        sc_start: 'fx start scatterBurst',
+        rp_trig: 'fx trigger repulsionSwarm',
+        rp_start: 'fx start repulsionSwarm',
+        gn_trig: 'fx trigger gridNoiseMask',
+        gn_start: 'fx start gridNoiseMask',
+        le_trig: 'fx trigger letterEmission',
+        le_start: 'fx start letterEmission',
+        fx_bpm: 'fx bpm'
+    }
+};
+
+/** Przykładowe presety do panelu FX dev (3 na każdy effectId); params mergowane z defaults przy starcie. */
+export const FX_SAMPLE_PRESETS = {
+    scatterBurst: [
+        { label: 'Fast beat', params: { frequency: '1/8', speed: 1.6, scale: 1.1 } },
+        { label: 'Wide spread', params: { spread: 0.85, decay: 0.85, speed: 1.2 } },
+        { label: 'Subtle', params: { scale: 0.75, speed: 0.65, spread: 0.35 } }
+    ],
+    letterEmission: [
+        { label: 'Random letters', params: { distribution: 'random', gain: 1.3, frequency: '1/4' } },
+        { label: 'Ping-pong', params: { distribution: 'pingpong', duration: '1/8', falloff: 0.9 } },
+        { label: 'Main only', params: { target: 'main', color: '#ffcc66', gain: 1.15 } }
+    ],
+    repulsionSwarm: [
+        { label: 'Dense swarm', params: { count: 8, radius: 4.5, speed: 1.4 } },
+        { label: 'Wide ring', params: { count: 4, radius: 8, turnRate: 0.6 } },
+        { label: 'Slow drift', params: { count: 3, speed: 0.5, turnRate: 0.4, pattern: 'wander' } }
+    ],
+    gridNoiseMask: [
+        { label: 'Heavy noise', params: { threshold: 0.35, speed: 2.2, brightness: 0.65 } },
+        { label: 'High contrast', params: { contrast: 2.0, threshold: 0.55, clampDown: 0.1 } },
+        { label: 'Calm grid', params: { speed: 0.5, threshold: 0.75, brightness: 0.4 } }
+    ]
 };
 
 // VAJBUJ SZMATO Mode Configuration
@@ -312,8 +549,8 @@ export const VAJBUJ_CONFIG = {
     bgCubeSize: 0.25, // smaller cubes
     bgCubeCount: 100,
     bgCubeMaterial: {
-        metalness: 0.2,
-        roughness: 0.8
+        metalness: 0.6,
+        roughness: 0.4
     },
 
     // Tempo dynamics
@@ -324,6 +561,74 @@ export const VAJBUJ_CONFIG = {
     finalSymbol: "?",
     finalSymbolColor: 0xff0000, // red
     finalSymbolScale: 2.0
+};
+
+/** MYSEN remix mode — console `/mysen start|stop`. Lyrics use `at` (seconds from fragment start) or `wordTimesSec`; voxel style like VAJBUJ but main TOPKEK mesh is hidden. */
+export const MYSEN_CONFIG = {
+    enabled: true,
+    /** When true, skip init on mobile (lighter scene). */
+    disableOnMobile: false,
+
+    /** Must exist on the static server (same origin). 404 → see audioFileFallback. */
+    audioFile: 'ASSETS/mysen/mysen-remix.mp3',
+    /** Used when audioFile fails (missing file / 404). Set null to disable. Often VAJBUJ clip until remix is in ASSETS/mysen/. */
+    audioFileFallback: 'VAJBUJ_TRIMMED.mp3',
+    audioStartTime: 0,
+    /** Absolute end time on the media timeline (seconds). Use `null` to play from audioStartTime to the natural end of the file (`audio.duration`). A finite number trims like a short clip. */
+    audioEndTime: null,
+    fadeInDuration: 1.5,
+    fadeOutDuration: 1.5,
+
+    /** Hide the background video plane while MYSEN plays (reduces visual clash). */
+    hideBackgroundVideo: true,
+
+    /**
+     * Lyrics: same shape as VAJBUJ plus optional `at` (seconds from audioStartTime) for variable tempo.
+     * Optional per-word pulse after assemble: `pulseScale`, `pulseMs`.
+     */
+    lyrics: [
+        { text: 'oko', color: 0xffffff, at: 0.5, pulseScale: 1.14, pulseMs: 380 },
+        { text: 'MYSEN', color: 0x66ccff, at: 2.0 },
+        { lineBreak: true },
+        { text: 'remix', color: 0xffffff, at: 4.5 }
+    ],
+
+    /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
+    wordTimesSec: [],
+
+    /** Global matchers: pulse when a word finishes assembling (in addition to per-line pulseScale). */
+    wordPulses: [{ matchText: 'oko', scale: 1.15, ms: 400 }],
+
+    wordAssemblyDuration: 1.8,
+    lyricsStartDelay: 0,
+    wordSize: 1.0,
+    wordHeight: 0.12,
+    wordThickness: 2,
+    lineSpacing: 2.0,
+    wordSpacing: 0.8,
+    lyricsOffsetY: 0.5,
+    scatterRadius: 6,
+    defaultWordColor: 0xffffff,
+
+    bgCubeColors: [
+        0x1a3a4a,
+        0x2d5a6b,
+        0x4a90a4,
+        0x6ec8d8,
+        0x88dde8,
+        0xa8f0ff
+    ],
+    bgCubeSize: 0.25,
+    bgCubeCount: IS_MOBILE ? 48 : 100,
+    bgCubeMaterial: {
+        metalness: 0.55,
+        roughness: 0.42,
+        envMapIntensity: 1
+    },
+
+    /** 0 = no slow phase; else fraction of fragment duration with slowPhaseSpeed multiplier on bg cubes. */
+    slowPhaseEnd: 0,
+    slowPhaseSpeed: 0.2
 };
 
 // Shader Configuration
@@ -339,10 +644,12 @@ export const SHADER_CONFIG = {
         flickerAmount: IS_MOBILE ? 0 : 0.02
     },
     bloom: {
-        threshold: 0.3,
-        strength: 1, // Domyślna siła bloom
-        alternateStrength: 0.3, // Siła bloom po naciśnięciu spacji
-        radius: 1
+        // RenderPass zapisuje obraz już po tone mappingu (ACES na rendererze); wysoki próg (np. 0.48) odcina prawie cały bloom.
+        // Oficjalny przykład three r160 używa threshold 0. Umiarkowany próg + siła utrzymują poświatę bez przepalenia.
+        threshold: 0.12,
+        strength: 0.82,
+        alternateStrength: 0.32, // Siła bloom po naciśnięciu spacji
+        radius: 0.85
     },
     sao: {
         saoBias: 1,                 // Odchylenie cienia (unika artefaktów/shadow acne)
@@ -356,6 +663,99 @@ export const SHADER_CONFIG = {
         saoBlurDepthCutoff: 0.05    // Odcięcie głębi (chroni krawędzie przed rozmyciem na tło)
     }
 
+};
+
+/** Terminal shell UI (bottom of #right-panel): prompt, log limits, welcome text — no logic. */
+export const TERMINAL_CONFIG = {
+    maxLogLines: 200,
+    /** Shown before typed input and echoed user lines in the log. */
+    prompt: 'U >',
+    /** Prefix before Buuch chat replies in the log (space added before body). */
+    buuchLogPrefix: 'B >',
+    welcomeLines: [
+        'TOPKEK console — /help for a short list, /help full for every command line.'
+    ],
+    timestamp: {
+        enabled: true,
+        locale: 'en-GB',
+        hour12: false,
+        showSeconds: true
+    },
+    stream: {
+        enabled: true,
+        /** Conversational replies (Buuch, default command output). */
+        charDelayMs: 8,
+        lineDelayMs: 45,
+        /** Long listings e.g. /help full — character typing uses this profile in terminal-shell. */
+        fastCharDelayMs: 2,
+        fastLineDelayMs: 15
+    },
+    shellUi: {
+        maximizedClass: 'topkek-terminal-shell--maximized',
+        collapsedClass: 'topkek-terminal-shell--collapsed'
+    }
+};
+
+/** Short `/help` listing (console). Full reference: `/help full`. */
+export const TERMINAL_HELP_LINES_COMPACT = [
+    '/help // Short list. ex: /help',
+    '/help full // Every command line + FX aliases. ex: /help full',
+    '/clear // Clears console log. ex: /clear',
+    '/vajbuj [start|stop] // VAJBUJ mode. ex: /vajbuj start',
+    '/mysen [start|stop] // MYSEN remix mode. ex: /mysen start',
+    '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
+    '/postproc <status> // Bloom / SAO / CRT + fake GI (video IBL). ex: /postproc status',
+    '/fakegi <on|off|status> // Wideo jako fake GI (PMREM + hemisphere). ex: /fakegi status',
+    '/material <toggle|default|alt|status> // TOP/KEK materials. ex: /material toggle',
+    '/light <1|2> color <#rrggbb|0xrrggbb> | /light <1|2> intensity <value> // Lights.',
+    '/fx list // Effect ids and aliases (use for shortcut names). ex: /fx list',
+    '/fx dev // Toggle FX developer panel (top overlay; params + preset). ex: /fx dev',
+    '/fx on | /fx off // Enable or disable FX runtime. ex: /fx off',
+    '/fx status | /fx bpm | /fx set | /fx trigger | /fx start | /fx stop // FX control.',
+    'FX time tokens: 0.25s | 2s | 1b | 2b | 1/4 | 1/8'
+];
+
+/** Full `/help full` listing (same content as former default /help). */
+export const TERMINAL_HELP_LINES_FULL = [
+    '/help // Short list. ex: /help',
+    '/help full // This full list. ex: /help full',
+    '/clear // Clears console log. ex: /clear',
+    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode. ex: /vajbuj start',
+    '/mysen [start|stop] // Starts/stops MYSEN remix mode (hides TOPKEK letters). ex: /mysen start',
+    '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
+    '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
+    '/crt <on|off> // Toggles CRT pass. ex: /crt off',
+    '/postproc <status> // Bloom / SAO / CRT + stan fake GI (video IBL, światła wideo). ex: /postproc status',
+    '/fakegi <on|off|status> // Włącza/wyłącza fake GI z wideo: PMREM → scene.environment, boost envMap, Hemisphere+Ambient z klatki. ex: /fakegi off',
+    '/material <toggle|default|alt|status> // Switches TOP/KEK material mode. ex: /material toggle',
+    '/light <1|2> color <#rrggbb|0xrrggbb> // Sets light color. ex: /light 1 color #66ccff',
+    '/light <1|2> intensity <value> // Sets light intensity. ex: /light 2 intensity 1.8',
+    '/fx list // Lists effect ids and aliases. ex: /fx list',
+    '/fx dev // Toggles top-centered FX developer panel (defaults, Trigger / Start / Stop, JSON preset). ex: /fx dev',
+    '/fx on // Enables FX runtime (same as panel checkbox). ex: /fx on',
+    '/fx off // Disables FX runtime. ex: /fx off',
+    '/fx status // Shows FX runtime and active instances. ex: /fx status',
+    '/fx bpm <value> // Sets global FX BPM (20..300). ex: /fx bpm 128',
+    '/fx set <effectId.param> <value> // Sets default FX parameter. ex: /fx set scatterBurst.speed 2.1',
+    '/fx trigger <effectId> [param=value ...] // Runs one-shot effect. ex: /fx trigger scatterBurst speed=2',
+    '/fx start <effectId> [param=value ...] // Starts looped effect. ex: /fx start repulsionSwarm count=4',
+    '/fx stop <instanceId|effectId|all> // Stops matching FX instances. ex: /fx stop all',
+    '/sc_trig // Alias: /fx trigger scatterBurst. ex: /sc_trig speed=2',
+    '/sc_start // Alias: /fx start scatterBurst. ex: /sc_start speed=2',
+    '/rp_trig // Alias: /fx trigger repulsionSwarm. ex: /rp_trig count=3',
+    '/rp_start // Alias: /fx start repulsionSwarm. ex: /rp_start radius=3',
+    '/gn_trig // Alias: /fx trigger gridNoiseMask. ex: /gn_trig threshold=0.6',
+    '/gn_start // Alias: /fx start gridNoiseMask. ex: /gn_start speed=1.4',
+    '/le_trig // Alias: /fx trigger letterEmission. ex: /le_trig distribution=random',
+    '/le_start // Alias: /fx start letterEmission. ex: /le_start target=both',
+    '/fx_bpm <value> // Alias: /fx bpm <value>. ex: /fx_bpm 140',
+    'FX time tokens: 0.25s | 2s | 1b | 2b | 1/4 | 1/8'
+];
+
+// Debug-only flags (default: off). Keep this as data-only: no side effects.
+export const DEBUG_FLAGS = {
+    // innerCubes shader patch validation (varying selection + token replacement).
+    innerCubesEmissivePatchLog: false
 };
 
 // Material Configuration
@@ -384,10 +784,14 @@ export const MATERIALS = {
         envMapIntensity: 0.5
     },
     innerCubes: {
-        color: 0xffffff,
-        roughness: 0,
-        metalness: 0,
-        emissiveIntensity: 0.1
+        // Jaśniejsze albedo + silniejszy emissive niż 2.4: czytelna siatka w środku bez „białej plamy” (łagodny lift w shaderze).
+        color: 0x5a5a5a,
+        envMapIntensity: 0.52,
+        roughness: 0.88,
+        metalness: 0.06,
+        emissive: 0xffffff,
+        emissiveIntensity: 4.2,
+        toneMapped: false
     }
 };
 
@@ -400,6 +804,52 @@ export const SHAPE_DEFINITIONS = [
     { id: '1x2', w: 1, h: 2, d: 1, offsets: [[0, 0], [0, 1]] },
     { id: '1x1', w: 1, h: 1, d: 1, offsets: [[0, 0]] }
 ];
+
+// After loader: fly camera from far radius to CONFIG.initialZoom (manual path, ease-in)
+export const INTRO_CAMERA_CONFIG = {
+    durationMs: 6000,
+    /** Must be > CONFIG.initialZoom; keep < camera far plane (0.1..100) */
+    startRadius: 45
+};
+
+/** UI reveal after intro fly-in ends (terminal lines, prod label, camera HUD). */
+export const POST_INTRO_UI_CONFIG = {
+    enabled: true,
+    menuLineStaggerMs: 52,
+    menuLineAnimSec: 0.62,
+    uiContainerDelayMs: 60,
+    uiContainerAnimSec: 0.52,
+    terminalShellDelayMs: 380,
+    terminalShellAnimSec: 0.55,
+    cameraHudDelayMs: 100,
+    cameraHudAnimSec: 0.58,
+    prodLabelDelayMs: 240,
+    prodLabelAnimSec: 0.72,
+    slidePx: 44
+};
+
+// Top-left camera HUD (live coords + mode buttons)
+export const CAMERA_HUD_CONFIG = {
+    coordinateDecimals: 2,
+    defaultFov: 45
+};
+
+// Performance HUD (FPS + mini graph highs/lows)
+export const PERF_HUD_CONFIG = {
+    enabled: true,
+    updateIntervalMs: 120,
+    smoothingAlpha: 0.2,
+    graph: {
+        width: 180,
+        height: 54,
+        maxSamples: 72,
+        yMaxFps: 60
+    },
+    thresholds: {
+        goodFps: 58,
+        warnFps: 45
+    }
+};
 
 // Cinematic Camera Shots
 // Procedural Cinematic Camera Configuration
@@ -427,6 +877,43 @@ export const LOADER_CONFIG = {
     phases: {
         assets: { weight: 50, text: "Loading Assets..." },   // wideo w tle + fonty – postęp buforowania widać na pasku (0–50%)
         generation: { weight: 50, text: "Generating Particles..." }
+    },
+    // Fake loader: pasek ma rosnąć sam (coraz wolniej) i zmieniać opis co sekundę,
+    // dopóki aplikacja nie dojdzie realnie do "Ready".
+    simulation: {
+        enabled: true,
+        // Miękki sufit (symulacja dąży do tego, a potem i tak „dociskamy” do 100% przy zakończeniu).
+        softCap: 99,
+        // Stała czasowa dla podejścia wykładniczego (im większa, tym wolniej).
+        tauMs: 5000,
+        // Ile ms między podmianą komunikatu.
+        messageIntervalMs: 3000,
+        // Ile procent „wyprzedzenia” może mieć symulacja względem realnego postępu
+        // (żeby pasek nie kończył się zanim realnie dojdzie reszta).
+        maxLeadPercentage: 25,
+        // Żeby symulacja startowała od 0 bez skoku.
+        startPercentage: 0
+    },
+    messages: {
+        assets: [
+            "Buffering the universe. Almost there...",
+            "Feeding the background video. Shhh...",
+            "Warming up fonts and tiny lies...",
+            "Scanning for pixels. Please wait...",
+            "Feeding the renderer data. Slowly, proudly."
+        ],
+        generation: [
+            "Voxelizing the dream. No questions asked...",
+            "Sampling surfaces. Vibes are loading...",
+            "Building TOPKEK blocks. Good luck, patience.",
+            "Packing cubes into cubes. They approve.",
+            "Almost there - keep breathing."
+        ],
+        ready: [
+            "Ready. Please pretend this was instant.",
+            "Load complete. KEK is on the way.",
+            "Done. The rest is pure magic."
+        ]
     },
     colors: {
         background: "#111",

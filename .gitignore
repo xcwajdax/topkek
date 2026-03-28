@@ -1,0 +1,12 @@
+# SFTP: skopiuj .vscode/sftp.json.example → .vscode/sftp.json i ustaw hasło (plik z hasłem nie jest commitowany).
+.vscode/sftp.json
+
+# Audacity — projekty źródłowe (duże, tylko lokalnie; w repo zostaje eksport audio np. .mp3).
+*.aup3
+*.aup
+
+# Cursor — logi debugowania agenta (nie commitować).
+.cursor/debug-*.log
+
+# Cursor — lokalne skille użytkownika (nie część repozytorium).
+.cursor/skills/

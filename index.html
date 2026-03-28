@@ -19,10 +19,11 @@
     </script>
 </head>
 
-<body>
+<body class="post-intro-ui-pending">
     <div id="canvas-container"></div>
     <div id="loader-container">
         <div id="loader-content">
+            <div id="loader-title">T O P K E K</div>
             <div id="loading-text">Loading Assets...</div>
             <div id="progress-bar-container">
                 <div id="progress-fill"></div>
@@ -33,20 +34,44 @@
 
     <!-- RIGHT PANEL: controls above terminal menu -->
     <div id="right-panel">
+    <div id="ui-container"></div>
     <div id="terminal-menu">
+        <!-- Animation portfolio: temporarily hidden (remove hidden to restore) -->
+        <div id="anim-portfolio-terminal-block" hidden>
         <div class="term-line">Animation portfolio</div><br>
         <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
-        <div class="term-line interactive-term-line" id="term-vajbuj">> VAJBUJ</div><br><br>
-        <div class="term-line">Under Development</div><br>
-        <div class="term-line">Games</div><br>
-        <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
-        <div class="term-line">> floppy driver v_0.05.20</div><br>
-        <div class="term-line">Software</div><br>
-        <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
-        <div class="term-line">> pixelgen v 0.2</div>
-        <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
-        <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
-        <div class="term-line">> Frame Gen v_1.0</div>
+        </div>
+        <div class="menu-section">
+            <div class="menu-section-title">Vajbuj</div>
+            <div class="term-line" id="term-vajbuj">Type in terminal: vajbuj / vajbuj stop</div>
+        </div>
+        <div class="menu-section">
+            <div class="menu-section-title">MYSEN</div>
+            <div class="term-line" id="term-mysen">Type in terminal: /mysen start / /mysen stop</div>
+        </div>
+        <div class="menu-section">
+            <div class="menu-section-title">Games</div>
+            <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
+            <div class="term-line">> floppy driver v_0.05.20</div>
+        </div>
+        <div class="menu-section">
+            <div class="menu-section-title">Software</div>
+            <div class="term-line interactive-term-line" id="term-scndbrejn">> SCNDBREJN</div>
+            <div class="term-line">> Bonehandler</div>
+            <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
+            <div class="term-line">> pixelgen v 0.2</div>
+            <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
+            <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
+            <div class="term-line">> Frame Gen v_1.0</div>
+        </div>
+    </div>
+    <div id="topkek-terminal-shell" class="topkek-terminal-shell" aria-label="TOPKEK command console">
+        <div class="topkek-terminal-shell-title">console</div>
+        <div class="topkek-terminal-log" role="log" aria-live="polite" data-terminal-log></div>
+        <div class="topkek-terminal-input-row">
+            <span class="topkek-terminal-prompt" data-terminal-prompt>U &gt;</span>
+            <input type="text" class="topkek-terminal-input" data-terminal-input autocomplete="off" spellcheck="false" aria-label="Console command" />
+        </div>
     </div>
     </div>
 
@@ -101,7 +126,7 @@
 
             <!-- Music: custom player -->
             <section class="appstain-section-box">
-                <h3 class="appstain-section-title">Listen: Akta i Pętle</h3>
+                <h3 class="appstain-section-title">Listen: Files and Loops</h3>
                 <div class="appstain-card appstain-audio-card">
                     <audio id="appstain-audio-el" src="ASSETS/APPSTAIN/Appstain Clicker - Akta i Petle.mp3" preload="metadata"></audio>
                     <div class="appstain-audio-player">
@@ -209,15 +234,17 @@
         </div>
     </div>
 
-    <!-- CUSTOM TEXT MODAL -->
-    <div id="custom-text-modal" class="hidden">
-        <div id="custom-text-content">
-            <h2>ENTER TEXT</h2>
-            <input type="text" id="custom-text-input" placeholder="TOPKEK" maxlength="10">
-            <div class="modal-buttons">
-                <button id="custom-text-submit" class="mode-btn">GENERATE</button>
+    <!-- SCNDBREJN MODAL -->
+    <div id="scndbrejn-modal" class="hidden">
+        <div id="scndbrejn-backdrop"></div>
+        <div id="scndbrejn-content" class="portfolio-modal-box">
+            <button id="scndbrejn-close" class="close-btn">X</button>
+            <h2 class="portfolio-modal-title">SCNDBREJN</h2>
+            <div class="genimg-md">
+                <p><strong>SCNDBREJN</strong> is desktop software built to explore and navigate your personal data in a structured way.</p>
+                <p>Its flagship capability is a dedicated <strong>YouTube watch history browser</strong>: open, search, and skim everything you have actually watched—without relying on the limited surface YouTube exposes in the app or on the web.</p>
+                <p>Use it to rediscover forgotten videos, audit your viewing trail, or pipe that history into your own workflows.</p>
             </div>
-            <button id="custom-text-close" class="close-btn">X</button>
         </div>
     </div>
 
@@ -230,7 +257,7 @@
             <p id="portfolio-detail-description" class="portfolio-detail-description"></p>
             <div id="portfolio-detail-gallery" class="portfolio-detail-gallery"></div>
             <div id="portfolio-detail-typography" class="portfolio-detail-typography"></div>
-            <button id="portfolio-detail-play-video" class="button-primary">Odtwórz wideo</button>
+            <button id="portfolio-detail-play-video" class="button-primary">Play video</button>
         </div>
     </div>
 

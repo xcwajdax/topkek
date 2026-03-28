@@ -1,0 +1,20 @@
+---
+description: Po każdej implementacji – aktualizacja CHANGELOG i wersji
+alwaysApply: true
+---
+
+# Hook: CHANGELOG po implementacji
+
+**Po zakończeniu każdej implementacji (funkcja, poprawka, zmiana w kodzie użytkownika) wykonaj:**
+
+1. **Zaktualizuj CHANGELOG.md** (plik `topkek/CHANGELOG.md`):
+   - Dopisz wpis w sekcji `## [Unreleased]` w odpowiedniej podsekcji: **Added**, **Changed**, **Fixed**, **Removed**, **Security** (zgodnie z formatem Keep a Changelog).
+   - Wpis w czasie przeszłym, po polsku (np. „Dodano…”, „Poprawiono…”, „Zmieniono…”).
+   - Jedna konkretna linia na wprowadzoną zmianę.
+
+2. **Wersja (release)** – gdy użytkownik prosi o „wydanie” lub po większym zestawie zmian:
+   - Przenieś wpisy z `[Unreleased]` pod nową wersję (np. `## [1.1.0] - RRRR-MM-DD`).
+   - Zostaw pustą sekcję `[Unreleased]` na górze.
+   - Nie wymyślaj numeru wersji ani daty – użyj podanego lub zapytaj.
+
+**Nie pomijaj tego kroku** – traktuj aktualizację changeloga jako część zakończenia implementacji (np. w tym samym zestawie edycji co zmiany w kodzie).

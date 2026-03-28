@@ -1,0 +1,352 @@
+{
+  "intents": [
+    {
+      "id": "who_is_topkek",
+      "keywords": [
+        "topkek",
+        "who is",
+        "what is",
+        "about",
+        "xcwajdax",
+        "kto to",
+        "co to",
+        "kim jest",
+        "czym jest",
+        "o topkek",
+        "informacje o",
+        "kim jest topkek",
+        "czym jest topkek"
+      ],
+      "response": "TOPKEK Productions is a one-person brand named TOPKEK. VJ, animator, dev, maker of satirical games and experiments; trained as a plumber. Short version: he builds stuff that amuses him."
+    },
+    {
+      "id": "contact",
+      "keywords": [
+        "contact",
+        "email",
+        "discord",
+        "whatsapp",
+        "reach",
+        "message",
+        "get in touch",
+        "kontakt",
+        "napisz",
+        "wiadomość",
+        "wiadomosc",
+        "skontaktuj",
+        "napisać",
+        "napisac",
+        "odezwij się",
+        "odezwij sie"
+      ],
+      "response": "topkek has no official contact channels but I can forward a message if you want"
+    },
+    {
+      "id": "appstain",
+      "keywords": [
+        "appstain",
+        "trump",
+        "clicker",
+        "game",
+        "apk",
+        "app",
+        "gra",
+        "aplikacja",
+        "satyra",
+        "kliker"
+      ],
+      "response": "APPSTAIN is a satirical Trump clicker — build an empire, collect Acts, dodge impeachment. Still in alpha. Open it from the right-hand terminal menu: click the \"> APPSTAIN\" line. The modal asks for a password tied to the KEK riddle — I'm not spelling that out."
+    },
+    {
+      "id": "vajbuj",
+      "keywords": [
+        "vajbuj",
+        "music",
+        "song",
+        "audio",
+        "sound",
+        "muzyka",
+        "piosenka",
+        "dźwięk",
+        "dzwiek"
+      ],
+      "response": "VAJBUJ is TOPKEK's music experiment. Type /vajbuj in the terminal to fire it up."
+    },
+    {
+      "id": "terminal_help",
+      "keywords": [
+        "help",
+        "commands",
+        "available",
+        "what can i",
+        "how do i",
+        "pomoc",
+        "komendy",
+        "polecenia",
+        "jak używać",
+        "jak uzywac",
+        "lista komend",
+        "jak to działa",
+        "jak to dziala",
+        "co mogę",
+        "co moge"
+      ],
+      "response": "Type /help for a short command list or /help full for the full reference. Anything with `/` is a command. Everything else — ask away."
+    },
+    {
+      "id": "projects",
+      "keywords": [
+        "projects",
+        "portfolio",
+        "what do you do",
+        "what are you working on",
+        "projekty",
+        "nad czym pracujesz",
+        "co robisz",
+        "co tworzysz",
+        "czym się zajmujesz",
+        "czym sie zajmujesz"
+      ],
+      "response": "Main thing is APPSTAIN Trump-Epstain satire game. Then SCNDBREJN (memory browser), Glitch Lab, GENIMG. It's all in the terminal."
+    },
+    {
+      "id": "glitch_lab",
+      "keywords": [
+        "glitch",
+        "glitch lab",
+        "glitchlab",
+        "art",
+        "glitche",
+        "sztuka",
+        "laboratorium glitch"
+      ],
+      "response": "Glitch Lab is a glitch-art tool. Open it from the right-hand terminal menu: click the \"> Glitch Lab\" line."
+    },
+    {
+      "id": "scndbrejn",
+      "keywords": [
+        "scndbrejn",
+        "second brain",
+        "2nd brain",
+        "memory",
+        "notes",
+        "drugi mózg",
+        "drugi mozg",
+        "notatki",
+        "notatnik",
+        "pamięć",
+        "pamiec"
+      ],
+      "response": "SCNDBREJN is a memory/notes experiment. Open the modal from the right-hand terminal menu: click the \"> SCNDBREJN\" line. Deeper tooling may run locally as a separate app — the modal explains the gist."
+    },
+    {
+      "id": "who_are_you",
+      "keywords": [
+        "who are you",
+        "buuch",
+        "buszek",
+        "yourself",
+        "introduce",
+        "kim jesteś",
+        "kim jestes",
+        "kto ty",
+        "przedstaw się",
+        "przedstaw sie",
+        "kto jesteś",
+        "kto jestes"
+      ],
+      "response": "I'm Bruuuh. Technical assistant focused on webdev. Dry humor, direct, no fluff. Ask."
+    },
+    {
+      "id": "where",
+      "keywords": [
+        "where",
+        "location",
+        "szczecin",
+        "poland",
+        "based",
+        "gdzie",
+        "lokalizacja",
+        "polska",
+        "skąd jesteś",
+        "skad jestes",
+        "miejsce"
+      ],
+      "response": "Szczecin. Don't confuse it with Warsaw — different planet."
+    },
+    {
+      "id": "genimg",
+      "keywords": [
+        "genimg",
+        "gen img",
+        "pixelgen",
+        "gallery",
+        "images",
+        "obrazy",
+        "galeria",
+        "zdjęcia",
+        "zdjecia",
+        "workflow"
+      ],
+      "response": "GENIMG v1.3 — on-site gallery and notes about the GENIMG workspace. Open it from the right-hand terminal menu: click the \"> GENIMG\" line."
+    },
+    {
+      "id": "performance_mode",
+      "keywords": [
+        "performance",
+        "fps",
+        "lag",
+        "slow",
+        "stutter",
+        "lite",
+        "full mode",
+        "?perf",
+        "perf=",
+        "wydajność",
+        "wydajnosc",
+        "klatki na sekundę",
+        "klatki na sekunde",
+        "opóźnienie",
+        "opoznienie",
+        "ciężka scena",
+        "ciezka scena",
+        "postprocess",
+        "post processing"
+      ],
+      "response": "Graphics profile comes from the URL: add `?perf=lite`, `?perf=full`, or `?perf=auto` (choice is remembered in localStorage). Lite trims heavy effects on weaker machines. When your profile allows it, use the bottom console: `/postproc status`, `/sao`, `/bloom`, `/crt`. There's a Performance HUD in the top-left stack next to the camera readout."
+    },
+    {
+      "id": "mouse_scene_modes",
+      "keywords": [
+        "repulsion",
+        "scatter",
+        "grid",
+        "mouse mode",
+        "animation mode",
+        "rotate",
+        "orbit",
+        "camera",
+        "3d",
+        "three.js",
+        "threejs",
+        "scene",
+        "tryb myszy",
+        "mysz",
+        "kamera",
+        "obracanie"
+      ],
+      "response": "The big \"TOPKEK\" voxel scene is Three.js in the page. Mouse animation modes (Repulsion, Scatter, Grid, …) live in the right-hand control panel. Free / dynamic camera toggles are in the top-left camera HUD. Slash commands in the bottom console control postprocess, lights, and `/fx` — not the mouse mode buttons."
+    },
+    {
+      "id": "fx_effects",
+      "keywords": [
+        "fx",
+        "effects",
+        "effect",
+        "scatter burst",
+        "repulsion swarm",
+        "letter emission",
+        "grid noise",
+        "bloom",
+        "crt",
+        "sao",
+        "particles",
+        "cząsteczki",
+        "czasteczki",
+        "efekty",
+        "świecenie",
+        "swiecenie",
+        "bpm",
+        "trigger effect",
+        "loop effect"
+      ],
+      "response": "Letter FX run through the console: `/fx list` shows effect ids and aliases, `/fx trigger` fires once, `/fx start` loops, `/fx stop` stops instances, `/fx status` shows the runtime. Use `/help full` for every line including shortcut commands."
+    },
+    {
+      "id": "animation_portfolio_3d",
+      "keywords": [
+        "animation portfolio",
+        "portfolio scene",
+        "3d portfolio",
+        "fly in",
+        "fly-in",
+        "floating windows",
+        "portfel animacji",
+        "scena portfolio"
+      ],
+      "response": "The 3D \"Animation portfolio\" sequence: in the right-hand terminal menu, click \"> Animation portfolio\". That starts the in-scene fly-in; click the same line again to exit and restore normal camera controls."
+    },
+    {
+      "id": "portfolio_vimeo",
+      "keywords": [
+        "vimeo",
+        "showreel",
+        "reel",
+        "video portfolio",
+        "portfolio test",
+        "film portfolio"
+      ],
+      "response": "Embedded Vimeo test reel: in the terminal menu, click \"> Portfolio (Vimeo test)\" — opens the video modal."
+    },
+    {
+      "id": "slash_vs_chat",
+      "keywords": [
+        "slash",
+        "leading slash",
+        "slash command",
+        "command vs",
+        "difference",
+        "console",
+        "clear log",
+        "wyczyść",
+        "wyczysc",
+        "komenda czy",
+        "buuch vs"
+      ],
+      "response": "Bottom bar: lines starting with `/` are terminal commands (`/help`, `/help full`, `/fx`, `/clear`, …). Anything without a leading slash is free text — I (Buuch) match it against this knowledge base. `/clear` wipes the console log."
+    },
+    {
+      "id": "tech_stack",
+      "keywords": [
+        "how built",
+        "what is this site",
+        "stack",
+        "vanilla",
+        "no react",
+        "bundler",
+        "static",
+        "jak zrobione",
+        "technologie",
+        "bez frameworka",
+        "webpack",
+        "vite"
+      ],
+      "response": "Static site: vanilla HTML/CSS/JS as ES modules, Three.js r160 from CDN (import map), no bundler. Served as plain files — `python -m http.server` or any static host."
+    },
+    {
+      "id": "thanks_bye",
+      "keywords": [
+        "thanks",
+        "thank you",
+        "thx",
+        "cheers",
+        "bye",
+        "goodbye",
+        "see you",
+        "dzięki",
+        "dzieki",
+        "dziękuję",
+        "dziekuje",
+        "pa",
+        "nara",
+        "do zobaczenia"
+      ],
+      "response": "Anytime. Break something interesting."
+    },
+    {
+      "id": "undefined_question",
+      "keywords": [],
+      "response": "Not sure what you mean. Try /help or /help full for commands."
+    }
+  ]
+}

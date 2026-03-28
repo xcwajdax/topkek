@@ -12,7 +12,17 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, LOADER_CONFIG, VAJBUJ_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, PERFORMANCE_CONFIG } from './config.js';
+import { initTopkekTerminalShell } from './terminal-shell.js';
+import { initFxDevPanel } from './fx-dev-panel.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
+
+const CUSTOM_TEXT_QUERY_PARAM = 'text';
+const MAX_CUSTOM_TEXT_LENGTH = 10;
+
+function sanitizeCustomText(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().toUpperCase().slice(0, MAX_CUSTOM_TEXT_LENGTH);
+}
 
 function resolvePerformanceMode() {
     const params = new URLSearchParams(window.location.search);
@@ -58,6 +68,13 @@ const performanceRuntime = (() => {
         shadowMapSize
     };
 })();
+
+const customTextFromUrl = sanitizeCustomText(
+    new URLSearchParams(window.location.search).get(CUSTOM_TEXT_QUERY_PARAM) || ''
+);
+if (customTextFromUrl) {
+    CONFIG.text = customTextFromUrl;
+}
 
 function getEffectivePixelRatio() {
     return Math.min(window.devicePixelRatio || 1, performanceRuntime.maxPixelRatioCap);
@@ -165,6 +182,9 @@ const CRTShader = {
 
 // State
 let scene, camera, renderer, composer, crtPass, bloomPass;
+let saoPass = null;
+let keyDirectionalLight = null;
+let fillDirectionalLight = null;
 let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
 let innerCubeInstancedMesh;
 let dummy = new THREE.Object3D();
@@ -185,19 +205,416 @@ let loadedFontRegular = null; // Store loaded regular font globally
 // Background video (ogromne wideo za TOPKEK)
 let backgroundVideoEl = null;
 let backgroundVideoTexture = null;
+/** Drugi VideoTexture z mapping equirect — nie ruszamy UV płaszczyzny tła */
+let backgroundVideoTextureEnv = null;
 let backgroundVideoMesh = null;
+/** Użytkownik świadomie wstrzymał wideo tła — nie wymuszaj odtwarzania po loaderze. */
+let backgroundVideoUserPaused = false;
+let backgroundVideoPlayToggleBtn = null;
 
-function cycleBackgroundVideo() {
+// Frame-sync helpers for video-based lighting (reduces perceived lag)
+let videoFrameCounter = 0;
+let lastHemiSampleFrameCounter = -1;
+let lastPmremSampleFrameCounter = -1;
+let videoFrameCallbackStarted = false;
+
+// Video IBL (fake GI) + HDRI fallback
+let hdriEnvironmentTexture = null;
+let videoIblPmremGenerator = null;
+let videoIblEnvScene = null;
+let videoIblLastPmremTime = 0;
+let videoIblLastHemisphereSampleTime = 0;
+let videoIblPmremRenderTarget = null;
+let videoIblSamplingCanvas = null;
+let videoIblSamplingCtx = null;
+let videoHemisphereLight = null;
+let videoAmbientLight = null;
+
+// Active profile for currently playing background video (used for per-BG intensity "emission" tuning).
+let activeBackgroundVideoSource = null;
+let currentBackgroundBpm = CONFIG.backgroundVideo?.bpmControl?.defaultBpm ?? CONFIG.backgroundVideo?.bpmControl?.baseBpm ?? 120;
+let backgroundBeatSegments = [];
+let backgroundBeatLastStep = -1;
+
+function getActiveHemisphereCfg() {
+    const base = CONFIG.backgroundVideo?.hemisphereFromVideo ?? {};
+    const override = activeBackgroundVideoSource?.hemisphereFromVideo ?? {};
+    return { ...base, ...override };
+}
+
+function getActiveEnvMapIntensityBoost() {
+    const base = CONFIG.backgroundVideo?.envMapIntensityBoost ?? {};
+    const override = activeBackgroundVideoSource?.envMapIntensityBoost ?? {};
+    return { ...base, ...override };
+}
+
+function normalizeBackgroundVideoSrc(src) {
+    return typeof src === 'string' ? src.replace(/^\//, '') : '';
+}
+
+function getBackgroundVideoLabel(src) {
+    const normalized = normalizeBackgroundVideoSrc(src);
+    if (!normalized) return 'Unknown BG';
+    const parts = normalized.split('/');
+    return parts[parts.length - 1] || normalized;
+}
+
+function getBackgroundPlaybackRateFromBpm(bpm) {
+    const bgCfg = CONFIG.backgroundVideo;
+    const bpmCfg = bgCfg?.bpmControl ?? {};
+    const baseBpm = Number(bpmCfg.baseBpm) || 120;
+    const safeBpm = Number(bpm) || baseBpm;
+    return Math.max(0.1, safeBpm / baseBpm);
+}
+
+function applyBackgroundVideoPlaybackRate(bpm) {
+    currentBackgroundBpm = Number(bpm) || currentBackgroundBpm;
+    if (!backgroundVideoEl) return;
+    backgroundVideoEl.playbackRate = getBackgroundPlaybackRateFromBpm(currentBackgroundBpm);
+}
+
+function updateBackgroundVideoPlayToggleUi() {
+    if (!backgroundVideoPlayToggleBtn || !backgroundVideoEl) return;
+    const paused = backgroundVideoEl.paused;
+    backgroundVideoPlayToggleBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    const resume = 'Wznów wideo tła';
+    const pause = 'Wstrzymaj wideo tła';
+    backgroundVideoPlayToggleBtn.title = paused ? resume : pause;
+    backgroundVideoPlayToggleBtn.setAttribute('aria-label', paused ? resume : pause);
+    backgroundVideoPlayToggleBtn.textContent = paused ? '▶' : '⏸';
+}
+
+function updateBackgroundBeatIndicator(elapsedSeconds) {
+    if (!Array.isArray(backgroundBeatSegments) || backgroundBeatSegments.length !== 4) return;
+    if (backgroundVideoEl && backgroundVideoEl.paused) {
+        backgroundBeatSegments.forEach((segment) => segment.classList.remove('is-active'));
+        backgroundBeatLastStep = -1;
+        return;
+    }
+    const safeBpm = Math.max(1, Number(currentBackgroundBpm) || 120);
+    const beatSec = 60 / safeBpm;
+    const step = Math.floor(elapsedSeconds / beatSec) % 4;
+    if (step === backgroundBeatLastStep) return;
+    backgroundBeatLastStep = step;
+    backgroundBeatSegments.forEach((segment, index) => {
+        segment.classList.toggle('is-active', index === step);
+    });
+}
+
+function setBackgroundVideoBySrc(nextSrc) {
     const bgCfg = CONFIG.backgroundVideo;
     const sources = bgCfg?.sources;
-    if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0) return;
-    const currentSrc = backgroundVideoEl.src ? new URL(backgroundVideoEl.src, window.location.origin).pathname.replace(/^\//, '') : '';
-    const others = sources.filter(s => s !== currentSrc && s.replace(/^\//, '') !== currentSrc);
-    const pool = others.length ? others : sources;
-    const next = pool[Math.floor(Math.random() * pool.length)];
-    backgroundVideoEl.src = next;
+    if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0 || !nextSrc) return;
+
+    const normalizedTarget = normalizeBackgroundVideoSrc(nextSrc);
+    const next = sources.find(s => normalizeBackgroundVideoSrc(s?.src) === normalizedTarget);
+    if (!next?.src) return;
+
+    activeBackgroundVideoSource = next;
+    backgroundVideoUserPaused = false;
+    backgroundVideoEl.src = next.src;
     backgroundVideoEl.load();
+    applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
     backgroundVideoEl.play().catch(() => {});
+    updateBackgroundVideoPlayToggleUi();
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    // Apply tuning immediately (without waiting for the next sampling tick).
+    applyVideoIblMaterialBoost();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
+}
+
+function disposeVideoIblPmremTarget() {
+    if (videoIblPmremRenderTarget) {
+        videoIblPmremRenderTarget.dispose();
+        videoIblPmremRenderTarget = null;
+    }
+}
+
+function sampleVideoColorsToHemisphere(hemiCfg) {
+    if (!backgroundVideoEl || !videoHemisphereLight || !videoAmbientLight) return;
+
+    // Even if sampling fails (e.g. tainted canvas), lights must keep their "power".
+    const hemiIntensity = hemiCfg.intensity ?? 0.85;
+    const ambientIntensity = hemiCfg.ambientIntensity ?? 0.32;
+    videoHemisphereLight.intensity = hemiIntensity;
+    videoAmbientLight.intensity = ambientIntensity;
+
+    const w = hemiCfg.canvasWidth ?? 32;
+    const h = hemiCfg.canvasHeight ?? 64;
+    if (!videoIblSamplingCanvas) {
+        videoIblSamplingCanvas = document.createElement('canvas');
+        videoIblSamplingCtx = videoIblSamplingCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (videoIblSamplingCanvas.width !== w || videoIblSamplingCanvas.height !== h) {
+        videoIblSamplingCanvas.width = w;
+        videoIblSamplingCanvas.height = h;
+    }
+    const ctx = videoIblSamplingCtx;
+    try {
+        ctx.drawImage(backgroundVideoEl, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        const d = img.data;
+        const mid = Math.floor(h / 2);
+        let sr = 0;
+        let sg = 0;
+        let sb = 0;
+        let nTop = 0;
+        let gr = 0;
+        let gg = 0;
+        let gb = 0;
+        let nBot = 0;
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                const r = d[i];
+                const g = d[i + 1];
+                const b = d[i + 2];
+                if (y < mid) {
+                    sr += r;
+                    sg += g;
+                    sb += b;
+                    nTop++;
+                } else {
+                    gr += r;
+                    gg += g;
+                    gb += b;
+                    nBot++;
+                }
+            }
+        }
+        if (nTop < 1 || nBot < 1) return;
+        videoHemisphereLight.color.setRGB(sr / nTop / 255, sg / nTop / 255, sb / nTop / 255);
+        videoHemisphereLight.groundColor.setRGB(gr / nBot / 255, gg / nBot / 255, gb / nBot / 255);
+        videoAmbientLight.color.lerpColors(videoHemisphereLight.color, videoHemisphereLight.groundColor, 0.5);
+    } catch (_) {
+        /* np. canvas tainted — zostaw poprzednie kolory */
+    }
+}
+
+function updateVideoBasedLighting(nowMs) {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const hemiCfg = getActiveHemisphereCfg();
+    // Hemisphere/Ambient (fallback fill) powinny działać nawet jeśli PMREM jest wyłączony.
+    if (!backgroundVideoEl || !renderer) return;
+    if (backgroundVideoEl.readyState < 2) return;
+
+    const usePmrem = Boolean(
+        vi?.enabled &&
+        backgroundVideoTextureEnv &&
+        videoIblPmremGenerator &&
+        videoIblEnvScene &&
+        vi.usePmrem !== false &&
+        !IS_MOBILE &&
+        vi.replaceSceneEnvironment !== false
+    );
+    const useHemisphere = Boolean(
+        hemiCfg?.enabled &&
+        videoHemisphereLight &&
+        videoAmbientLight &&
+        (IS_MOBILE || hemiCfg.always === true)
+    );
+
+    if (useHemisphere) {
+        const hw = hemiCfg.intervalMs || 400;
+        if (nowMs - videoIblLastHemisphereSampleTime >= hw) {
+            const frameChanged = videoFrameCounter !== lastHemiSampleFrameCounter;
+            const shouldSample = !videoFrameCallbackStarted || frameChanged;
+            if (shouldSample) {
+                videoIblLastHemisphereSampleTime = nowMs;
+                if (videoFrameCallbackStarted) lastHemiSampleFrameCounter = videoFrameCounter;
+                sampleVideoColorsToHemisphere(hemiCfg);
+            }
+        }
+    }
+
+    if (!usePmrem) return;
+
+    const pw = vi.intervalMs || 320;
+    if (pw > 0 && nowMs - videoIblLastPmremTime < pw) return;
+    if (videoFrameCallbackStarted && videoFrameCounter === lastPmremSampleFrameCounter) return;
+    videoIblLastPmremTime = nowMs;
+    if (videoFrameCallbackStarted) lastPmremSampleFrameCounter = videoFrameCounter;
+
+    try {
+        const sigmaRaw = vi.sigma ?? 0.04;
+        const sigma = Math.min(Math.max(0, sigmaRaw), 0.08);
+        if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
+        const newRt = videoIblPmremGenerator.fromScene(videoIblEnvScene, sigma);
+        const prev = videoIblPmremRenderTarget;
+        videoIblPmremRenderTarget = newRt;
+        scene.environment = newRt.texture;
+        if (prev && prev !== newRt) prev.dispose();
+    } catch (err) {
+        console.warn('[VideoIBL] PMREM failed', err);
+        if (hdriEnvironmentTexture) scene.environment = hdriEnvironmentTexture;
+    }
+}
+
+function startVideoFrameCallbackOnce() {
+    if (videoFrameCallbackStarted) return;
+    if (!backgroundVideoEl || typeof backgroundVideoEl.requestVideoFrameCallback !== 'function') return;
+    if (backgroundVideoEl.readyState < 2) return; // Not enough data decoded yet
+
+    videoFrameCallbackStarted = true;
+    const v = backgroundVideoEl;
+    const onVideoFrame = () => {
+        videoFrameCounter++;
+        v.requestVideoFrameCallback(onVideoFrame);
+    };
+
+    v.requestVideoFrameCallback(onVideoFrame);
+}
+
+function initBackgroundVideoIbl() {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    if (!vi?.enabled || !renderer || !backgroundVideoEl) return;
+
+    if (!IS_MOBILE && vi.usePmrem !== false && vi.replaceSceneEnvironment !== false) {
+        videoIblPmremGenerator = new THREE.PMREMGenerator(renderer);
+        backgroundVideoTextureEnv = new THREE.VideoTexture(backgroundVideoEl);
+        backgroundVideoTextureEnv.mapping = THREE.EquirectangularReflectionMapping;
+        backgroundVideoTextureEnv.minFilter = THREE.LinearFilter;
+        backgroundVideoTextureEnv.magFilter = THREE.LinearFilter;
+        if ('colorSpace' in backgroundVideoTextureEnv) {
+            backgroundVideoTextureEnv.colorSpace = THREE.SRGBColorSpace;
+        }
+
+        videoIblEnvScene = new THREE.Scene();
+        const sphereGeo = new THREE.SphereGeometry(200, 48, 24);
+        /** toneMapped: false — inaczej ACES na rendererze „gasi” LDR wideo w bake PMREM (prawie czarne env). */
+        const envSphereMat = new THREE.MeshBasicMaterial({
+            map: backgroundVideoTextureEnv,
+            side: THREE.BackSide,
+            toneMapped: false
+        });
+        videoIblEnvScene.add(new THREE.Mesh(sphereGeo, envSphereMat));
+    }
+
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled) {
+        // Important: even if sampling colors fails (CORS/tainted canvas), lights must still have power.
+        const hemiIntensity = hemiCfg.intensity ?? 0.85;
+        const ambientIntensity = hemiCfg.ambientIntensity ?? 0.32;
+        videoHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, hemiIntensity);
+        videoAmbientLight = new THREE.AmbientLight(0xffffff, ambientIntensity);
+        scene.add(videoHemisphereLight);
+        scene.add(videoAmbientLight);
+    }
+}
+
+/** Restore envMapIntensity on letter materials to `MATERIALS` defaults (after disabling video IBL boost). */
+function resetLetterMaterialsEnvMapIntensityToDefaults() {
+    if (defaultBoxMaterial && MATERIALS.defaultBox?.envMapIntensity != null) {
+        defaultBoxMaterial.envMapIntensity = MATERIALS.defaultBox.envMapIntensity;
+    }
+    if (glassMaterial && MATERIALS.glass?.envMapIntensity != null) {
+        glassMaterial.envMapIntensity = MATERIALS.glass.envMapIntensity;
+    }
+    if (goldMaterial && MATERIALS.gold?.envMapIntensity != null) {
+        goldMaterial.envMapIntensity = MATERIALS.gold.envMapIntensity;
+    }
+    if (innerCubeInstancedMesh?.material && MATERIALS.innerCubes?.envMapIntensity != null) {
+        innerCubeInstancedMesh.material.envMapIntensity = MATERIALS.innerCubes.envMapIntensity;
+    }
+}
+
+/**
+ * Runtime toggle: video-based fake GI (PMREM → scene.environment + boosted envMapIntensity) and hemisphere/ambient from video colors.
+ * Does not remove HDRI fallback; disabling zeros video fill lights and resets material env boosts.
+ */
+function setFakeGiEnabled(wantOn) {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const hemiRoot = CONFIG.backgroundVideo?.hemisphereFromVideo;
+    if (!vi || !hemiRoot) return ['Brak CONFIG.backgroundVideo.videoIbl / hemisphereFromVideo.'];
+
+    if (wantOn) {
+        vi.enabled = true;
+        hemiRoot.enabled = true;
+        disposeVideoIblPmremTarget();
+        if (scene && hdriEnvironmentTexture) scene.environment = hdriEnvironmentTexture;
+        videoIblLastPmremTime = 0;
+        lastPmremSampleFrameCounter = -1;
+        if (videoHemisphereLight && videoAmbientLight) {
+            const h = getActiveHemisphereCfg();
+            videoHemisphereLight.intensity = h.intensity ?? 0.85;
+            videoAmbientLight.intensity = h.ambientIntensity ?? 0.32;
+        }
+        applyVideoIblMaterialBoost();
+        return ['Fake GI ON (video PMREM + hemisphere / ambient z klatki wideo, boost envMapIntensity).'];
+    }
+
+    vi.enabled = false;
+    hemiRoot.enabled = false;
+    disposeVideoIblPmremTarget();
+    if (scene && hdriEnvironmentTexture) scene.environment = hdriEnvironmentTexture;
+    if (videoHemisphereLight) videoHemisphereLight.intensity = 0;
+    if (videoAmbientLight) videoAmbientLight.intensity = 0;
+    resetLetterMaterialsEnvMapIntensityToDefaults();
+    return ['Fake GI OFF (scene.environment → HDRI; światła wideo wyłączone; envMapIntensity jak w MATERIALS).'];
+}
+
+function getFakeGiStatusLines() {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const hemiRoot = CONFIG.backgroundVideo?.hemisphereFromVideo;
+    const lines = [
+        `fake GI: videoIbl.enabled=${!!vi?.enabled} hemisphereFromVideo.enabled=${!!hemiRoot?.enabled}`,
+        `  PMREM: usePmrem=${vi?.usePmrem !== false} replaceSceneEnvironment=${vi?.replaceSceneEnvironment !== false} mobile=${IS_MOBILE}`
+    ];
+    if (videoHemisphereLight) {
+        lines.push(`  videoHemisphere: intensity=${videoHemisphereLight.intensity.toFixed(2)}`);
+    }
+    if (videoAmbientLight) {
+        lines.push(`  videoAmbient: intensity=${videoAmbientLight.intensity.toFixed(2)}`);
+    }
+    lines.push(`  scene.environment: ${scene?.environment ? 'yes' : 'no'}`);
+    if (defaultBoxMaterial) {
+        lines.push(`  defaultBox.envMapIntensity=${defaultBoxMaterial.envMapIntensity?.toFixed?.(2) ?? defaultBoxMaterial.envMapIntensity}`);
+    }
+    return lines;
+}
+
+function applyVideoIblMaterialBoost() {
+    const vi = CONFIG.backgroundVideo?.videoIbl;
+    const boost = getActiveEnvMapIntensityBoost();
+    if (!vi?.enabled || !backgroundVideoEl || !boost) return;
+
+    const applyStd = (mat, matKey) => {
+        if (!mat) return;
+        const b = boost[matKey];
+        if (b == null) return;
+        const base = MATERIALS[matKey]?.envMapIntensity ?? 1;
+        mat.envMapIntensity = base * b;
+    };
+
+    applyStd(defaultBoxMaterial, 'defaultBox');
+    applyStd(glassMaterial, 'glass');
+    applyStd(goldMaterial, 'gold');
+    if (innerCubeInstancedMesh?.material) applyStd(innerCubeInstancedMesh.material, 'innerCubes');
+
+    const hv = boost.vajbujBgCubes;
+    if (hv != null && vajbujState.bgCubesMesh?.material) {
+        const base = VAJBUJ_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
+        vajbujState.bgCubesMesh.material.envMapIntensity = base * hv;
+    }
+
+    const hm = boost.mysenBgCubes;
+    if (hm != null && mysenState.bgCubesMesh?.material) {
+        const baseM = MYSEN_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
+        mysenState.bgCubesMesh.material.envMapIntensity = baseM * hm;
+    }
+
+    const hh = boost.heart;
+    if (hh != null && motionDesignState?.heartMesh?.material) {
+        motionDesignState.heartMesh.material.envMapIntensity = 0.4 * hh;
+    }
 }
 
 // Portfolio (video thumbnails below PRODUCTIONS)
@@ -255,6 +672,118 @@ let vajbujState = {
     generationQueue: [] // Queue for background processing
 };
 
+let vajbujFinalizeTimerId = null;
+let mysenFinalizeTimerId = null;
+
+// MYSEN remix mode state (separate voxel cache from VAJBUJ)
+let mysenState = {
+    active: false,
+    audio: null,
+    startTime: 0,
+    words: [],
+    currentLineIndex: 0,
+    currentWordIndex: 0,
+    completedLines: 0,
+    lineShiftY: 0,
+    displayedLines: [],
+    bgCubes: [],
+    bgCubesMesh: null,
+    lastActivityTime: Date.now(),
+    isStopping: false,
+    voxelCache: {},
+    generationQueue: [],
+    playbackDurationSec: null,
+    _fadeTimeoutId: null,
+    _stopTimeoutId: null
+};
+
+function clearMysenPlaybackTimers() {
+    if (mysenState._fadeTimeoutId) {
+        clearTimeout(mysenState._fadeTimeoutId);
+        mysenState._fadeTimeoutId = null;
+    }
+    if (mysenState._stopTimeoutId) {
+        clearTimeout(mysenState._stopTimeoutId);
+        mysenState._stopTimeoutId = null;
+    }
+}
+
+/** Length of the played window in seconds (from audioStartTime), or null if unknown. */
+function resolveMysenFragmentDurationSec(audio, config = MYSEN_CONFIG) {
+    const startT = config.audioStartTime || 0;
+    const endT = config.audioEndTime;
+    if (endT != null && Number.isFinite(endT) && endT > startT) {
+        return endT - startT;
+    }
+    const d = audio?.duration;
+    if (Number.isFinite(d) && d > startT) {
+        return Math.max(0.01, d - startT);
+    }
+    return null;
+}
+
+function scheduleMysenPlaybackEnd(audio) {
+    clearMysenPlaybackTimers();
+
+    const runSchedule = () => {
+        if (!mysenState.active) return;
+        const startT = MYSEN_CONFIG.audioStartTime || 0;
+        const fragmentLen = resolveMysenFragmentDurationSec(audio, MYSEN_CONFIG);
+        if (!Number.isFinite(fragmentLen) || fragmentLen <= 0) {
+            console.warn('[MYSEN] Could not resolve playback length; retry when metadata loads.');
+            return;
+        }
+
+        mysenState.playbackDurationSec = fragmentLen;
+
+        const endMedia = startT + fragmentLen;
+        const cur = audio.currentTime;
+        const remain = Math.max(0.05, endMedia - cur);
+        const fadeMs = Math.max(0, (remain - MYSEN_CONFIG.fadeOutDuration) * 1000);
+        const stopMs = remain * 1000;
+
+        mysenState._fadeTimeoutId = setTimeout(() => {
+            mysenState._fadeTimeoutId = null;
+            if (!mysenState.active) return;
+            fadeAudio(audio, audio.volume, 0, MYSEN_CONFIG.fadeOutDuration);
+        }, fadeMs);
+
+        mysenState._stopTimeoutId = setTimeout(() => {
+            mysenState._stopTimeoutId = null;
+            if (!mysenState.active) return;
+            stopMysenMode();
+        }, stopMs);
+    };
+
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        runSchedule();
+    } else {
+        audio.addEventListener('loadedmetadata', () => runSchedule(), { once: true });
+    }
+}
+
+/** Hide TOPKEK shell + inner instanced mesh (and optionally background video) for music-only modes. */
+function setMainTopkekSceneVisible(visible, opts = {}) {
+    const hideVideo = opts.hideBackgroundVideo === true;
+    Object.values(meshRegistry).forEach((entry) => {
+        if (entry.top) entry.top.visible = visible;
+        if (entry.kek) entry.kek.visible = visible;
+    });
+    if (innerCubeInstancedMesh) innerCubeInstancedMesh.visible = visible;
+    if (backgroundVideoMesh) {
+        if (visible) {
+            // Always show BG video when restoring the main scene (avoids stale visible=false after MYSEN
+            // if hideBackgroundVideo was toggled or opts omitted — that killed emissive fill / perceived “blue”).
+            backgroundVideoMesh.visible = true;
+            if (backgroundVideoEl && !backgroundVideoUserPaused) {
+                backgroundVideoEl.play().catch(() => {});
+            }
+        } else if (hideVideo) {
+            backgroundVideoMesh.visible = false;
+        }
+    }
+}
+
 // Camera Rotation & Pan State
 let isDragging = false;
 let isPanning = false;
@@ -279,9 +808,32 @@ let cinematicSwitchTime = 0;
 let lastInteractionTime = Date.now();
 let isInitialSequence = true;
 
+// Intro fly-in (after loader): radius eases from INTRO_CAMERA_CONFIG.startRadius to CONFIG.initialZoom
+let introCameraFlyInActive = false;
+let introFlyInStartTime = 0;
+let introFlyInStartRadius = INTRO_CAMERA_CONFIG.startRadius;
+let postIntroUiRevealed = false;
+
 // Cinematic Camera State (Shots imported)
 let cinematicDollySpeed = 0; // Speed of radius change
 let currentShotSpeedMult = 0.2; // Speed of orbit
+
+// Camera HUD (top-left panel)
+let cameraHudModeEl = null;
+let cameraHudPosEl = null;
+let cameraHudTgtEl = null;
+let perfHudRootEl = null;
+let perfHudFpsEl = null;
+let perfHudHighEl = null;
+let perfHudLowEl = null;
+let perfHudCanvasEl = null;
+let perfHudCtx = null;
+const perfHudState = {
+    lastFrameTs: 0,
+    lastUiTs: 0,
+    smoothedFps: 0,
+    samples: []
+};
 
 // DOM Elements
 const container = document.getElementById('canvas-container');
@@ -300,11 +852,123 @@ let loadState = {
     generation: 0
 };
 
-function updateProgress() {
+// Loader simulation state (fake progress + funny rotating messages)
+let loaderSim = {
+    active: false,
+    rafId: null,
+    intervalId: null,
+    simProgress: 0,
+    lastBarWidth: null,
+    lastMessage: null
+};
+
+function getRealPhase() {
+    if (loadState.assets < 100) return 'assets';
+    if (loadState.generation < 100) return 'generation';
+    return 'ready';
+}
+
+function computeRealPercentage() {
     const totalWeight = LOADER_CONFIG.phases.assets.weight + LOADER_CONFIG.phases.generation.weight;
     const currentWeight = (loadState.assets * LOADER_CONFIG.phases.assets.weight / 100) +
         (loadState.generation * LOADER_CONFIG.phases.generation.weight / 100);
-    const percentage = Math.round((currentWeight / totalWeight) * 100);
+    return Math.max(0, Math.min(100, Math.round((currentWeight / totalWeight) * 100)));
+}
+
+function setLoaderUI(percentage, text) {
+    const pct = Math.max(0, Math.min(100, percentage));
+    // Keep bar animating smoothly even if the integer text stays the same.
+    const widthStr = `${pct.toFixed(2)}%`;
+    if (loaderSim.lastBarWidth !== widthStr) {
+        progressFill.style.width = widthStr;
+        progressText.innerText = `${Math.round(pct)}%`;
+        loaderSim.lastBarWidth = widthStr;
+    }
+    if (typeof text === 'string') {
+        if (statusText.innerText !== text) {
+            statusText.innerText = text;
+        }
+    }
+}
+
+function pickLoaderMessage(phase) {
+    const pools = LOADER_CONFIG.messages || {};
+    const list = pools[phase] || [];
+    if (!list.length) return 'Loading...';
+    const idx = Math.floor(Math.random() * list.length);
+    return list[idx];
+}
+
+function stopLoaderSimulation({ finalize = false } = {}) {
+    if (!loaderSim.active && !finalize) return;
+
+    loaderSim.active = false;
+    if (loaderSim.rafId) cancelAnimationFrame(loaderSim.rafId);
+    if (loaderSim.intervalId) clearInterval(loaderSim.intervalId);
+    loaderSim.rafId = null;
+    loaderSim.intervalId = null;
+
+    if (finalize) {
+        const readyText = pickLoaderMessage('ready');
+        setLoaderUI(100, readyText);
+    }
+}
+
+function startLoaderSimulation() {
+    if (!LOADER_CONFIG.simulation?.enabled) return;
+
+    // If user triggers reload quickly (e.g. custom text), restart simulation cleanly.
+    stopLoaderSimulation();
+
+    loaderSim.active = true;
+    loaderSim.simProgress = LOADER_CONFIG.simulation?.startPercentage ?? 0;
+    loaderSim.lastBarWidth = null;
+
+    const phase = getRealPhase();
+    setLoaderUI(loaderSim.simProgress, pickLoaderMessage(phase));
+
+    const softCap = Math.max(loaderSim.simProgress, LOADER_CONFIG.simulation?.softCap ?? 99);
+    const tauMs = LOADER_CONFIG.simulation?.tauMs ?? 2400;
+    const maxLeadPercentage = LOADER_CONFIG.simulation?.maxLeadPercentage ?? 25;
+
+    let lastT = performance.now();
+    const tick = (now) => {
+        if (!loaderSim.active) return;
+        const dt = Math.max(0, now - lastT);
+        lastT = now;
+
+        // Keep the fake progress behind the real loading (with small lead).
+        // It still accelerates at the beginning and slows down near the current cap.
+        const realPct = computeRealPercentage();
+        const dynamicCap = Math.min(softCap, realPct + maxLeadPercentage);
+
+        // Exponential approach to dynamicCap:
+        // progress moves fast at start and slows down near the cap.
+        const decay = Math.exp(-dt / tauMs);
+        loaderSim.simProgress = dynamicCap - (dynamicCap - loaderSim.simProgress) * decay;
+        loaderSim.simProgress = Math.min(loaderSim.simProgress, dynamicCap);
+
+        setLoaderUI(loaderSim.simProgress);
+
+        loaderSim.rafId = requestAnimationFrame(tick);
+    };
+    loaderSim.rafId = requestAnimationFrame(tick);
+
+    const intervalMs = LOADER_CONFIG.simulation?.messageIntervalMs ?? 1000;
+    loaderSim.intervalId = setInterval(() => {
+        if (!loaderSim.active) return;
+        const nextPhase = getRealPhase();
+        // Ensure the text changes even if the phase doesn't.
+        setLoaderUI(loaderSim.simProgress, pickLoaderMessage(nextPhase));
+    }, intervalMs);
+}
+
+function updateProgress() {
+    // Keep the "real progress" calculation for phase selection,
+    // but avoid DOM writes while the fake loader simulation is active.
+    const percentage = computeRealPercentage();
+
+    if (loaderSim.active) return;
 
     progressFill.style.width = `${percentage}%`;
     progressText.innerText = `${percentage}%`;
@@ -318,8 +982,44 @@ function updateProgress() {
     }
 }
 
+function applyPostIntroUiCssVars() {
+    const c = POST_INTRO_UI_CONFIG;
+    const r = document.documentElement;
+    const px = `${c.slidePx}px`;
+    r.style.setProperty('--post-intro-slide-x', px);
+    r.style.setProperty('--post-intro-menu-stagger', `${c.menuLineStaggerMs}ms`);
+    r.style.setProperty('--post-intro-menu-dur', `${c.menuLineAnimSec}s`);
+    r.style.setProperty('--post-intro-ui-delay', `${c.uiContainerDelayMs}ms`);
+    r.style.setProperty('--post-intro-ui-dur', `${c.uiContainerAnimSec}s`);
+    r.style.setProperty('--post-intro-shell-delay', `${c.terminalShellDelayMs}ms`);
+    r.style.setProperty('--post-intro-shell-dur', `${c.terminalShellAnimSec}s`);
+    r.style.setProperty('--post-intro-hud-delay', `${c.cameraHudDelayMs}ms`);
+    r.style.setProperty('--post-intro-hud-dur', `${c.cameraHudAnimSec}s`);
+    r.style.setProperty('--post-intro-prod-delay', `${c.prodLabelDelayMs}ms`);
+    r.style.setProperty('--post-intro-prod-dur', `${c.prodLabelAnimSec}s`);
+}
+
+function revealPostIntroUi() {
+    if (postIntroUiRevealed) return;
+    postIntroUiRevealed = true;
+    const body = document.body;
+    if (!POST_INTRO_UI_CONFIG.enabled) {
+        applyPostIntroUiCssVars();
+        body.classList.remove('post-intro-ui-pending');
+        body.classList.add('post-intro-ui-ready');
+        return;
+    }
+    applyPostIntroUiCssVars();
+    document.querySelectorAll('#terminal-menu .term-line').forEach((el, i) => {
+        el.style.setProperty('--post-intro-line-index', String(i));
+    });
+    body.classList.remove('post-intro-ui-pending');
+    body.classList.add('post-intro-ui-ready');
+}
+
 function init() {
-    updateProgress(); // Pokazuj 0% i "Loading Assets..." od razu
+    startLoaderSimulation();
+    updateProgress(); // zapewnij spójność fazy (bez nadpisywania DOM-a przy sim)
     requestAnimationFrame(() => {
         initSceneAndLoad();
     });
@@ -359,7 +1059,7 @@ function initSceneAndLoad() {
     composer.addPass(renderScene);
 
     if (performanceRuntime.enableSao) {
-        const saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
+        saoPass = new SAOPass(scene, camera, new THREE.Vector2(window.innerWidth, window.innerHeight));
         saoPass.params.saoBias = SHADER_CONFIG.sao.saoBias;
         saoPass.params.saoIntensity = SHADER_CONFIG.sao.saoIntensity;
         saoPass.params.saoScale = SHADER_CONFIG.sao.saoScale;
@@ -370,6 +1070,8 @@ function initSceneAndLoad() {
         saoPass.params.saoBlurStdDev = SHADER_CONFIG.sao.saoBlurStdDev;
         saoPass.params.saoBlurDepthCutoff = SHADER_CONFIG.sao.saoBlurDepthCutoff;
         composer.addPass(saoPass);
+    } else {
+        saoPass = null;
     }
 
     if (performanceRuntime.enableBloom) {
@@ -392,29 +1094,27 @@ function initSceneAndLoad() {
 
     composer.addPass(new OutputPass());
 
-    // 4. Lighting & Environment (HDRI)
+    // 4. Lighting & Environment (HDRI — fallback dopóki PMREM z wideo nie nadpisze scene.environment)
     new RGBELoader()
         .load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr', function (texture) {
             texture.mapping = THREE.EquirectangularReflectionMapping;
-            // scene.background = texture; // Uncomment to see the HDR background
+            hdriEnvironmentTexture = texture;
             scene.environment = texture;
-
-            // Generate particles only after basic setup is safe, but we can do it parallel
         });
 
     // Keep a subtle Directional Light1 for sharp shadows
-    const dirLight1 = new THREE.DirectionalLight(0xFF0000, 0.7);
-    dirLight1.position.set(10, 10, 10);
-    dirLight1.castShadow = true;
-    dirLight1.shadow.mapSize.width = performanceRuntime.shadowMapSize;
-    dirLight1.shadow.mapSize.height = performanceRuntime.shadowMapSize;
-    const dirLight2 = new THREE.DirectionalLight(0x0000FF, 0.7);
-    dirLight2.position.set(-10, -10, 10);
-    dirLight2.castShadow = performanceRuntime.secondLightCastShadow;
-    dirLight2.shadow.mapSize.width = performanceRuntime.shadowMapSize;
-    dirLight2.shadow.mapSize.height = performanceRuntime.shadowMapSize;
-    scene.add(dirLight1);
-    scene.add(dirLight2);
+    keyDirectionalLight = new THREE.DirectionalLight(0xFF0000, 15);
+    keyDirectionalLight.position.set(-10, 1-0, 10);
+    keyDirectionalLight.castShadow = true;
+    keyDirectionalLight.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    keyDirectionalLight.shadow.mapSize.height = performanceRuntime.shadowMapSize;
+    fillDirectionalLight = new THREE.DirectionalLight(0x0000FF, 1);
+    fillDirectionalLight.position.set(10, 10, 10);
+    fillDirectionalLight.castShadow = performanceRuntime.secondLightCastShadow;
+    fillDirectionalLight.shadow.mapSize.width = performanceRuntime.shadowMapSize;
+    fillDirectionalLight.shadow.mapSize.height = performanceRuntime.shadowMapSize;
+    scene.add(keyDirectionalLight);
+    scene.add(fillDirectionalLight);
 
     // Debug Cursor
     const debugGeo = new THREE.SphereGeometry(0.2, 16, 16);
@@ -425,9 +1125,11 @@ function initSceneAndLoad() {
     // Tło: ogromne wideo daleko za napisem TOPKEK (losowy plik z listy przy ładowaniu)
     const bgCfg = CONFIG.backgroundVideo;
     const bgSources = bgCfg?.sources;
-    const bgSrc = Array.isArray(bgSources) && bgSources.length
+    const bgSource = Array.isArray(bgSources) && bgSources.length
         ? bgSources[Math.floor(Math.random() * bgSources.length)]
-        : bgCfg?.src;
+        : null;
+    activeBackgroundVideoSource = bgSource;
+    const bgSrc = bgSource?.src ?? bgCfg?.src;
 
     let videoReadyPromise = Promise.resolve();
     if (bgCfg && bgSrc) {
@@ -438,6 +1140,7 @@ function initSceneAndLoad() {
         backgroundVideoEl.preload = 'auto';
         backgroundVideoEl.crossOrigin = 'anonymous';
         backgroundVideoEl.src = bgSrc;
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
         backgroundVideoEl.load();
 
         const updateVideoProgress = () => {
@@ -457,12 +1160,15 @@ function initSceneAndLoad() {
         backgroundVideoEl.addEventListener('progress', updateVideoProgress);
         backgroundVideoEl.addEventListener('loadedmetadata', updateVideoProgress);
         backgroundVideoEl.addEventListener('loadeddata', updateVideoProgress);
+        backgroundVideoEl.addEventListener('play', () => updateBackgroundVideoPlayToggleUi());
+        backgroundVideoEl.addEventListener('pause', () => updateBackgroundVideoPlayToggleUi());
 
         videoReadyPromise = new Promise((resolve) => {
             const onReady = () => {
                 loadState.assets = 100;
                 updateProgress();
                 backgroundVideoEl.play().catch(() => {});
+                startVideoFrameCallbackOnce();
                 resolve();
             };
             backgroundVideoEl.addEventListener('canplay', onReady, { once: true });
@@ -477,6 +1183,8 @@ function initSceneAndLoad() {
         backgroundVideoMesh = new THREE.Mesh(bgGeo, bgMat);
         backgroundVideoMesh.position.set(0, 0, bgCfg.positionZ);
         scene.add(backgroundVideoMesh);
+
+        initBackgroundVideoIbl();
     }
 
     // 5. Load Fonts and Generate Text
@@ -526,10 +1234,21 @@ function initSceneAndLoad() {
 
             // Initialize Vajbuj mode after particles are ready
             initVajbujMode();
+            initMysenMode();
             // Portfolio is lazy-initialized on first hover over "Animation portfolio" in terminal
 
+            // Loader is about to disappear; stop fake progress to avoid running in background.
+            stopLoaderSimulation({ finalize: true });
+            introFlyInStartRadius = INTRO_CAMERA_CONFIG.startRadius;
+            cameraRadius = introFlyInStartRadius;
+            targetCameraRadius = introFlyInStartRadius;
+            introFlyInStartTime = performance.now();
+            introCameraFlyInActive = true;
+            setTimeout(() => {
+                revealPostIntroUi();
+            }, INTRO_CAMERA_CONFIG.durationMs + 200);
             loaderContainer.classList.add('hidden');
-            if (backgroundVideoEl) {
+            if (backgroundVideoEl && !backgroundVideoUserPaused) {
                 backgroundVideoEl.play().catch(() => {});
             }
             setTimeout(() => {
@@ -538,7 +1257,9 @@ function initSceneAndLoad() {
         })
         .catch(err => {
             console.error("Error loading fonts:", err);
+            stopLoaderSimulation();
             statusText.innerText = "Error Loading Fonts";
+            revealPostIntroUi();
         });
 
     // 6. Events
@@ -547,21 +1268,6 @@ function initSceneAndLoad() {
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('keydown', (e) => {
-        if (e.code === 'Space') {
-            isAlternateMaterial = !isAlternateMaterial;
-
-            // Update Bloom Strength
-            if (bloomPass) {
-                bloomPass.strength = isAlternateMaterial ? SHADER_CONFIG.bloom.alternateStrength : SHADER_CONFIG.bloom.strength;
-            }
-
-
-            // Iterate over registry to update materials
-            Object.values(meshRegistry).forEach(entry => {
-                if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
-                if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
-            });
-        }
         if (e.code === 'Escape') {
             if (isCinematic || isFreeCam) {
                 setCameraMode('manual');
@@ -582,6 +1288,60 @@ function initSceneAndLoad() {
     }, cinematicConfig.initialDelay);
 
     createUI();
+}
+
+function makeSectionCollapsible(sectionEl, label) {
+    if (!sectionEl || sectionEl.dataset.sectionToggleBound === '1') return;
+
+    const content = document.createElement('div');
+    content.className = 'menu-section-content';
+    while (sectionEl.firstChild) {
+        content.appendChild(sectionEl.firstChild);
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'menu-section-toggle';
+
+    const applyCollapsedState = (collapsed) => {
+        sectionEl.classList.toggle('menu-section-collapsed', collapsed);
+        btn.textContent = collapsed ? '+' : '−';
+        const action = collapsed ? 'Expand' : 'Collapse';
+        btn.setAttribute('aria-label', `${action} ${label}`);
+        btn.title = `${action} ${label}`;
+    };
+
+    btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        applyCollapsedState(!sectionEl.classList.contains('menu-section-collapsed'));
+    });
+
+    sectionEl.classList.add('menu-collapsible-section');
+    sectionEl.appendChild(btn);
+    sectionEl.appendChild(content);
+    sectionEl.dataset.sectionToggleBound = '1';
+    applyCollapsedState(false);
+}
+
+function initSectionMenuToggles() {
+    const cameraHud = document.getElementById('camera-hud');
+    if (cameraHud) {
+        const cameraHudSections = Array.from(cameraHud.querySelectorAll('.controls-section'));
+        cameraHudSections.forEach((section, index) => {
+            makeSectionCollapsible(section, `left section ${index + 1}`);
+        });
+    }
+
+    const perfHud = document.getElementById('perf-hud');
+    if (perfHud) makeSectionCollapsible(perfHud, 'performance panel');
+
+    const uiContainer = document.getElementById('ui-container');
+    if (uiContainer) makeSectionCollapsible(uiContainer, 'right controls');
+
+    const terminalMenu = document.getElementById('terminal-menu');
+    if (terminalMenu) makeSectionCollapsible(terminalMenu, 'terminal menu');
+
+    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see terminal-shell.js */
 }
 
 // --- Portfolio Vimeo helpers ---
@@ -628,24 +1388,727 @@ function openPortfolioDetailModal(item) {
 
 const clock = new THREE.Clock();
 let glitchVolumeNextTrigger = 0; // next time (s) to auto-trigger volumetric glitch
+/** @type {{ toggle: () => void, isVisible: () => boolean, syncFromRuntime: () => void } | null} */
+let fxDevPanelControl = null;
+
+const fxRuntime = {
+    enabled: FX_CONFIG?.global?.enabled !== false,
+    bpm: FX_CONFIG?.global?.defaultBpm || 120,
+    nextInstanceId: 1,
+    activeInstances: [],
+    defaults: {}
+};
+Object.keys(FX_CONFIG?.registry || {}).forEach((effectId) => {
+    fxRuntime.defaults[effectId] = { ...(FX_CONFIG.registry[effectId]?.defaults || {}) };
+});
+
+const fxTmpVec = new THREE.Vector3();
+
+function normalizeFxAlias(line) {
+    if (!line) return line;
+    const trimmed = line.trim();
+    const firstToken = trimmed.split(/\s+/)[0]?.toLowerCase();
+    const alias = FX_CONFIG?.aliasCommands?.[firstToken];
+    if (!alias) return line;
+    const rest = trimmed.slice(firstToken.length).trim();
+    return `${alias}${rest ? ` ${rest}` : ''}`;
+}
+
+function resolveFxSeconds(value, bpm = fxRuntime.bpm) {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const token = String(value).trim().toLowerCase();
+    if (!token) return null;
+    if (/^\d+(\.\d+)?s$/.test(token)) return parseFloat(token.slice(0, -1));
+    if (/^\d+(\.\d+)?b$/.test(token)) {
+        const beats = parseFloat(token.slice(0, -1));
+        return beats * 60 / Math.max(1, bpm);
+    }
+    if (/^\d+\/\d+$/.test(token)) {
+        const [aRaw, bRaw] = token.split('/');
+        const a = parseFloat(aRaw);
+        const b = parseFloat(bRaw);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || b <= 0) return null;
+        return (a / b) * 4 * 60 / Math.max(1, bpm);
+    }
+    const numeric = parseFloat(token);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseFxParams(rawParts, fromIndex = 0) {
+    const params = {};
+    for (let i = fromIndex; i < rawParts.length; i++) {
+        const t = rawParts[i];
+        const eq = t.indexOf('=');
+        if (eq <= 0) continue;
+        const key = t.slice(0, eq).trim();
+        const valueRaw = t.slice(eq + 1).trim();
+        if (!key) continue;
+        if (valueRaw === 'true' || valueRaw === 'false') {
+            params[key] = valueRaw === 'true';
+            continue;
+        }
+        if (/^#?[0-9a-f]{6}$/i.test(valueRaw) || /^0x[0-9a-f]{6}$/i.test(valueRaw)) {
+            params[key] = valueRaw;
+            continue;
+        }
+        const num = parseFloat(valueRaw);
+        params[key] = Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(valueRaw) ? num : valueRaw;
+    }
+    return params;
+}
+
+function getFxRegistryConfig(effectId) {
+    return FX_CONFIG?.registry?.[effectId] || null;
+}
+
+function resolveFxEffectId(inputId) {
+    const id = String(inputId || '').trim();
+    if (!id) return null;
+    if (FX_CONFIG?.registry?.[id]) return id;
+    const low = id.toLowerCase();
+    const keys = Object.keys(FX_CONFIG?.registry || {});
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const aliases = FX_CONFIG.registry[key]?.aliases || [];
+        if (aliases.some((a) => String(a).toLowerCase() === low)) return key;
+    }
+    return null;
+}
+
+function clampFxParam(effectId, key, value) {
+    const effectCfg = getFxRegistryConfig(effectId);
+    const range = effectCfg?.ranges?.[key];
+    if (!range || typeof value !== 'number' || !Number.isFinite(value)) return value;
+    return Math.max(range.min, Math.min(range.max, value));
+}
+
+function getSubtitleSplitY() {
+    const offsetY = CONFIG?.subtitle?.offsetY;
+    if (!Number.isFinite(offsetY)) return -1.5;
+    return offsetY * 0.5;
+}
+
+function getGroupLayer(group) {
+    return group.originalPos.y < getSubtitleSplitY() ? 'subtitle' : 'main';
+}
+
+function getTargetGroupsByMode(targetMode) {
+    const mode = String(targetMode || 'both').toLowerCase();
+    if (mode === 'main') return cubeGroups.filter((g) => getGroupLayer(g) === 'main');
+    if (mode === 'subtitle') return cubeGroups.filter((g) => getGroupLayer(g) === 'subtitle');
+    return cubeGroups;
+}
+
+function resolveFxParams(effectId, overrides = {}) {
+    const defaults = fxRuntime.defaults[effectId] || getFxRegistryConfig(effectId)?.defaults || {};
+    const merged = { ...defaults, ...overrides };
+    const normalized = {};
+    Object.keys(merged).forEach((k) => {
+        normalized[k] = clampFxParam(effectId, k, merged[k]);
+    });
+    return normalized;
+}
+
+function nextFxIntervalSeconds(params) {
+    return Math.max(0.03, resolveFxSeconds(params.frequency, fxRuntime.bpm) || 0.25);
+}
+
+function applyScatterBurst(params) {
+    const spread = Math.max(0.05, Math.min(1, params.spread ?? 0.5));
+    const speed = Math.max(0.1, params.speed ?? 1);
+    const scale = Math.max(0.1, params.scale ?? 1);
+    const count = Math.max(4, Math.floor(cubeGroups.length * Math.min(0.6, spread * 0.35)));
+    for (let i = 0; i < count; i++) {
+        const idx = Math.floor(Math.random() * cubeGroups.length);
+        const group = cubeGroups[idx];
+        if (!group) continue;
+        fxTmpVec.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(0.08 * speed * scale);
+        group.isFlying = true;
+        group.velocity.add(fxTmpVec);
+        group.returnStartTime = (Date.now() * 0.001) + 0.25 + (params.decay || 0.5);
+    }
+}
+
+function applyRepulsionSwarm(instance, dt) {
+    if (!instance.state.points || instance.state.points.length === 0) return;
+    const params = instance.params;
+    const radius = Math.max(0.2, params.radius ?? 3);
+    const speed = Math.max(0.1, params.speed ?? 1);
+    const turnRate = Math.max(0.05, params.turnRate ?? 1);
+    const now = instance.elapsed;
+    for (let i = 0; i < instance.state.points.length; i++) {
+        const p = instance.state.points[i];
+        p.phase += dt * turnRate;
+        const r = radius * (0.65 + 0.35 * Math.sin(p.seed + now * 0.3));
+        p.pos.set(
+            Math.sin(p.phase + p.seed) * r,
+            Math.cos(p.phase * 1.7 + p.seed) * r * 0.7,
+            Math.cos(p.phase + p.seed) * r
+        );
+        for (let g = 0; g < cubeGroups.length; g++) {
+            const group = cubeGroups[g];
+            const dist = group.currentPos.distanceTo(p.pos);
+            if (dist > radius) continue;
+            fxTmpVec.subVectors(group.currentPos, p.pos);
+            if (fxTmpVec.lengthSq() < 1e-6) continue;
+            fxTmpVec.normalize().multiplyScalar((1 - dist / radius) * 0.06 * speed);
+            // Scatter/grid ignore velocity unless isFlying; repulsion integrates velocity every frame.
+            if (CONFIG.animationMode === 'repulsion') {
+                group.velocity.add(fxTmpVec);
+            } else {
+                group.currentPos.add(fxTmpVec);
+            }
+        }
+    }
+}
+
+function applyLetterEmission(instance) {
+    const params = instance.params;
+    const groups = getTargetGroupsByMode(params.target);
+    if (!groups.length) return;
+    const distribution = String(params.distribution || 'sequential');
+    let chosen = null;
+    if (distribution === 'random') {
+        chosen = groups[Math.floor(Math.random() * groups.length)];
+    } else if (distribution === 'pingpong') {
+        const n = groups.length;
+        const idx = instance.state.index % (n * 2 - 2 || 1);
+        const mirrored = idx < n ? idx : (2 * n - 2 - idx);
+        chosen = groups[Math.max(0, Math.min(n - 1, mirrored))];
+        instance.state.index += 1;
+    } else {
+        chosen = groups[instance.state.index % groups.length];
+        instance.state.index += 1;
+    }
+    if (!chosen) return;
+    chosen.fxGlowUntil = instance.now + Math.max(0.04, resolveFxSeconds(params.duration, fxRuntime.bpm) || 0.2);
+    chosen.fxGlowGain = Math.max(0.1, params.gain ?? 1);
+    chosen.fxGlowPulseK = params.pulseScale ?? 0.32;
+}
+
+function noiseAt(x, y, t, speed = 1) {
+    return 0.5 + 0.5 * Math.sin((x * 1.7 + y * 1.2) + t * speed);
+}
+
+function applyGridNoiseMask(instance) {
+    const params = instance.params;
+    const threshold = Math.max(0, Math.min(1, params.threshold ?? 0.6));
+    const speed = Math.max(0.1, params.speed ?? 1);
+    let hits = 0;
+    for (let i = 0; i < cubeGroups.length; i++) {
+        const g = cubeGroups[i];
+        const n = noiseAt(g.originalPos.x, g.originalPos.y, instance.elapsed, speed);
+        if (n < threshold) continue;
+        hits++;
+        if (hits > 120) break;
+        g.glitchDisplayOffset.set(
+            (Math.random() - 0.5) * 0.12,
+            (Math.random() - 0.5) * 0.12,
+            (Math.random() - 0.5) * 0.12
+        );
+        g.glitchEndTime = instance.now + 0.08;
+    }
+}
+
+function buildFxInstance(effectId, mode, params) {
+    return {
+        id: `fx-${fxRuntime.nextInstanceId++}`,
+        effectId,
+        mode,
+        params,
+        paused: false,
+        createdAt: clock.getElapsedTime(),
+        now: clock.getElapsedTime(),
+        elapsed: 0,
+        nextFireAt: clock.getElapsedTime(),
+        state: {
+            index: 0,
+            points: []
+        }
+    };
+}
+
+function startFxEffect(effectId, mode = 'trigger', overrides = {}) {
+    if (!fxRuntime.enabled) return { ok: false, lines: ['FX runtime is disabled.'] };
+    const resolvedId = resolveFxEffectId(effectId);
+    if (!resolvedId) return { ok: false, lines: [`Unknown effect: ${effectId}`] };
+    const params = resolveFxParams(resolvedId, overrides);
+    if (fxRuntime.activeInstances.length >= (FX_CONFIG?.global?.maxActiveInstances || 24)) {
+        return { ok: false, lines: ['Too many active FX instances. Stop some effects first.'] };
+    }
+    const instance = buildFxInstance(resolvedId, mode, params);
+    if (resolvedId === 'repulsionSwarm') {
+        const count = Math.round(params.count || 3);
+        instance.state.points = Array.from({ length: Math.max(1, count) }, (_, idx) => ({
+            seed: Math.random() * Math.PI * 2 + idx,
+            phase: Math.random() * Math.PI * 2,
+            pos: new THREE.Vector3()
+        }));
+    }
+    fxRuntime.activeInstances.push(instance);
+    return { ok: true, instance, lines: [`FX ${mode}: ${resolvedId} (${instance.id})`] };
+}
+
+function stopFxEffects(target = 'all') {
+    const low = String(target || 'all').toLowerCase();
+    if (low === 'all') {
+        const count = fxRuntime.activeInstances.length;
+        fxRuntime.activeInstances = [];
+        return [`Stopped ${count} FX instance(s).`];
+    }
+    const before = fxRuntime.activeInstances.length;
+    fxRuntime.activeInstances = fxRuntime.activeInstances.filter((inst) => inst.id !== target && inst.effectId !== target);
+    return [`Stopped ${before - fxRuntime.activeInstances.length} FX instance(s).`];
+}
+
+function listFxEffects() {
+    return Object.entries(FX_CONFIG?.registry || {}).map(([id, cfg]) => {
+        const aliases = (cfg.aliases || []).join(', ');
+        return `${id}${aliases ? ` (aliases: ${aliases})` : ''}`;
+    });
+}
+
+function updateFxRuntime(now, dt) {
+    if (!fxRuntime.enabled || fxRuntime.activeInstances.length === 0) return;
+    for (let i = fxRuntime.activeInstances.length - 1; i >= 0; i--) {
+        const inst = fxRuntime.activeInstances[i];
+        inst.now = now;
+        inst.elapsed = clock.getElapsedTime() - inst.createdAt;
+        if (inst.paused) continue;
+        const shouldFire = now >= inst.nextFireAt;
+        if (!shouldFire) {
+            if (inst.effectId === 'repulsionSwarm') applyRepulsionSwarm(inst, dt);
+            continue;
+        }
+        if (inst.effectId === 'scatterBurst') applyScatterBurst(inst.params);
+        else if (inst.effectId === 'letterEmission') applyLetterEmission(inst);
+        else if (inst.effectId === 'repulsionSwarm') applyRepulsionSwarm(inst, dt);
+        else if (inst.effectId === 'gridNoiseMask') applyGridNoiseMask(inst);
+
+        if (inst.mode === 'trigger') {
+            fxRuntime.activeInstances.splice(i, 1);
+        } else {
+            inst.nextFireAt = now + nextFxIntervalSeconds(inst.params);
+        }
+    }
+}
+
+function fxStatusLines() {
+    const header = `FX runtime: ${fxRuntime.enabled ? 'on' : 'off'} | bpm=${fxRuntime.bpm} | active=${fxRuntime.activeInstances.length}`;
+    const wallT = Date.now() * 0.001;
+    const lines = fxRuntime.activeInstances.slice(0, 10).map((inst) =>
+        `${inst.id}: ${inst.effectId} [${inst.mode}] next=${Math.max(0, inst.nextFireAt - wallT).toFixed(2)}s`
+    );
+    return [header, ...lines];
+}
+
+function fxDevGetRuntime() {
+    return {
+        enabled: fxRuntime.enabled,
+        bpm: fxRuntime.bpm,
+        defaults: JSON.parse(JSON.stringify(fxRuntime.defaults))
+    };
+}
+
+function fxDevSetEnabled(v) {
+    fxRuntime.enabled = !!v;
+}
+
+function fxDevSetBpm(n) {
+    fxRuntime.bpm = Math.max(20, Math.min(300, n));
+}
+
+function fxDevApplyDefaultKey(effectId, key, rawStr) {
+    if (rawStr === '') return false;
+    const parsed = parseFxParams([`${key}=${rawStr}`], 0);
+    if (parsed[key] == null) return false;
+    fxRuntime.defaults[effectId] = resolveFxParams(effectId, { [key]: parsed[key] });
+    return true;
+}
+
+function fxDevApplyPreset(data) {
+    if (!data || typeof data !== 'object') return { ok: false, error: 'not an object' };
+    if (data.topkekFxPreset !== 1) return { ok: false, error: 'topkekFxPreset must be 1' };
+    if (data.bpm != null) {
+        const n = Number(data.bpm);
+        if (Number.isFinite(n)) fxDevSetBpm(n);
+    }
+    if (data.fxEnabled != null) fxRuntime.enabled = !!data.fxEnabled;
+    if (data.effectId && data.defaults && typeof data.defaults === 'object') {
+        const nestedByEffect = Object.keys(data.defaults).some((k) => FX_CONFIG.registry[k]);
+        if (!nestedByEffect) {
+            const id = resolveFxEffectId(String(data.effectId));
+            if (!id) return { ok: false, error: 'unknown effectId' };
+            fxRuntime.defaults[id] = resolveFxParams(id, data.defaults);
+            return { ok: true };
+        }
+    }
+    if (data.defaults && typeof data.defaults === 'object') {
+        Object.entries(data.defaults).forEach(([id, params]) => {
+            if (!FX_CONFIG.registry[id]) return;
+            if (!params || typeof params !== 'object') return;
+            fxRuntime.defaults[id] = resolveFxParams(id, params);
+        });
+    }
+    return { ok: true };
+}
+
+function fxDevExportPreset() {
+    return {
+        topkekFxPreset: 1,
+        bpm: fxRuntime.bpm,
+        fxEnabled: fxRuntime.enabled,
+        defaults: JSON.parse(JSON.stringify(fxRuntime.defaults))
+    };
+}
+
+function fxDevExportEffectPreset(effectId) {
+    const id = resolveFxEffectId(effectId);
+    if (!id) return null;
+    const defs = fxRuntime.defaults[id] || {};
+    return {
+        topkekFxPreset: 1,
+        effectId: id,
+        defaults: JSON.parse(JSON.stringify(defs))
+    };
+}
+
+function fxDevGetActiveInstances() {
+    const t = Date.now() * 0.001;
+    return fxRuntime.activeInstances.map((inst) => ({
+        id: inst.id,
+        effectId: inst.effectId,
+        mode: inst.mode,
+        paused: !!inst.paused,
+        nextInSec: inst.mode === 'loop' ? Math.max(0, inst.nextFireAt - t) : null,
+        params: inst.params && typeof inst.params === 'object' ? JSON.parse(JSON.stringify(inst.params)) : {}
+    }));
+}
+
+function fxDevSetInstancePaused(id, paused) {
+    const inst = fxRuntime.activeInstances.find((i) => i.id === id);
+    if (inst) inst.paused = !!paused;
+}
+
+function fxDevRemoveInstance(id) {
+    const before = fxRuntime.activeInstances.length;
+    fxRuntime.activeInstances = fxRuntime.activeInstances.filter((i) => i.id !== id);
+    return before > fxRuntime.activeInstances.length;
+}
+
+/** Swap instance with neighbor in activeInstances (visual list order: index 0 = top). */
+function fxDevMoveActiveInstance(id, direction) {
+    const arr = fxRuntime.activeInstances;
+    const idx = arr.findIndex((i) => i.id === id);
+    if (idx < 0) return false;
+    if (direction === 'up') {
+        if (idx <= 0) return false;
+        const t = arr[idx - 1];
+        arr[idx - 1] = arr[idx];
+        arr[idx] = t;
+        return true;
+    }
+    if (direction === 'down') {
+        if (idx >= arr.length - 1) return false;
+        const t = arr[idx + 1];
+        arr[idx + 1] = arr[idx];
+        arr[idx] = t;
+        return true;
+    }
+    return false;
+}
+
+function parseTerminalHexColor(token) {
+    if (!token) return null;
+    let t = token.trim();
+    if (t.toLowerCase().startsWith('0x')) t = t.slice(2);
+    else if (t.startsWith('#')) t = t.slice(1);
+    if (!/^[0-9a-fA-F]{6}$/.test(t)) return null;
+    return parseInt(t, 16);
+}
+
+function passEnabledLine(name, pass) {
+    if (!pass) return `${name}: n/a`;
+    return `${name}: ${pass.enabled ? 'on' : 'off'}`;
+}
+
+function setAlternateMaterialMode(nextState) {
+    isAlternateMaterial = !!nextState;
+    if (bloomPass) {
+        bloomPass.strength = isAlternateMaterial ? SHADER_CONFIG.bloom.alternateStrength : SHADER_CONFIG.bloom.strength;
+    }
+    Object.values(meshRegistry).forEach(entry => {
+        if (entry.top) entry.top.material = isAlternateMaterial ? glassMaterial : defaultBoxMaterial;
+        if (entry.kek) entry.kek.material = isAlternateMaterial ? goldMaterial : defaultBoxMaterial;
+    });
+}
+
+function runTopkekTerminalCommand(line) {
+    const raw = String(line || '').trim();
+    if (!raw.startsWith('/')) {
+        return ['Commands require leading slash. Try: /help or /help full'];
+    }
+    const slashless = raw.slice(1).trim();
+    if (!slashless) return ['Usage: /help [full]'];
+
+    const normalizedLine = normalizeFxAlias(slashless);
+    const parts = normalizedLine.trim().split(/\s+/).filter(Boolean);
+    const cmd = parts[0].toLowerCase();
+
+    if (cmd === 'help') {
+        const helpArg = (parts[1] || '').toLowerCase();
+        if (parts.length > 2 || (helpArg && helpArg !== 'full')) {
+            return ['Usage: /help [full]'];
+        }
+        // stream: true → fast character delay in terminal-shell (listings); not “enable streaming”.
+        // plainListing → one wrapper block, lines without per-line chip background.
+        const lines = helpArg === 'full' ? TERMINAL_HELP_LINES_FULL : TERMINAL_HELP_LINES_COMPACT;
+        return {
+            stream: true,
+            plainListing: true,
+            lines
+        };
+    }
+
+    if (cmd === 'fx') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub === 'dev') {
+            if (fxDevPanelControl && typeof fxDevPanelControl.toggle === 'function') {
+                fxDevPanelControl.toggle();
+                return ['FX dev: active list left, editor right; import JSON; Export preset per effect or Export all; close × needs two clicks (first arms red).'];
+            }
+            return ['FX dev panel unavailable.'];
+        }
+        if (sub === 'on') {
+            fxRuntime.enabled = true;
+            if (fxDevPanelControl?.syncFromRuntime) fxDevPanelControl.syncFromRuntime();
+            return ['FX runtime on.'];
+        }
+        if (sub === 'off') {
+            fxRuntime.enabled = false;
+            if (fxDevPanelControl?.syncFromRuntime) fxDevPanelControl.syncFromRuntime();
+            return ['FX runtime off.'];
+        }
+        if (sub === 'list') return listFxEffects();
+        if (sub === 'status') return fxStatusLines();
+        if (sub === 'bpm') {
+            const n = parseFloat(parts[2]);
+            if (!Number.isFinite(n) || n <= 0) return ['Usage: /fx bpm <value>'];
+            fxRuntime.bpm = Math.max(20, Math.min(300, n));
+            return [`FX bpm = ${fxRuntime.bpm}`];
+        }
+        if (sub === 'set') {
+            const key = parts[2] || '';
+            const valueToken = parts[3];
+            if (!key.includes('.') || valueToken == null) return ['Usage: /fx set <effectId.param> <value>'];
+            const [rawEffectId, param] = key.split('.');
+            const effectId = resolveFxEffectId(rawEffectId);
+            if (!effectId || !param) return ['Unknown effect or param path.'];
+            const parsedParams = parseFxParams([`${param}=${valueToken}`], 0);
+            if (parsedParams[param] == null) return ['Invalid value.'];
+            const current = resolveFxParams(effectId);
+            current[param] = clampFxParam(effectId, param, parsedParams[param]);
+            fxRuntime.defaults[effectId] = current;
+            return [`FX default ${effectId}.${param} = ${current[param]}`];
+        }
+        if (sub === 'trigger' || sub === 'start') {
+            const effectId = parts[2];
+            if (!effectId) return [`Usage: /fx ${sub} <effectId> [param=value ...]`];
+            const overrides = parseFxParams(parts, 3);
+            const result = startFxEffect(effectId, sub === 'trigger' ? 'trigger' : 'loop', overrides);
+            return result.lines;
+        }
+        if (sub === 'stop') {
+            return stopFxEffects(parts[2] || 'all');
+        }
+        return ['Usage: /fx <list|status|bpm|set|trigger|start|stop|dev|on|off> ...'];
+    }
+
+    if (cmd === 'vajbuj') {
+        const sub = (parts[1] || 'start').toLowerCase();
+        if (sub === 'stop') {
+            stopVajbujMode();
+            return ['VAJBUJ: stopping…'];
+        }
+        if (sub !== 'start' && parts.length > 1) {
+            return ['Usage: /vajbuj [start|stop]'];
+        }
+        if (!VAJBUJ_CONFIG.enabled) return ['VAJBUJ disabled in config.'];
+        if (!vajbujState.audio) return ['VAJBUJ audio not ready yet.'];
+        if (typeof portfolioSceneActive !== 'undefined' && portfolioSceneActive) {
+            exitPortfolioScene();
+            const ap = document.getElementById('term-anim-portfolio');
+            if (ap) ap.classList.remove('portfolio-active');
+        }
+        if (vajbujState.active && !vajbujState.isStopping) {
+            return ['VAJBUJ already active. Use: vajbuj stop'];
+        }
+        if (vajbujState.active) return ['VAJBUJ is stopping, wait…'];
+        startVajbujMode();
+        return ['VAJBUJ started.'];
+    }
+
+    if (cmd === 'mysen') {
+        const sub = (parts[1] || 'start').toLowerCase();
+        if (sub === 'stop') {
+            stopMysenMode();
+            return ['MYSEN: stopping…'];
+        }
+        if (sub !== 'start' && parts.length > 1) {
+            return ['Usage: /mysen [start|stop]'];
+        }
+        if (!MYSEN_CONFIG.enabled) return ['MYSEN disabled in config.'];
+        if (MYSEN_CONFIG.disableOnMobile && IS_MOBILE) return ['MYSEN disabled on mobile in config.'];
+        if (!mysenState.audio) return ['MYSEN audio not ready yet.'];
+        if (!loadedFontRegular) return ['MYSEN: font not ready yet.'];
+        if (typeof portfolioSceneActive !== 'undefined' && portfolioSceneActive) {
+            exitPortfolioScene();
+            const ap = document.getElementById('term-anim-portfolio');
+            if (ap) ap.classList.remove('portfolio-active');
+        }
+        if (mysenState.active && !mysenState.isStopping) {
+            return ['MYSEN already active. Use: /mysen stop'];
+        }
+        if (mysenState.active) return ['MYSEN is stopping, wait…'];
+        startMysenMode();
+        return ['MYSEN started.'];
+    }
+
+    if (cmd === 'bloom') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!bloomPass) return ['Bloom pass not active in this profile.'];
+        if (sub === 'on') {
+            bloomPass.enabled = true;
+            return ['Bloom on.'];
+        }
+        if (sub === 'off') {
+            bloomPass.enabled = false;
+            return ['Bloom off.'];
+        }
+        if (sub === 'strength' && parts[2] !== undefined) {
+            const n = parseFloat(parts[2]);
+            if (!Number.isFinite(n)) return ['Usage: /bloom strength <value>'];
+            bloomPass.strength = Math.max(0, Math.min(3, n));
+            return [`Bloom strength = ${bloomPass.strength}`];
+        }
+        return ['Usage: /bloom <on|off|strength> [value]'];
+    }
+
+    if (cmd === 'sao') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!saoPass) return ['SAO not available (lite/mobile or disabled). Try ?perf=full on desktop.'];
+        if (sub === 'on') {
+            saoPass.enabled = true;
+            return ['SAO on.'];
+        }
+        if (sub === 'off') {
+            saoPass.enabled = false;
+            return ['SAO off.'];
+        }
+        return ['Usage: /sao <on|off>'];
+    }
+
+    if (cmd === 'crt') {
+        const sub = (parts[1] || '').toLowerCase();
+        if (!crtPass) return ['CRT pass not active in this profile.'];
+        if (sub === 'on') {
+            crtPass.enabled = true;
+            return ['CRT on.'];
+        }
+        if (sub === 'off') {
+            crtPass.enabled = false;
+            return ['CRT off.'];
+        }
+        return ['Usage: /crt <on|off>'];
+    }
+
+    if (cmd === 'material') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub === 'toggle') {
+            setAlternateMaterialMode(!isAlternateMaterial);
+            return [`Material mode: ${isAlternateMaterial ? 'alt' : 'default'}.`];
+        }
+        if (sub === 'default') {
+            setAlternateMaterialMode(false);
+            return ['Material mode: default.'];
+        }
+        if (sub === 'alt') {
+            setAlternateMaterialMode(true);
+            return ['Material mode: alt.'];
+        }
+        if (sub === 'status') {
+            return [`Material mode: ${isAlternateMaterial ? 'alt' : 'default'}.`];
+        }
+        return ['Usage: /material <toggle|default|alt|status>'];
+    }
+
+    if (cmd === 'light') {
+        const idx = parts[1];
+        const op = (parts[2] || '').toLowerCase();
+        const light = idx === '1' ? keyDirectionalLight : idx === '2' ? fillDirectionalLight : null;
+        if (!light) return ['Usage: /light <1|2> <color|intensity> <value>'];
+        if (op === 'color' && parts[3]) {
+            const hex = parseTerminalHexColor(parts[3]);
+            if (hex === null) return ['Invalid color. Use #rrggbb or 0xrrggbb (6 hex digits).'];
+            light.color.setHex(hex);
+            return [`Light ${idx} color set.`];
+        }
+        if (op === 'intensity' && parts[3] !== undefined) {
+            const n = parseFloat(parts[3]);
+            if (!Number.isFinite(n) || n < 0) return ['Invalid intensity.'];
+            light.intensity = n;
+            return [`Light ${idx} intensity = ${n}`];
+        }
+        return ['Usage: /light <1|2> <color|intensity> <value>'];
+    }
+
+    if (cmd === 'postproc') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub !== 'status') return ['Usage: /postproc <status>'];
+        return [
+            passEnabledLine('bloom', bloomPass),
+            passEnabledLine('sao', saoPass),
+            passEnabledLine('crt', crtPass),
+            '—',
+            ...getFakeGiStatusLines()
+        ];
+    }
+
+    if (cmd === 'fakegi') {
+        const sub = (parts[1] || 'status').toLowerCase();
+        if (sub === 'status') return getFakeGiStatusLines();
+        if (sub === 'on' || sub === '1' || sub === 'true') return setFakeGiEnabled(true);
+        if (sub === 'off' || sub === '0' || sub === 'false') return setFakeGiEnabled(false);
+        return ['Usage: /fakegi <on|off|status> // Video IBL (PMREM) + światła z koloru wideo. ex: /fakegi off'];
+    }
+
+    return [`Unknown command: /${cmd}. Type /help or /help full.`];
+}
+
 
 init();
 animate();
+
 
 function createUI() {
     const rightPanel = document.getElementById('right-panel');
     if (!rightPanel) return;
 
-    const ui = document.createElement('div');
-    ui.id = 'ui-container';
+    let ui = document.getElementById('ui-container');
+    if (!ui) {
+        ui = document.createElement('div');
+        ui.id = 'ui-container';
+        rightPanel.insertBefore(ui, rightPanel.firstChild);
+    }
 
-    // --- Mouse animation Mode ---
-    const sectionMode = document.createElement('div');
-    sectionMode.className = 'controls-section';
+    // --- Mouse animation Mode (under Camera HUD) ---
+    const mouseModeWrap = document.createElement('div');
+    mouseModeWrap.className = 'controls-section';
     const titleMode = document.createElement('div');
     titleMode.className = 'controls-category-title';
     titleMode.textContent = 'Mouse animation Mode';
-    sectionMode.appendChild(titleMode);
+    mouseModeWrap.appendChild(titleMode);
     const itemsMode = document.createElement('div');
     itemsMode.className = 'controls-category-items';
 
@@ -667,18 +2130,38 @@ function createUI() {
     itemsMode.appendChild(btn1);
     itemsMode.appendChild(btn2);
     itemsMode.appendChild(btn3);
-    sectionMode.appendChild(itemsMode);
-    ui.appendChild(sectionMode);
+    mouseModeWrap.appendChild(itemsMode);
 
-    // --- Camera ---
-    const sectionCam = document.createElement('div');
-    sectionCam.className = 'controls-section';
-    const titleCam = document.createElement('div');
-    titleCam.className = 'controls-category-title';
-    titleCam.textContent = 'Camera';
-    sectionCam.appendChild(titleCam);
-    const itemsCam = document.createElement('div');
-    itemsCam.className = 'controls-category-items';
+    // --- Camera HUD (top-left; live coords + mode + reset) ---
+    const cameraHud = document.createElement('div');
+    cameraHud.id = 'camera-hud';
+    const cameraSection = document.createElement('div');
+    cameraSection.className = 'controls-section controls-section--camera';
+
+    const cameraTitle = document.createElement('div');
+    cameraTitle.className = 'controls-category-title';
+    cameraTitle.textContent = 'Camera';
+    cameraSection.appendChild(cameraTitle);
+
+    const cameraMeta = document.createElement('div');
+    cameraMeta.className = 'camera-hud-meta';
+
+    cameraHudModeEl = document.createElement('div');
+    cameraHudModeEl.className = 'camera-hud-mode';
+    cameraMeta.appendChild(cameraHudModeEl);
+
+    cameraHudPosEl = document.createElement('pre');
+    cameraHudPosEl.className = 'camera-hud-coords';
+    cameraMeta.appendChild(cameraHudPosEl);
+
+    cameraHudTgtEl = document.createElement('pre');
+    cameraHudTgtEl.className = 'camera-hud-coords';
+    cameraMeta.appendChild(cameraHudTgtEl);
+
+    cameraSection.appendChild(cameraMeta);
+
+    const hudItems = document.createElement('div');
+    hudItems.className = 'controls-category-items';
 
     const btnFreeCam = document.createElement('button');
     btnFreeCam.className = 'mode-btn' + (isCinematic ? '' : ' active');
@@ -698,64 +2181,266 @@ function createUI() {
         btnFreeCam.classList.remove('active');
     };
 
-    itemsCam.appendChild(btnFreeCam);
-    itemsCam.appendChild(btnCinematic);
-    sectionCam.appendChild(itemsCam);
-    ui.appendChild(sectionCam);
+    const btnResetCam = document.createElement('button');
+    btnResetCam.className = 'mode-btn';
+    btnResetCam.innerText = '> Reset widoku';
+    btnResetCam.title = 'Przywróć domyślną pozycję kamery';
+    btnResetCam.onclick = () => resetCameraToDefaultView();
+
+    hudItems.appendChild(btnFreeCam);
+    hudItems.appendChild(btnCinematic);
+    hudItems.appendChild(btnResetCam);
+    cameraSection.appendChild(hudItems);
+    cameraHud.appendChild(cameraSection);
+    cameraHud.appendChild(mouseModeWrap);
+    
+    // --- Glitch Volumetric ---
+    const sectionGlitch = document.createElement('div');
+    sectionGlitch.className = 'controls-section';
+    const glitchTitle = document.createElement('div');
+    glitchTitle.className = 'controls-category-title';
+    glitchTitle.textContent = 'Glitch Volumetric';
+    sectionGlitch.appendChild(glitchTitle);
+
+    const glitchItems = document.createElement('div');
+    glitchItems.className = 'controls-category-items';
+    const btnGlitchToggle = document.createElement('button');
+    btnGlitchToggle.id = 'btn-glitch-toggle';
+    btnGlitchToggle.className = 'mode-btn';
+    btnGlitchToggle.innerText = '> Activate';
+    glitchItems.appendChild(btnGlitchToggle);
+
+    const btnPresetSubtelny = document.createElement('button');
+    btnPresetSubtelny.id = 'btn-glitch-preset-subtelny';
+    btnPresetSubtelny.className = 'mode-btn';
+    btnPresetSubtelny.innerText = '> Soft';
+    glitchItems.appendChild(btnPresetSubtelny);
+
+    const btnPresetMocny = document.createElement('button');
+    btnPresetMocny.id = 'btn-glitch-preset-mocny';
+    btnPresetMocny.className = 'mode-btn';
+    btnPresetMocny.innerText = '> Strong';
+    glitchItems.appendChild(btnPresetMocny);
+
+    const btnPresetChaos = document.createElement('button');
+    btnPresetChaos.id = 'btn-glitch-preset-chaos';
+    btnPresetChaos.className = 'mode-btn';
+    btnPresetChaos.innerText = '> Crazy';
+    glitchItems.appendChild(btnPresetChaos);
+
+    sectionGlitch.appendChild(glitchItems);
+    cameraHud.appendChild(sectionGlitch);
 
     // --- Change text ---
     const sectionText = document.createElement('div');
     sectionText.className = 'controls-section';
+    const textTitle = document.createElement('div');
+    textTitle.className = 'controls-category-title';
+    textTitle.textContent = 'Change text';
+    sectionText.appendChild(textTitle);
     const btnCustomText = document.createElement('button');
     btnCustomText.className = 'mode-btn';
-    btnCustomText.innerText = 'Change text';
-    btnCustomText.onclick = () => {
-        document.getElementById('custom-text-modal').classList.remove('hidden');
-    };
-    sectionText.appendChild(btnCustomText);
-    ui.appendChild(sectionText);
+    btnCustomText.innerText = '> Edit text';
 
-    // --- Change BG ---
+    const customTextInlineControls = document.createElement('div');
+    customTextInlineControls.className = 'inline-text-regen hidden';
+
+    const customTextInput = document.createElement('input');
+    customTextInput.className = 'inline-text-regen-input';
+    customTextInput.type = 'text';
+    customTextInput.maxLength = MAX_CUSTOM_TEXT_LENGTH;
+    customTextInput.placeholder = 'TOPKEK';
+
+    const regenButton = document.createElement('button');
+    regenButton.className = 'mode-btn inline-text-regen-btn';
+    regenButton.innerText = 'regen';
+
+    const runRegen = () => {
+        const nextText = sanitizeCustomText(customTextInput.value);
+        if (!nextText) {
+            customTextInput.classList.add('is-invalid');
+            customTextInput.focus();
+            return;
+        }
+        customTextInput.classList.remove('is-invalid');
+
+        const params = new URLSearchParams(window.location.search);
+        params.set(CUSTOM_TEXT_QUERY_PARAM, nextText);
+        const nextQuery = params.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`;
+        window.location.assign(nextUrl);
+    };
+
+    btnCustomText.onclick = () => {
+        customTextInput.value = CONFIG.text;
+        customTextInlineControls.classList.remove('hidden');
+        btnCustomText.classList.add('hidden');
+        customTextInput.focus();
+        customTextInput.select();
+    };
+
+    customTextInput.addEventListener('input', () => {
+        customTextInput.value = customTextInput.value.toUpperCase();
+        customTextInput.classList.remove('is-invalid');
+    });
+    customTextInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') runRegen();
+    });
+    regenButton.onclick = runRegen;
+
+    sectionText.appendChild(btnCustomText);
+    customTextInlineControls.appendChild(customTextInput);
+    customTextInlineControls.appendChild(regenButton);
+    sectionText.appendChild(customTextInlineControls);
+    cameraHud.appendChild(sectionText);
+
+    // --- BG controls ---
     const bgCfg = CONFIG.backgroundVideo;
     if (bgCfg && Array.isArray(bgCfg.sources) && bgCfg.sources.length > 0) {
         const sectionBg = document.createElement('div');
         sectionBg.className = 'controls-section';
-        const btnBgVideo = document.createElement('button');
-        btnBgVideo.className = 'mode-btn';
-        btnBgVideo.innerText = 'Change BG';
-        btnBgVideo.title = 'Zmień wideo w tle';
-        btnBgVideo.onclick = cycleBackgroundVideo;
-        sectionBg.appendChild(btnBgVideo);
-        ui.appendChild(sectionBg);
+        const bgControlsRow = document.createElement('div');
+        bgControlsRow.className = 'camera-hud-bg-row';
+        const bgControlsLeft = document.createElement('div');
+        bgControlsLeft.className = 'camera-hud-bg-controls';
+
+        const bgSelectLabel = document.createElement('label');
+        bgSelectLabel.className = 'camera-hud-control-label';
+        bgSelectLabel.innerText = 'Background';
+        bgSelectLabel.htmlFor = 'bg-video-select';
+        bgControlsLeft.appendChild(bgSelectLabel);
+
+        const bgSelect = document.createElement('select');
+        bgSelect.id = 'bg-video-select';
+        bgSelect.className = 'camera-hud-select';
+        bgCfg.sources.forEach((source) => {
+            if (!source?.src) return;
+            const option = document.createElement('option');
+            option.value = normalizeBackgroundVideoSrc(source.src);
+            option.textContent = getBackgroundVideoLabel(source.src);
+            bgSelect.appendChild(option);
+        });
+        const activeSrc = activeBackgroundVideoSource?.src ?? bgCfg.sources[0]?.src;
+        bgSelect.value = normalizeBackgroundVideoSrc(activeSrc);
+        bgSelect.title = 'Wybierz wideo tła';
+        bgSelect.addEventListener('change', () => setBackgroundVideoBySrc(bgSelect.value));
+
+        const bgSelectRow = document.createElement('div');
+        bgSelectRow.className = 'camera-hud-bg-select-row';
+        bgSelectRow.appendChild(bgSelect);
+
+        const bgPlayToggle = document.createElement('button');
+        bgPlayToggle.type = 'button';
+        bgPlayToggle.id = 'bg-video-play-toggle';
+        bgPlayToggle.className = 'camera-hud-bg-play-toggle';
+        bgPlayToggle.addEventListener('click', () => {
+            if (!backgroundVideoEl) return;
+            if (backgroundVideoEl.paused) {
+                backgroundVideoUserPaused = false;
+                backgroundVideoEl.play().catch(() => {});
+            } else {
+                backgroundVideoUserPaused = true;
+                backgroundVideoEl.pause();
+            }
+            updateBackgroundVideoPlayToggleUi();
+        });
+        backgroundVideoPlayToggleBtn = bgPlayToggle;
+        bgSelectRow.appendChild(bgPlayToggle);
+        bgControlsLeft.appendChild(bgSelectRow);
+        updateBackgroundVideoPlayToggleUi();
+
+        const bpmControlCfg = bgCfg.bpmControl ?? {};
+        const bpmOptions = Array.isArray(bpmControlCfg.options) && bpmControlCfg.options.length
+            ? bpmControlCfg.options
+            : [60, 75, 90, 100, 120, 140];
+
+        const bpmLabel = document.createElement('label');
+        bpmLabel.className = 'camera-hud-control-label';
+        bpmLabel.innerText = 'Background BPM';
+        bpmLabel.htmlFor = 'bg-bpm-select';
+        bgControlsLeft.appendChild(bpmLabel);
+
+        const bpmSelect = document.createElement('select');
+        bpmSelect.id = 'bg-bpm-select';
+        bpmSelect.className = 'camera-hud-select';
+        bpmOptions.forEach((bpm) => {
+            const bpmValue = Number(bpm);
+            if (!Number.isFinite(bpmValue) || bpmValue <= 0) return;
+            const option = document.createElement('option');
+            option.value = String(bpmValue);
+            option.textContent = `${bpmValue} BPM`;
+            bpmSelect.appendChild(option);
+        });
+
+        const desiredBpm = Number(currentBackgroundBpm);
+        if (Array.from(bpmSelect.options).some(opt => Number(opt.value) === desiredBpm)) {
+            bpmSelect.value = String(desiredBpm);
+        } else if (bpmSelect.options.length) {
+            bpmSelect.selectedIndex = 0;
+            applyBackgroundVideoPlaybackRate(Number(bpmSelect.value));
+        }
+
+        bpmSelect.title = 'Tempo animacji tła';
+        bpmSelect.addEventListener('change', () => {
+            applyBackgroundVideoPlaybackRate(Number(bpmSelect.value));
+        });
+        bgControlsLeft.appendChild(bpmSelect);
+
+        const bpmIndicatorWrap = document.createElement('div');
+        bpmIndicatorWrap.className = 'camera-hud-bpm-indicator-wrap';
+        bpmIndicatorWrap.setAttribute('aria-label', 'Background beat indicator');
+        const bpmIndicatorLabel = document.createElement('div');
+        bpmIndicatorLabel.className = 'camera-hud-control-label camera-hud-bpm-indicator-label';
+        bpmIndicatorLabel.textContent = 'Beat';
+        bpmIndicatorWrap.appendChild(bpmIndicatorLabel);
+        const bpmGrid = document.createElement('div');
+        bpmGrid.className = 'camera-hud-bpm-grid';
+        backgroundBeatSegments = [];
+        for (let i = 0; i < 4; i++) {
+            const segment = document.createElement('span');
+            segment.className = 'camera-hud-bpm-segment';
+            bpmGrid.appendChild(segment);
+            backgroundBeatSegments.push(segment);
+        }
+        backgroundBeatLastStep = -1;
+        bpmIndicatorWrap.appendChild(bpmGrid);
+
+        bgControlsRow.appendChild(bgControlsLeft);
+        bgControlsRow.appendChild(bpmIndicatorWrap);
+        sectionBg.appendChild(bgControlsRow);
+
+        cameraHud.appendChild(sectionBg);
+        initPerformanceHud(cameraHud);
     }
+    if (!cameraHud.querySelector('#perf-hud')) {
+        initPerformanceHud(cameraHud);
+    }
+    document.body.appendChild(cameraHud);
+    initSectionMenuToggles();
 
     // --- Glitch volumetryczne ---
-    const sectionGlitchVol = document.createElement('div');
-    sectionGlitchVol.className = 'controls-section';
-    const titleGlitchVol = document.createElement('div');
-    titleGlitchVol.className = 'controls-category-title';
-    titleGlitchVol.textContent = 'Glitch volumetryczne';
-    sectionGlitchVol.appendChild(titleGlitchVol);
-    const itemsGlitchVol = document.createElement('div');
-    itemsGlitchVol.className = 'controls-category-items';
-
-    const btnGlitchToggle = document.createElement('button');
-    btnGlitchToggle.className = 'mode-btn' + (GLITCH_VOLUME_CONFIG.enabled ? ' active' : '');
-    btnGlitchToggle.innerText = '> Glitch volumetryczne';
-    btnGlitchToggle.title = 'Włącz/wyłącz blokowe przeskoki fragmentów napisu';
-    btnGlitchToggle.onclick = () => {
-        GLITCH_VOLUME_CONFIG.enabled = !GLITCH_VOLUME_CONFIG.enabled;
-        btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
-        if (!GLITCH_VOLUME_CONFIG.enabled) glitchVolumeNextTrigger = 0;
+    const btnGlitchTrigger = document.getElementById('btn-glitch-trigger');
+    const presetButtons = {
+        subtelny: btnPresetSubtelny,
+        mocny: btnPresetMocny,
+        chaos: btnPresetChaos
     };
 
-    const btnGlitchTrigger = document.createElement('button');
-    btnGlitchTrigger.className = 'mode-btn';
-    btnGlitchTrigger.innerText = 'Trigger';
-    btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
-    btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(clock.getElapsedTime());
+    if (btnGlitchToggle) {
+        btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
+        btnGlitchToggle.title = 'Włącz/wyłącz blokowe przeskoki fragmentów napisu';
+        btnGlitchToggle.onclick = () => {
+            GLITCH_VOLUME_CONFIG.enabled = !GLITCH_VOLUME_CONFIG.enabled;
+            btnGlitchToggle.classList.toggle('active', GLITCH_VOLUME_CONFIG.enabled);
+            if (!GLITCH_VOLUME_CONFIG.enabled) glitchVolumeNextTrigger = 0;
+        };
+    }
 
-    const presetButtons = {};
+    if (btnGlitchTrigger) {
+        btnGlitchTrigger.title = 'Jednorazowe wywołanie glitcha';
+        // Must match render loop `time` (wall seconds), not clock.getElapsedTime(), or glitchEndTime is ~0–100s while time is unix → instant expiry.
+        btnGlitchTrigger.onclick = () => triggerVolumetricGlitch(Date.now() * 0.001);
+    }
 
     const applyGlitchPreset = (name) => {
         const preset = GLITCH_VOLUME_PRESETS[name];
@@ -781,50 +2466,34 @@ function createUI() {
 
         // Aktualizujemy klasę active na przyciskach presetów
         Object.keys(presetButtons).forEach(key => {
-            presetButtons[key].classList.toggle('active', key === name);
+            presetButtons[key]?.classList.toggle('active', key === name);
         });
     };
 
-    const btnPresetSubtelny = document.createElement('button');
-    btnPresetSubtelny.className = 'mode-btn';
-    btnPresetSubtelny.innerText = '> Subtelny';
-    btnPresetSubtelny.title = 'Delikatny glitch (bands/grid2d)';
-    btnPresetSubtelny.onclick = () => applyGlitchPreset('subtelny');
-    presetButtons.subtelny = btnPresetSubtelny;
+    if (btnPresetSubtelny) {
+        btnPresetSubtelny.title = 'Delikatny glitch (bands/grid2d)';
+        btnPresetSubtelny.onclick = () => applyGlitchPreset('subtelny');
+    }
 
-    const btnPresetMocny = document.createElement('button');
-    btnPresetMocny.className = 'mode-btn';
-    btnPresetMocny.innerText = '> Mocny';
-    btnPresetMocny.title = 'Mocniejszy glitch z rotacją i skalą';
-    btnPresetMocny.onclick = () => applyGlitchPreset('mocny');
-    presetButtons.mocny = btnPresetMocny;
+    if (btnPresetMocny) {
+        btnPresetMocny.title = 'Mocniejszy glitch z rotacją i skalą';
+        btnPresetMocny.onclick = () => applyGlitchPreset('mocny');
+    }
 
-    const btnPresetChaos = document.createElement('button');
-    btnPresetChaos.className = 'mode-btn';
-    btnPresetChaos.innerText = '> Chaos';
-    btnPresetChaos.title = 'Chaotyczne klastry voxelowe';
-    btnPresetChaos.onclick = () => applyGlitchPreset('chaos');
-    presetButtons.chaos = btnPresetChaos;
+    if (btnPresetChaos) {
+        btnPresetChaos.title = 'Chaotyczne klastry voxelowe';
+        btnPresetChaos.onclick = () => applyGlitchPreset('chaos');
+    }
 
     // Ustaw stan początkowy presetów zgodnie z configiem
     if (GLITCH_VOLUME_STATE.currentPreset && presetButtons[GLITCH_VOLUME_STATE.currentPreset]) {
         presetButtons[GLITCH_VOLUME_STATE.currentPreset].classList.add('active');
     }
 
-    itemsGlitchVol.appendChild(btnGlitchToggle);
-    itemsGlitchVol.appendChild(btnGlitchTrigger);
-    itemsGlitchVol.appendChild(btnPresetSubtelny);
-    itemsGlitchVol.appendChild(btnPresetMocny);
-    itemsGlitchVol.appendChild(btnPresetChaos);
-    sectionGlitchVol.appendChild(itemsGlitchVol);
-    ui.appendChild(sectionGlitchVol);
-
     window.cinematicButton = btnCinematic;
     window.freeCamButton = btnFreeCam;
 
     // Vajbuj: ukryty (nie dodajemy przycisku)
-
-    rightPanel.insertBefore(ui, rightPanel.firstChild);
 
     // --- NEW UI ELEMENTS ---
 
@@ -839,6 +2508,7 @@ function createUI() {
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
     const termPortfolio = document.getElementById('term-portfolio');
+    const termScndbrejn = document.getElementById('term-scndbrejn');
     const termAnimPortfolio = document.getElementById('term-anim-portfolio');
 
     if (termAnimPortfolio) {
@@ -864,23 +2534,11 @@ function createUI() {
     const termVajbuj = document.getElementById('term-vajbuj');
     if (termVajbuj) {
         window.vajbujButton = termVajbuj;
-        termVajbuj.addEventListener('click', () => {
-            if (!VAJBUJ_CONFIG.enabled || !vajbujState.audio) {
-                console.warn('[VAJBUJ] Disabled or not initialized');
-                return;
-            }
-            if (portfolioSceneActive) {
-                exitPortfolioScene();
-                if (termAnimPortfolio) termAnimPortfolio.classList.remove('portfolio-active');
-            }
-            if (vajbujState.active && !vajbujState.isStopping) {
-                stopVajbujMode();
-                return;
-            }
-            if (vajbujState.active) return;
-            startVajbujMode();
-            termVajbuj.classList.add('vajbuj-active');
-        });
+    }
+
+    const termMysen = document.getElementById('term-mysen');
+    if (termMysen) {
+        window.mysenButton = termMysen;
     }
 
     if (termAppstain) {
@@ -908,6 +2566,12 @@ function createUI() {
     if (termGenimg) {
         termGenimg.onclick = () => {
             document.getElementById('genimg-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termScndbrejn) {
+        termScndbrejn.onclick = () => {
+            document.getElementById('scndbrejn-modal').classList.remove('hidden');
         };
     }
 
@@ -1038,6 +2702,14 @@ function createUI() {
         genimgClose.onclick = () => genimgModal.classList.add('hidden');
         if (genimgBackdrop) genimgBackdrop.onclick = () => genimgModal.classList.add('hidden');
     }
+
+    const scndbrejnModal = document.getElementById('scndbrejn-modal');
+    const scndbrejnClose = document.getElementById('scndbrejn-close');
+    const scndbrejnBackdrop = document.getElementById('scndbrejn-backdrop');
+    if (scndbrejnModal && scndbrejnClose) {
+        scndbrejnClose.onclick = () => scndbrejnModal.classList.add('hidden');
+        if (scndbrejnBackdrop) scndbrejnBackdrop.onclick = () => scndbrejnModal.classList.add('hidden');
+    }
     // GENIMG gallery: click thumb to open in image-viewer (same as APPSTAIN)
     const genimgContent = document.getElementById('genimg-content');
     const imageViewer = document.getElementById('image-viewer');
@@ -1104,38 +2776,7 @@ function createUI() {
     };
     initGlitchModal();
 
-    // 5. Custom Text Modal Logic
-    const initCustomTextModal = () => {
-        const modal = document.getElementById('custom-text-modal');
-        const closeBtn = document.getElementById('custom-text-close');
-        const submitBtn = document.getElementById('custom-text-submit');
-        const input = document.getElementById('custom-text-input');
-
-        const close = () => {
-            modal.classList.add('hidden');
-            input.value = '';
-        };
-
-        const submit = () => {
-            const text = input.value.trim().toUpperCase();
-            if (text.length > 0) {
-                updateText(text);
-                close();
-            }
-        };
-
-        closeBtn.onclick = close;
-        submitBtn.onclick = submit;
-
-        input.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                submit();
-            }
-        });
-    };
-    initCustomTextModal();
-
-    // 6. Portfolio Vimeo Modal Logic
+    // 5. Portfolio Vimeo Modal Logic
     const initPortfolioVimeoModal = () => {
         const modal = document.getElementById('portfolio-vimeo-modal');
         const closeBtn = document.getElementById('portfolio-vimeo-close');
@@ -1167,6 +2808,34 @@ function createUI() {
 
     // --- END NEW UI ELEMENTS ---
 
+    initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+
+    if (document.body) {
+        fxDevPanelControl = initFxDevPanel({
+            mountRoot: document.body,
+            api: {
+                getRuntime: fxDevGetRuntime,
+                setEnabled: fxDevSetEnabled,
+                setBpm: fxDevSetBpm,
+                applyDefaultKey: fxDevApplyDefaultKey,
+                runStart: (effectId, mode, overrides) => {
+                    const res = startFxEffect(effectId, mode, overrides);
+                    return res.lines || [];
+                },
+                runStop: stopFxEffects,
+                parseFxParamsFromParts: (parts) => parseFxParams(parts, 0),
+                applyPreset: fxDevApplyPreset,
+                exportPreset: fxDevExportPreset,
+                exportEffectPreset: fxDevExportEffectPreset,
+                getActiveInstances: fxDevGetActiveInstances,
+                setInstancePaused: fxDevSetInstancePaused,
+                removeInstance: fxDevRemoveInstance,
+                moveActiveInstance: fxDevMoveActiveInstance,
+                log: (msg) => console.log('[FX dev]', msg)
+            }
+        });
+    }
+
     if (IS_MOBILE) {
         const info = document.createElement('div');
         info.className = 'mobile-info';
@@ -1187,6 +2856,160 @@ function createUI() {
 
         document.body.appendChild(letterContainer);
     }
+}
+
+function initPerformanceHud(parentEl) {
+    if (!PERF_HUD_CONFIG.enabled) return;
+    if (document.getElementById('perf-hud')) return;
+    if (!parentEl) return;
+
+    const hud = document.createElement('div');
+    hud.id = 'perf-hud';
+    hud.className = 'perf-hud perf-hud--good';
+
+    const title = document.createElement('div');
+    title.className = 'perf-hud-title';
+    title.textContent = 'Performance';
+    hud.appendChild(title);
+
+    const row = document.createElement('div');
+    row.className = 'perf-hud-row';
+    const fps = document.createElement('span');
+    fps.className = 'perf-hud-fps';
+    fps.textContent = 'FPS: --';
+    const high = document.createElement('span');
+    high.className = 'perf-hud-stat';
+    high.textContent = 'H: --';
+    const low = document.createElement('span');
+    low.className = 'perf-hud-stat';
+    low.textContent = 'L: --';
+    row.appendChild(fps);
+    row.appendChild(high);
+    row.appendChild(low);
+    hud.appendChild(row);
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'perf-hud-graph';
+    canvas.width = PERF_HUD_CONFIG.graph.width;
+    canvas.height = PERF_HUD_CONFIG.graph.height;
+    hud.appendChild(canvas);
+
+    parentEl.appendChild(hud);
+
+    perfHudRootEl = hud;
+    perfHudFpsEl = fps;
+    perfHudHighEl = high;
+    perfHudLowEl = low;
+    perfHudCanvasEl = canvas;
+    perfHudCtx = canvas.getContext('2d');
+}
+
+function getPerfStatusClass(fpsValue) {
+    if (fpsValue >= PERF_HUD_CONFIG.thresholds.goodFps) return 'perf-hud--good';
+    if (fpsValue >= PERF_HUD_CONFIG.thresholds.warnFps) return 'perf-hud--warn';
+    return 'perf-hud--bad';
+}
+
+function drawPerformanceGraph() {
+    if (!perfHudCtx || !perfHudCanvasEl || perfHudState.samples.length < 2) return;
+    const ctx = perfHudCtx;
+    const w = perfHudCanvasEl.width;
+    const h = perfHudCanvasEl.height;
+    const yMax = Math.max(1, PERF_HUD_CONFIG.graph.yMaxFps);
+    const warnY = h - (Math.min(PERF_HUD_CONFIG.thresholds.warnFps, yMax) / yMax) * h;
+    const goodY = h - (Math.min(PERF_HUD_CONFIG.thresholds.goodFps, yMax) / yMax) * h;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(255, 204, 0, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, warnY);
+    ctx.lineTo(w, warnY);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(0, 255, 153, 0.35)';
+    ctx.beginPath();
+    ctx.moveTo(0, goodY);
+    ctx.lineTo(w, goodY);
+    ctx.stroke();
+
+    const samples = perfHudState.samples;
+    const len = samples.length;
+    const stepX = len > 1 ? w / (len - 1) : w;
+    let lowIdx = 0;
+    let highIdx = 0;
+    for (let i = 1; i < len; i++) {
+        if (samples[i] < samples[lowIdx]) lowIdx = i;
+        if (samples[i] > samples[highIdx]) highIdx = i;
+    }
+
+    ctx.strokeStyle = 'rgba(160, 255, 190, 0.95)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < len; i++) {
+        const sample = Math.max(0, Math.min(yMax, samples[i]));
+        const x = i * stepX;
+        const y = h - (sample / yMax) * h;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const drawMarker = (index, color) => {
+        const sample = Math.max(0, Math.min(yMax, samples[index]));
+        const x = index * stepX;
+        const y = h - (sample / yMax) * h;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+    };
+
+    drawMarker(highIdx, '#00ff99');
+    drawMarker(lowIdx, '#ff3b3b');
+}
+
+function updatePerformanceHud(frameNowMs) {
+    if (!PERF_HUD_CONFIG.enabled || !perfHudRootEl) return;
+    if (perfHudState.lastFrameTs === 0) {
+        perfHudState.lastFrameTs = frameNowMs;
+        return;
+    }
+
+    const deltaMs = frameNowMs - perfHudState.lastFrameTs;
+    perfHudState.lastFrameTs = frameNowMs;
+    if (deltaMs <= 0) return;
+
+    const instFps = 1000 / deltaMs;
+    const alpha = Math.max(0.01, Math.min(1, PERF_HUD_CONFIG.smoothingAlpha));
+    perfHudState.smoothedFps = perfHudState.smoothedFps > 0
+        ? perfHudState.smoothedFps + (instFps - perfHudState.smoothedFps) * alpha
+        : instFps;
+
+    if ((frameNowMs - perfHudState.lastUiTs) < PERF_HUD_CONFIG.updateIntervalMs) return;
+    perfHudState.lastUiTs = frameNowMs;
+
+    const maxSamples = Math.max(8, PERF_HUD_CONFIG.graph.maxSamples);
+    perfHudState.samples.push(perfHudState.smoothedFps);
+    if (perfHudState.samples.length > maxSamples) {
+        perfHudState.samples.splice(0, perfHudState.samples.length - maxSamples);
+    }
+
+    const roundedCurrent = Math.round(perfHudState.smoothedFps);
+    const roundedHigh = Math.round(Math.max(...perfHudState.samples));
+    const roundedLow = Math.round(Math.min(...perfHudState.samples));
+    const statusClass = getPerfStatusClass(perfHudState.smoothedFps);
+
+    perfHudRootEl.classList.remove('perf-hud--good', 'perf-hud--warn', 'perf-hud--bad');
+    perfHudRootEl.classList.add(statusClass);
+    perfHudFpsEl.textContent = `FPS: ${roundedCurrent}`;
+    perfHudHighEl.textContent = `H: ${roundedHigh}`;
+    perfHudLowEl.textContent = `L: ${roundedLow}`;
+
+    drawPerformanceGraph();
 }
 
 // Helper to load and render markdown
@@ -1224,6 +3047,7 @@ async function updateText(newText) {
     loaderContainer.style.display = 'flex';
     loaderContainer.classList.remove('hidden');
     loadState.generation = 0;
+    startLoaderSimulation();
     updateProgress();
 
     // Allow UI to update
@@ -1256,6 +3080,7 @@ async function updateText(newText) {
     CONFIG.text = newText;
     await generateParticles(loadedFont, loadedFontRegular);
 
+    stopLoaderSimulation({ finalize: true });
     loaderContainer.classList.add('hidden');
     setTimeout(() => {
         loaderContainer.style.display = 'none';
@@ -1458,6 +3283,7 @@ function triggerVolumetricGlitch(time) {
 
 function setCameraMode(mode) {
     if (mode === 'free') {
+        introCameraFlyInActive = false;
         isFreeCam = true;
         controls.enabled = true;
         controls.target.copy(cameraFocusPoint);
@@ -1465,6 +3291,7 @@ function setCameraMode(mode) {
         isCinematic = false;
         isDragging = false; // Stop any custom dragging
     } else if (mode === 'dynamic') {
+        introCameraFlyInActive = false;
         isFreeCam = false;
         controls.enabled = false;
         isCinematic = true;
@@ -1507,8 +3334,80 @@ function setCameraMode(mode) {
     }
 }
 
+function resetCameraToDefaultView() {
+    if (typeof portfolioSceneActive !== 'undefined' && portfolioSceneActive) {
+        exitPortfolioScene();
+        const ap = document.getElementById('term-anim-portfolio');
+        if (ap) ap.classList.remove('portfolio-active');
+    }
+
+    introCameraFlyInActive = false;
+
+    const fov = CAMERA_HUD_CONFIG.defaultFov;
+    const z0 = CONFIG.initialZoom;
+
+    cameraFocusPoint.set(0, 0, 0);
+    cameraAngle = 0;
+    cameraVerticalAngle = 0;
+    cameraRadius = z0;
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = z0;
+    cinematicDollySpeed = 0;
+
+    if (camera) {
+        camera.fov = fov;
+        camera.updateProjectionMatrix();
+    }
+
+    if (isFreeCam && controls) {
+        camera.position.set(0, 0, z0);
+        controls.target.set(0, 0, 0);
+        cameraFocusPoint.copy(controls.target);
+        controls.update();
+    } else if (camera) {
+        const horizontalRadius = cameraRadius * Math.cos(cameraVerticalAngle);
+        camera.position.x = cameraFocusPoint.x + Math.sin(cameraAngle) * horizontalRadius;
+        camera.position.z = cameraFocusPoint.z + Math.cos(cameraAngle) * horizontalRadius;
+        camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
+        camera.lookAt(cameraFocusPoint);
+    }
+
+    if (isCinematic) {
+        cinematicSwitchTime = Date.now() + 2000;
+    }
+}
+
+function updateCameraHud() {
+    if (!camera || !cameraHudModeEl || !cameraHudPosEl || !cameraHudTgtEl) return;
+
+    const d = CAMERA_HUD_CONFIG.coordinateDecimals;
+    const fmt = (n) => n.toFixed(d);
+    const p = camera.position;
+    cameraHudPosEl.textContent = `pos: ${fmt(p.x)} ${fmt(p.y)} ${fmt(p.z)}`;
+
+    if (isFreeCam && controls) {
+        const t = controls.target;
+        cameraHudTgtEl.textContent = `tgt: ${fmt(t.x)} ${fmt(t.y)} ${fmt(t.z)}`;
+        cameraHudTgtEl.classList.remove('camera-hud-coords--hidden');
+    } else {
+        cameraHudTgtEl.textContent = '';
+        cameraHudTgtEl.classList.add('camera-hud-coords--hidden');
+    }
+
+    let modeLabel = 'Manual';
+    if (portfolioSceneActive) modeLabel = 'Portfolio';
+    else if (isFreeCam) modeLabel = 'Free';
+    else if (isCinematic) modeLabel = 'Dynamic';
+    cameraHudModeEl.textContent = `Mode: ${modeLabel}`;
+}
+
 function easeInOutCubic(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
 }
 
 function computeMotionDesignTargets(font) {
@@ -1647,7 +3546,8 @@ function createHeartMesh(heartCenter) {
         metalness: 0.75,
         roughness: 0.25,
         emissive: 0xff2222,
-        emissiveIntensity: 0
+        emissiveIntensity: 0,
+        envMapIntensity: 0.4
     });
     const mesh = new THREE.InstancedMesh(boxGeo, heartMat, count);
     mesh.castShadow = true;
@@ -2229,6 +4129,60 @@ async function generateParticles(font, fontRegular) {
     const innerCubeCount = 2000;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
+    // Enable instanceColor tinting for the shader (instancing color varying).
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        // Three.js r0.160: InstancedMesh `instanceColor` is exposed via `vInstanceColor` (not `vColor`).
+        // Robust varying selection: in some material/shader variants the token may appear only in vertex or fragment shader.
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        // Mild lift vs raw tint: weaker than old `* 0.4 + vec3(0.2)` so hues stay saturated but dark instance colors still glow inside the shell.
+        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        // Prefer patching `emissiveRadiance` (earlier in shader flow), so later assignments can't “wash out” the tint.
+        // Only multiply `totalEmissiveRadiance = emissiveRadiance * factor` when `emissiveRadiance` was NOT already patched.
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        let totalFromEmissiveRadiancePatched = false;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+            totalFromEmissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        let totalFromEmissivePatched = false;
+        if (totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+            totalFromEmissivePatched = true;
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', {
+                colorVarying,
+                emissiveRadiancePatched,
+                totalFromEmissiveRadiancePatched,
+                totalFromEmissivePatched,
+                shaderPatched: after !== before
+            });
+        }
+        shader.fragmentShader = after;
+    };
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCubeCount);
     const color = new THREE.Color();
@@ -2279,6 +4233,7 @@ async function generateParticles(font, fontRegular) {
     // Final progress update
     loadState.generation = 100;
     updateProgress();
+    applyVideoIblMaterialBoost();
 }
 
 function exitPortfolioScene() {
@@ -2439,6 +4394,10 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!camera || !scene || !renderer) return;
+    updatePerformanceHud(performance.now());
+
+    updateVideoBasedLighting(performance.now());
+    updateBackgroundBeatIndicator(performance.now() * 0.001);
 
     if (isFreeCam && controls) {
         controls.update();
@@ -2523,6 +4482,20 @@ function animate() {
             camera.position.y = cameraFocusPoint.y + Math.sin(cameraVerticalAngle) * cameraRadius;
             camera.lookAt(cameraFocusPoint);
         } else {
+        if (introCameraFlyInActive) {
+            const nowIntro = performance.now();
+            const ic = INTRO_CAMERA_CONFIG;
+            const tIntro = Math.min(1, (nowIntro - introFlyInStartTime) / ic.durationMs);
+            const eIntro = easeOutCubic(tIntro);
+            cameraRadius = introFlyInStartRadius + (CONFIG.initialZoom - introFlyInStartRadius) * eIntro;
+            targetCameraRadius = CONFIG.initialZoom;
+            if (tIntro >= 1) {
+                introCameraFlyInActive = false;
+                cameraRadius = CONFIG.initialZoom;
+                revealPostIntroUi();
+            }
+        }
+
         // Cinematic Mode Logic
         if (isCinematic) {
             if (isInitialSequence) {
@@ -2583,9 +4556,11 @@ function animate() {
 
         } else {
             // Smooth Camera Rotation (User Control)
-            cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
-            cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
-            cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+            if (!introCameraFlyInActive) {
+                cameraAngle += (targetCameraAngle - cameraAngle) * 0.1;
+                cameraVerticalAngle += (targetCameraVerticalAngle - cameraVerticalAngle) * 0.1;
+                cameraRadius += (targetCameraRadius - cameraRadius) * 0.1;
+            }
 
             // Auto-switch back to dynamic if idle - DISABLED
             /*
@@ -2605,6 +4580,8 @@ function animate() {
         }
     }
 
+    updateCameraHud();
+
     if (Object.keys(meshRegistry).length > 0) {
         raycaster.setFromCamera(mouse, camera);
 
@@ -2613,8 +4590,8 @@ function animate() {
         if (intersection) {
             debugMesh.position.copy(_rayPlaneHit); // Update debug sphere
 
-            // Calculate Mouse Velocity (not when portfolio scene active - no sim interaction)
-            if (!portfolioSceneActive) {
+            // Calculate Mouse Velocity (not when portfolio / MYSEN active - no sim interaction)
+            if (!portfolioSceneActive && !mysenState.active) {
                 const now = Date.now();
                 const dt = (now - lastMouseTime) / 1000;
                 if (dt > 0 && dt < 0.1) {
@@ -2628,10 +4605,13 @@ function animate() {
             mouseVelocity.set(0, 0, 0);
         }
 
-        const simTarget = portfolioSceneActive ? _simFarSim.set(1000, 1000, 1000) : _rayPlaneHit;
+        const simTarget = (portfolioSceneActive || mysenState.active)
+            ? _simFarSim.set(1000, 1000, 1000)
+            : _rayPlaneHit;
 
         const time = Date.now() * 0.001;
         const delta = clock.getDelta();
+        updateFxRuntime(time, delta);
 
         if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState && motionDesignState.heartMesh && motionDesignState.heartCubes.length > 0) {
             const psc = PORTFOLIO_SCENE_CONFIG;
@@ -2675,6 +4655,7 @@ function animate() {
                     heartMesh: heartData.mesh
                 };
                 if (heartData.mesh) scene.add(heartData.mesh);
+                applyVideoIblMaterialBoost();
             }
         }
 
@@ -2972,6 +4953,16 @@ function animate() {
             } else {
                 dummy.scale.copy(group.baseScale);
             }
+            if (group.fxGlowUntil && time < group.fxGlowUntil) {
+                const gain = group.fxGlowGain || 1;
+                const pulseK = group.fxGlowPulseK ?? 0.32;
+                const pulse = 1 + Math.min(0.55, pulseK * gain);
+                dummy.scale.multiplyScalar(pulse);
+            } else if (group.fxGlowUntil) {
+                group.fxGlowPulseK = undefined;
+                group.fxGlowUntil = 0;
+                group.fxGlowGain = 0;
+            }
             dummy.updateMatrix();
 
             // Find the correct mesh
@@ -3202,20 +5193,21 @@ function animate() {
 
     // Update Vajbuj mode
     updateVajbujMode(clock.getDelta());
+    updateMysenMode(clock.getDelta());
 
-    // Process Background Generation Queue (Fluid Loading)
-    if (vajbujState.generationQueue.length > 0) {
+    // Process background voxel generation queues (VAJBUJ + MYSEN)
+    const runLyricGenQueue = (state) => {
+        if (state.generationQueue.length === 0) return;
         const queueStart = performance.now();
-        const maxFrameTime = 4; // Max ms per frame for background tasks
-
-        while (vajbujState.generationQueue.length > 0 && performance.now() - queueStart < maxFrameTime) {
-            const task = vajbujState.generationQueue[0];
-            const done = task(); // Execute chunk
-            if (done) {
-                vajbujState.generationQueue.shift();
-            }
+        const maxFrameTime = 4;
+        while (state.generationQueue.length > 0 && performance.now() - queueStart < maxFrameTime) {
+            const task = state.generationQueue[0];
+            const done = task();
+            if (done) state.generationQueue.shift();
         }
-    }
+    };
+    runLyricGenQueue(vajbujState);
+    runLyricGenQueue(mysenState);
 }
 
 function onTouchStart(event) {
@@ -3280,14 +5272,16 @@ function onWheel(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG)
+    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN)
     const appstainModal = document.getElementById('appstain-modal');
     const glitchModal = document.getElementById('glitch-modal');
     const genimgModal = document.getElementById('genimg-modal');
+    const scndbrejnModalWheel = document.getElementById('scndbrejn-modal');
     if (
         (appstainModal && !appstainModal.classList.contains('hidden')) ||
         (glitchModal && !glitchModal.classList.contains('hidden')) ||
-        (genimgModal && !genimgModal.classList.contains('hidden'))
+        (genimgModal && !genimgModal.classList.contains('hidden')) ||
+        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden'))
     ) {
         return;
     }
@@ -3317,8 +5311,7 @@ function initVajbujMode() {
     vajbujState.audio.volume = 0;
     vajbujState.audio.preload = 'auto';
 
-    // Create background cubes for Vajbuj
-    createVajbujBackgroundCubes();
+    createMusicModeBackgroundCubes(vajbujState, VAJBUJ_CONFIG);
 
     console.log('[VAJBUJ] Mode initialized, waiting for inactivity...');
 
@@ -3328,29 +5321,38 @@ function initVajbujMode() {
     }
 }
 
-function startBackgroundGeneration(font) {
+function queueLyricVoxelPregeneration(lyrics, font, state, lyricsConfig, logLabel) {
     const uniqueWords = new Set();
-    VAJBUJ_CONFIG.lyrics.forEach(item => {
+    lyrics.forEach((item) => {
         if (!item.lineBreak) {
             const word = item.text;
             const scale = item.scale || 1.0;
-            uniqueWords.add(`${word}_${scale}`);
+            uniqueWords.add(`${word}§${scale}`);
         }
     });
 
-    console.log(`[VAJBUJ] Queuing ${uniqueWords.size} unique words for background generation...`);
+    const styleSlice = {
+        wordSize: lyricsConfig.wordSize,
+        wordHeight: lyricsConfig.wordHeight,
+        wordThickness: lyricsConfig.wordThickness
+    };
 
-    uniqueWords.forEach(key => {
-        const [word, scaleStr] = key.split('_');
-        const scale = parseFloat(scaleStr);
+    console.log(`[${logLabel}] Queuing ${uniqueWords.size} unique words for background generation...`);
 
-        // Task Factory
-        const task = createVoxelGenerationTask(word, scale, font);
-        vajbujState.generationQueue.push(task);
+    uniqueWords.forEach((key) => {
+        const sep = key.indexOf('§');
+        const word = key.slice(0, sep);
+        const scale = parseFloat(key.slice(sep + 1));
+        const task = createVoxelGenerationTask(word, scale, font, state.voxelCache, styleSlice);
+        state.generationQueue.push(task);
     });
 }
 
-function createVoxelGenerationTask(word, scale, font) {
+function startBackgroundGeneration(font) {
+    queueLyricVoxelPregeneration(VAJBUJ_CONFIG.lyrics, font, vajbujState, VAJBUJ_CONFIG, 'VAJBUJ');
+}
+
+function createVoxelGenerationTask(word, scale, font, voxelCache, styleSlice) {
     // State for the task
     let step = 0;
     let width = 0;
@@ -3365,7 +5367,7 @@ function createVoxelGenerationTask(word, scale, font) {
         if (step === 0) {
             // Check cache first
             const cacheKey = `${word}_${scale}`;
-            if (vajbujState.voxelCache[cacheKey]) return true; // Already done
+            if (voxelCache[cacheKey]) return true; // Already done
 
             // Replacement map for Polish characters
             const polishMap = {
@@ -3377,8 +5379,8 @@ function createVoxelGenerationTask(word, scale, font) {
 
             textGeo = new TextGeometry(displayWord, {
                 font: font,
-                size: VAJBUJ_CONFIG.wordSize * scale,
-                height: VAJBUJ_CONFIG.wordHeight * scale,
+                size: styleSlice.wordSize * scale,
+                height: styleSlice.wordHeight * scale,
                 curveSegments: 4,
                 bevelEnabled: false
             });
@@ -3414,7 +5416,7 @@ function createVoxelGenerationTask(word, scale, font) {
                     const intersects = scanRaycaster.intersectObject(mesh);
 
                     if (intersects.length > 0) {
-                        for (let z = 0; z < VAJBUJ_CONFIG.wordThickness; z++) {
+                        for (let z = 0; z < styleSlice.wordThickness; z++) {
                             const key = `${gx},${gy},${z}`;
                             if (!voxelMap.has(key)) {
                                 voxelMap.set(key, { x: px, y: py, z: z * voxelSize });
@@ -3441,7 +5443,7 @@ function createVoxelGenerationTask(word, scale, font) {
         if (step === 2) {
             const positions = Array.from(voxelMap.values()).map(v => new THREE.Vector3(v.x, v.y, v.z));
 
-            vajbujState.voxelCache[`${word}_${scale}`] = {
+            voxelCache[`${word}_${scale}`] = {
                 positions: positions,
                 width: width
             };
@@ -3455,27 +5457,30 @@ function createVoxelGenerationTask(word, scale, font) {
     };
 }
 
-function createVajbujBackgroundCubes() {
-    const count = VAJBUJ_CONFIG.bgCubeCount;
-    const size = VAJBUJ_CONFIG.bgCubeSize;
+function createMusicModeBackgroundCubes(state, cfg) {
+    const count = cfg.bgCubeCount;
+    const size = cfg.bgCubeSize;
 
     const geometry = new THREE.BoxGeometry(size, size, size);
     const material = new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        metalness: VAJBUJ_CONFIG.bgCubeMaterial.metalness,
-        roughness: VAJBUJ_CONFIG.bgCubeMaterial.roughness,
+        metalness: cfg.bgCubeMaterial.metalness,
+        roughness: cfg.bgCubeMaterial.roughness,
         transparent: true,
         opacity: 1
     });
+    if (cfg.bgCubeMaterial.envMapIntensity != null) {
+        material.envMapIntensity = cfg.bgCubeMaterial.envMapIntensity;
+    }
 
-    vajbujState.bgCubesMesh = new THREE.InstancedMesh(geometry, material, count);
-    vajbujState.bgCubesMesh.visible = false;
+    state.bgCubesMesh = new THREE.InstancedMesh(geometry, material, count);
+    state.bgCubesMesh.visible = false;
+    state.bgCubes = [];
 
-    const colors = VAJBUJ_CONFIG.bgCubeColors;
+    const colors = cfg.bgCubeColors;
     const color = new THREE.Color();
 
     for (let i = 0; i < count; i++) {
-        // Random position around the text
         const pos = new THREE.Vector3(
             (Math.random() - 0.5) * 20,
             (Math.random() - 0.5) * 15 + 3,
@@ -3490,14 +5495,12 @@ function createVajbujBackgroundCubes() {
         );
         dummy.scale.setScalar(1);
         dummy.updateMatrix();
-        vajbujState.bgCubesMesh.setMatrixAt(i, dummy.matrix);
+        state.bgCubesMesh.setMatrixAt(i, dummy.matrix);
 
-        // Random color from palette
         color.setHex(colors[Math.floor(Math.random() * colors.length)]);
-        vajbujState.bgCubesMesh.setColorAt(i, color);
+        state.bgCubesMesh.setColorAt(i, color);
 
-        // Store cube data
-        vajbujState.bgCubes.push({
+        state.bgCubes.push({
             position: pos.clone(),
             rotation: new THREE.Euler(
                 Math.random() * Math.PI,
@@ -3517,16 +5520,21 @@ function createVajbujBackgroundCubes() {
         });
     }
 
-    vajbujState.bgCubesMesh.instanceMatrix.needsUpdate = true;
-    if (vajbujState.bgCubesMesh.instanceColor) {
-        vajbujState.bgCubesMesh.instanceColor.needsUpdate = true;
+    state.bgCubesMesh.instanceMatrix.needsUpdate = true;
+    if (state.bgCubesMesh.instanceColor) {
+        state.bgCubesMesh.instanceColor.needsUpdate = true;
     }
 
-    scene.add(vajbujState.bgCubesMesh);
+    scene.add(state.bgCubesMesh);
+    applyVideoIblMaterialBoost();
 }
 
 function startVajbujMode() {
     if (vajbujState.active) return;
+
+    forceStopMysenSilent();
+
+    introCameraFlyInActive = false;
 
     console.log('[VAJBUJ] Starting music video mode!');
     vajbujState.active = true;
@@ -3609,6 +5617,8 @@ function startVajbujMode() {
     setTimeout(() => {
         stopVajbujMode();
     }, duration * 1000);
+
+    if (window.vajbujButton) window.vajbujButton.classList.add('vajbuj-active');
 }
 
 function fadeAudio(audio, fromVol, toVol, duration) {
@@ -3643,14 +5653,17 @@ function fadeVisualOpacity(material, fromOpacity, toOpacity, duration) {
     tick();
 }
 
-function prepareVajbujWords() {
-    vajbujState.words = [];
+/**
+ * @param {'vajbuj'|'mysen'} timingKind — vajbuj uses wordTimings (frames); mysen uses `at` or wordTimesSec
+ */
+function prepareMusicLyricWords(config, state, timingKind) {
+    state.words = [];
 
     const allWords = [];
     let currentLineIdx = 0;
     let wordInLineIdx = 0;
 
-    VAJBUJ_CONFIG.lyrics.forEach((item) => {
+    config.lyrics.forEach((item) => {
         if (item.lineBreak) {
             currentLineIdx++;
             wordInLineIdx = 0;
@@ -3665,17 +5678,27 @@ function prepareVajbujWords() {
 
     const totalWords = allWords.length;
     const totalLines = currentLineIdx + 1;
-    const fragmentDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+    const startT = config.audioStartTime || 0;
+    let fragmentDuration;
+    if (timingKind === 'mysen') {
+        const endT = config.audioEndTime;
+        if (endT != null && Number.isFinite(endT) && endT > startT) {
+            fragmentDuration = endT - startT;
+        } else {
+            const d = state.audio?.duration;
+            fragmentDuration = (Number.isFinite(d) && d > startT) ? d - startT : 180;
+        }
+    } else {
+        fragmentDuration = config.audioEndTime - config.audioStartTime;
+    }
     const fps = 25;
 
-    // Calculate timing and PRE-CALCULATE widths for centering
     allWords.forEach((wordData, globalIdx) => {
-        // Measure word immediately to fix X alignment
         if (loadedFontRegular) {
             const textGeo = new TextGeometry(wordData.text, {
                 font: loadedFontRegular,
-                size: VAJBUJ_CONFIG.wordSize * (wordData.scale || 1.0),
-                height: VAJBUJ_CONFIG.wordHeight * (wordData.scale || 1.0),
+                size: config.wordSize * (wordData.scale || 1.0),
+                height: config.wordHeight * (wordData.scale || 1.0),
                 curveSegments: 4,
                 bevelEnabled: false
             });
@@ -3684,72 +5707,83 @@ function prepareVajbujWords() {
             textGeo.dispose();
         }
 
-        let targetFrame;
-        if (VAJBUJ_CONFIG.wordTimings.length >= totalWords) {
-            targetFrame = VAJBUJ_CONFIG.wordTimings[globalIdx];
+        let assembledAtSeconds;
+        if (timingKind === 'vajbuj') {
+            let targetFrame;
+            if (config.wordTimings.length >= totalWords) {
+                targetFrame = config.wordTimings[globalIdx];
+            } else {
+                const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
+                const lineStartNormalized = wordData.lineIndex / lineCountCalc;
+                const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
+                const wordStagger = 12;
+                targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
+            }
+            targetFrame += 18;
+            assembledAtSeconds = (targetFrame / fps) + (config.lyricsStartDelay || 0);
         } else {
-            // Distribution across the whole fragment
-            const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
-            const lineStartNormalized = wordData.lineIndex / lineCountCalc;
-            // Distribute lines over first 80% of duration
-            const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
-
-            const wordStagger = 12;
-            targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
+            if (Number.isFinite(wordData.at)) {
+                assembledAtSeconds = wordData.at + (config.lyricsStartDelay || 0);
+            } else if (config.wordTimesSec && config.wordTimesSec.length > globalIdx) {
+                assembledAtSeconds = config.wordTimesSec[globalIdx] + (config.lyricsStartDelay || 0);
+            } else {
+                const t = totalWords > 1 ? globalIdx / (totalWords - 1) : 0;
+                assembledAtSeconds = t * fragmentDuration * 0.85 + (config.lyricsStartDelay || 0);
+            }
         }
 
-        // Apply global delay of 18 frames as requested (previously 25)
-        targetFrame += 18;
+        const startSeconds = Math.max(0, assembledAtSeconds - config.wordAssemblyDuration);
 
-        // Convert frame to seconds from fragment start + delay
-        const assembledAtSeconds = (targetFrame / fps) + (VAJBUJ_CONFIG.lyricsStartDelay || 0);
-        // Word should START assembling earlier
-        const startSeconds = Math.max(0, assembledAtSeconds - VAJBUJ_CONFIG.wordAssemblyDuration);
-
-        vajbujState.words.push({
+        state.words.push({
             ...wordData,
             startTime: startSeconds,
             assembledTime: assembledAtSeconds,
-            state: 'waiting', // waiting, assembling, assembled
+            state: 'waiting',
             mesh: null,
-            cubes: [], // Individual cube positions for scatter effect
+            cubes: [],
             progress: 0
         });
     });
-
-    console.log(`[VAJBUJ] Prepared ${vajbujState.words.length} words in ${totalLines} lines.`);
 }
 
-function createVoxelWord(wordData, font) {
+function prepareVajbujWords() {
+    prepareMusicLyricWords(VAJBUJ_CONFIG, vajbujState, 'vajbuj');
+    const lineCount = vajbujState.words.length ? vajbujState.words[vajbujState.words.length - 1].lineIndex + 1 : 0;
+    console.log(`[VAJBUJ] Prepared ${vajbujState.words.length} words in ${lineCount} lines.`);
+}
+
+function prepareMysenWords() {
+    prepareMusicLyricWords(MYSEN_CONFIG, mysenState, 'mysen');
+    const lineCount = mysenState.words.length ? mysenState.words[mysenState.words.length - 1].lineIndex + 1 : 0;
+    console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines.`);
+}
+
+function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
     const word = wordData.text;
-    // Replacement map for Polish characters missing in standard Three.js fonts (helvetiker)
     const polishMap = {
         'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
         'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
-        '.': '', ',': '', '!': '', '?': '' // Remove punctuation from 3D geometry to prevent voxel clutter
+        '.': '', ',': '', '!': '', '?': ''
     };
 
-    // Clean word for 3D generation (fallback to ASCII-ish and remove punctuation)
     const displayWord = word.split('').map(char => polishMap[char] || char).join('');
 
-    // Scale support
     const wordScale = wordData.scale || 1.0;
     const voxelSize = CONFIG.particleSize;
+    const scatterRadius = voxelStyle.scatterRadius;
 
-    // Check Cache
     const cacheKey = `${word}_${wordScale}`;
     let cubePositions = [];
     let width = 0;
 
-    if (vajbujState.voxelCache && vajbujState.voxelCache[cacheKey]) {
-        cubePositions = vajbujState.voxelCache[cacheKey].positions;
-        width = vajbujState.voxelCache[cacheKey].width;
+    if (voxelCache && voxelCache[cacheKey]) {
+        cubePositions = voxelCache[cacheKey].positions;
+        width = voxelCache[cacheKey].width;
     } else {
-        // Create text geometry (Fallback)
         const textGeo = new TextGeometry(displayWord, {
             font: font,
-            size: VAJBUJ_CONFIG.wordSize * wordScale,
-            height: VAJBUJ_CONFIG.wordHeight * wordScale,
+            size: voxelStyle.wordSize * wordScale,
+            height: voxelStyle.wordHeight * wordScale,
             curveSegments: 4,
             bevelEnabled: false
         });
@@ -3757,12 +5791,9 @@ function createVoxelWord(wordData, font) {
         textGeo.computeBoundingBox();
         width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
 
-        // Sample points on the text surface
         const mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
-
         const voxelMap = new Map();
 
-        // Grid scan for deterministic voxelization
         const minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
         const maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
         const minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
@@ -3780,7 +5811,7 @@ function createVoxelWord(wordData, font) {
                 const intersects = scanRaycaster.intersectObject(mesh);
 
                 if (intersects.length > 0) {
-                    for (let z = 0; z < VAJBUJ_CONFIG.wordThickness; z++) {
+                    for (let z = 0; z < voxelStyle.wordThickness; z++) {
                         const key = `${gx},${gy},${z}`;
                         if (!voxelMap.has(key)) {
                             voxelMap.set(key, {
@@ -3796,9 +5827,7 @@ function createVoxelWord(wordData, font) {
 
         voxelMap.forEach(v => cubePositions.push(new THREE.Vector3(v.x, v.y, v.z)));
 
-        // Cache this result for next time
-        if (!vajbujState.voxelCache) vajbujState.voxelCache = {};
-        vajbujState.voxelCache[cacheKey] = {
+        voxelCache[cacheKey] = {
             positions: cubePositions,
             width: width
         };
@@ -3806,10 +5835,7 @@ function createVoxelWord(wordData, font) {
         textGeo.dispose();
     }
 
-    // Create instanced mesh for word
     const cubeGeo = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
-    const wordColor = wordData.color || VAJBUJ_CONFIG.defaultWordColor || 0xffffff;
-    // Force white material for the black-to-white transition effect
     const cubeMat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
         metalness: 0.3,
@@ -3822,34 +5848,28 @@ function createVoxelWord(wordData, font) {
     const instancedMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubePositions.length);
     instancedMesh.visible = false;
 
-    // Initialize particles to dark color (almost black)
     const initColor = new THREE.Color(0x050505);
     for (let i = 0; i < cubePositions.length; i++) {
         instancedMesh.setColorAt(i, initColor);
     }
 
-    // Store cube data with scatter positions
-    const cubes = cubePositions.map((pos, i) => {
-        // Random scatter position
+    const cubes = cubePositions.map((pos) => {
         const scatterPos = new THREE.Vector3(
-            pos.x + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius * 2,
-            pos.y + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius * 2 - 5, // Start below
-            pos.z + (Math.random() - 0.5) * VAJBUJ_CONFIG.scatterRadius
+            pos.x + (Math.random() - 0.5) * scatterRadius * 2,
+            pos.y + (Math.random() - 0.5) * scatterRadius * 2 - 5,
+            pos.z + (Math.random() - 0.5) * scatterRadius
         );
 
-        // Distribution: More particles appear at the start (lower delay), fewer at the end (higher delay)
-        // Power curve: x^3 pushes values towards 0 so more particles have small delay
-        const delay = Math.pow(Math.random(), 3) * 0.7; // Max 70% delay
+        const delay = Math.pow(Math.random(), 3) * 0.7;
 
         return {
             targetPos: pos.clone(),
             scatterPos: scatterPos,
             currentPos: scatterPos.clone(),
             currentScale: 0,
-            delay: delay,
-            delay: delay,
-            shouldOvershoot: Math.random() < 0.3, // 30% chance for overshoot
-            overshootMagnitude: 0.3 + Math.random() * 0.4 // Random magnitude ~0.5 (was 1.5, so 3x smaller)
+            delay,
+            shouldOvershoot: Math.random() < 0.3,
+            overshootMagnitude: 0.3 + Math.random() * 0.4
         };
     });
 
@@ -3870,69 +5890,87 @@ function createVoxelWord(wordData, font) {
     };
 }
 
-function updateVajbujMode(delta) {
-    if (!vajbujState.active) {
-        // Check for inactivity to trigger Vajbuj (only if autoTrigger enabled)
-        if (VAJBUJ_CONFIG.enabled && VAJBUJ_CONFIG.autoTrigger &&
-            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout) {
-            startVajbujMode();
-        }
+function voxelStyleFromMusicConfig(config) {
+    return {
+        wordSize: config.wordSize,
+        wordHeight: config.wordHeight,
+        wordThickness: config.wordThickness,
+        scatterRadius: config.scatterRadius,
+        defaultWordColor: config.defaultWordColor
+    };
+}
+
+function maybeStartWordPulse(wordData, config) {
+    if (Number.isFinite(wordData.pulseMs) && Number.isFinite(wordData.pulseScale) && wordData.pulseScale > 1) {
+        wordData._pulseUntil = Date.now() + wordData.pulseMs;
+        wordData._pulseDurationMs = wordData.pulseMs;
+        wordData._pulseScaleMax = wordData.pulseScale;
         return;
     }
+    const pulses = config.wordPulses;
+    if (!pulses || !pulses.length) return;
+    for (let i = 0; i < pulses.length; i++) {
+        const p = pulses[i];
+        if (p.matchText === wordData.text) {
+            wordData._pulseUntil = Date.now() + p.ms;
+            wordData._pulseDurationMs = p.ms;
+            wordData._pulseScaleMax = p.scale;
+            return;
+        }
+    }
+}
 
+function getWordPulseScaleMul(wordData) {
+    if (!wordData._pulseUntil || !wordData._pulseScaleMax) return 1;
+    const now = Date.now();
+    if (now >= wordData._pulseUntil) {
+        wordData._pulseUntil = 0;
+        return 1;
+    }
+    const rem = wordData._pulseUntil - now;
+    const p = rem / (wordData._pulseDurationMs || 1);
+    return 1 + (wordData._pulseScaleMax - 1) * p;
+}
+
+function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
+    const { consoleTag = 'MUSIC', enablePulse = false } = options;
     const tempColor = new THREE.Color();
     const targetWhite = new THREE.Color(0xffffff);
     const startDark = new THREE.Color(0x050505);
+    const vStyle = voxelStyleFromMusicConfig(config);
 
-    const elapsed = (Date.now() - vajbujState.startTime) / 1000;
-    const fragmentDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
-    const progressNormalized = elapsed / fragmentDuration;
-
-    // Tempo multiplier (slow phase vs fast phase)
-    let tempoMultiplier = 1.0;
-    if (progressNormalized < VAJBUJ_CONFIG.slowPhaseEnd) {
-        tempoMultiplier = VAJBUJ_CONFIG.slowPhaseSpeed;
-    }
-
-    // Update words
-    vajbujState.words.forEach((wordData, idx) => {
+    state.words.forEach((wordData) => {
         if (wordData.state === 'waiting' && elapsed >= wordData.startTime) {
-            // Start assembling this word
             wordData.state = 'assembling';
 
-            // Create the voxel word mesh
             if (!wordData.mesh && loadedFontRegular) {
-                const voxelWord = createVoxelWord(wordData, loadedFontRegular);
+                const voxelWord = createVoxelWord(wordData, loadedFontRegular, state.voxelCache, vStyle);
                 wordData.mesh = voxelWord.mesh;
                 wordData.cubes = voxelWord.cubes;
                 wordData.width = voxelWord.width;
 
-                // Calculate X position based on word index in line
                 let lineX = 0;
-                const wordsInThisLine = vajbujState.words.filter(w => w.lineIndex === wordData.lineIndex);
+                const wordsInThisLine = state.words.filter(w => w.lineIndex === wordData.lineIndex);
                 const currentWordIdxInLine = wordsInThisLine.indexOf(wordData);
 
                 for (let i = 0; i < currentWordIdxInLine; i++) {
                     const prevWord = wordsInThisLine[i];
                     if (prevWord && prevWord.width) {
-                        lineX += prevWord.width + VAJBUJ_CONFIG.wordSpacing;
+                        lineX += prevWord.width + config.wordSpacing;
                     } else {
-                        lineX += 1.5; // Default spacing if width unknown
+                        lineX += 1.5;
                     }
                 }
 
-                // Center the line
                 let totalLineWidth = 0;
                 wordsInThisLine.forEach(w => {
-                    totalLineWidth += (w.width || 1.5) + VAJBUJ_CONFIG.wordSpacing;
+                    totalLineWidth += (w.width || 1.5) + config.wordSpacing;
                 });
-                totalLineWidth -= VAJBUJ_CONFIG.wordSpacing;
+                totalLineWidth -= config.wordSpacing;
 
                 const startX = -totalLineWidth / 2;
-                // Add half-width because the mesh is centered, but lineX is the left-edge cursor
                 wordData.posX = startX + lineX + (wordData.width / 2) + (wordData.offsetX || 0);
-                // Initial Y position (will be updated dynamically for shifting)
-                wordData.posY = VAJBUJ_CONFIG.lyricsOffsetY + (wordData.offsetY || 0);
+                wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
                 wordData.posZ = 0;
 
                 scene.add(wordData.mesh);
@@ -3941,34 +5979,28 @@ function updateVajbujMode(delta) {
         }
 
         if (wordData.state === 'assembling' || wordData.state === 'assembled') {
-            // Calculate target Y based on how many lines are completed
-            // Current line always appears at lyricsOffsetY.
-            // Completed lines move up by lineSpacing.
-            let shiftCount = vajbujState.completedLines - wordData.lineIndex;
-            if (shiftCount < 0) shiftCount = 0; // Future lines stay at base
+            let shiftCount = state.completedLines - wordData.lineIndex;
+            if (shiftCount < 0) shiftCount = 0;
 
-            const targetLineY = VAJBUJ_CONFIG.lyricsOffsetY + shiftCount * VAJBUJ_CONFIG.lineSpacing;
+            const targetLineY = config.lyricsOffsetY + shiftCount * config.lineSpacing;
 
-            // Smoothly lerp the Y position
-            if (wordData.posY === undefined) wordData.posY = VAJBUJ_CONFIG.lyricsOffsetY;
+            if (wordData.posY === undefined) wordData.posY = config.lyricsOffsetY;
             wordData.posY += (targetLineY - wordData.posY) * 0.1;
 
+            const pulseMul = enablePulse ? getWordPulseScaleMul(wordData) : 1;
+
             if (wordData.state === 'assembling') {
-                // Calculate assembly progress
                 const assemblyElapsed = elapsed - wordData.startTime;
-                const assemblyDuration = VAJBUJ_CONFIG.wordAssemblyDuration;
+                const assemblyDuration = config.wordAssemblyDuration;
                 wordData.progress = Math.min(assemblyElapsed / assemblyDuration, 1);
 
-                // Update each cube
                 if (wordData.mesh && wordData.cubes) {
                     wordData.cubes.forEach((cube, i) => {
-                        // Calculate per-cube progress based on delay
                         let effectiveProgress = 0;
                         if (wordData.progress > cube.delay) {
                             effectiveProgress = (wordData.progress - cube.delay) / (1 - cube.delay);
                         }
 
-                        // EaseOut Expo for the specific cube (or Back for overshoot)
                         let eased;
                         if (cube.shouldOvershoot) {
                             const t = effectiveProgress;
@@ -3977,7 +6009,7 @@ function updateVajbujMode(delta) {
                             } else if (t <= 0) {
                                 eased = 0;
                             } else {
-                                const c1 = cube.overshootMagnitude; // Random "Light" overshoot
+                                const c1 = cube.overshootMagnitude;
                                 const c3 = c1 + 1;
                                 eased = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
                             }
@@ -3985,40 +6017,31 @@ function updateVajbujMode(delta) {
                             eased = effectiveProgress >= 1 ? 1 : (effectiveProgress <= 0 ? 0 : 1 - Math.pow(2, -10 * effectiveProgress));
                         }
 
-                        // Interpolate position
                         cube.currentPos.lerpVectors(cube.scatterPos, cube.targetPos, eased);
                         cube.currentScale = eased;
 
-                        // --- Particle Color Transition ---
-                        // Dark (almost black) until 2 frames before completion, then white
                         if (wordData.mesh) {
-                            const assemblyDuration = VAJBUJ_CONFIG.wordAssemblyDuration;
-                            // Total active time for this specific particle
                             const totalParticleTime = (1 - cube.delay) * assemblyDuration;
-                            // Time remaining for this particle
                             const timeRemaining = (1 - effectiveProgress) * totalParticleTime;
-                            const transitionWindow = 0.5; // Extended to 0.5s as requested
+                            const transitionWindow = 0.5;
 
                             if (effectiveProgress >= 1) {
                                 tempColor.copy(targetWhite);
                             } else if (timeRemaining <= transitionWindow && timeRemaining > 0) {
-                                // Interpolate from Dark to White
                                 const t = 1 - (timeRemaining / transitionWindow);
                                 tempColor.copy(startDark).lerp(targetWhite, t);
                             } else {
-                                // Stay Dark
                                 tempColor.copy(startDark);
                             }
                             wordData.mesh.setColorAt(i, tempColor);
                         }
 
-                        // Add word position offset
                         dummy.position.set(
                             cube.currentPos.x + (wordData.posX || 0),
                             cube.currentPos.y + (wordData.posY || 0),
                             cube.currentPos.z + (wordData.posZ || 0)
                         );
-                        dummy.scale.setScalar(cube.currentScale);
+                        dummy.scale.setScalar(cube.currentScale * pulseMul);
                         dummy.rotation.set(0, 0, 0);
                         dummy.updateMatrix();
                         wordData.mesh.setMatrixAt(i, dummy.matrix);
@@ -4029,49 +6052,40 @@ function updateVajbujMode(delta) {
 
                 if (wordData.progress >= 1) {
                     wordData.state = 'assembled';
+                    if (enablePulse) maybeStartWordPulse(wordData, config);
 
-                    // Check if this was the last word of the line to trigger global shift
-                    const lineWords = vajbujState.words.filter(w => w.lineIndex === wordData.lineIndex);
+                    const lineWords = state.words.filter(w => w.lineIndex === wordData.lineIndex);
                     const allAssembled = lineWords.every(w => w.state === 'assembled' || w.state === 'assembling' && w.progress >= 1);
 
-                    if (allAssembled && wordData.lineIndex >= vajbujState.completedLines) {
-                        vajbujState.completedLines = wordData.lineIndex + 1;
-                        console.log(`[VAJBUJ] Line ${wordData.lineIndex} completed. Shifting up!`);
+                    if (allAssembled && wordData.lineIndex >= state.completedLines) {
+                        state.completedLines = wordData.lineIndex + 1;
+                        console.log(`[${consoleTag}] Line ${wordData.lineIndex} completed. Shifting up!`);
                     }
                 }
-            } else {
-                // state === 'assembled'
-                // Still need to update matrix for the vertical shift
-                if (wordData.mesh && wordData.cubes) {
-                    wordData.cubes.forEach((cube, i) => {
-                        dummy.position.set(
-                            cube.targetPos.x + (wordData.posX || 0),
-                            cube.targetPos.y + (wordData.posY || 0),
-                            cube.targetPos.z + (wordData.posZ || 0)
-                        );
-                        dummy.scale.setScalar(1);
-                        dummy.rotation.set(0, 0, 0);
-                        dummy.updateMatrix();
-                        wordData.mesh.setMatrixAt(i, dummy.matrix);
-                    });
-                    wordData.mesh.instanceMatrix.needsUpdate = true;
-                }
+            } else if (wordData.mesh && wordData.cubes) {
+                wordData.cubes.forEach((cube, i) => {
+                    dummy.position.set(
+                        cube.targetPos.x + (wordData.posX || 0),
+                        cube.targetPos.y + (wordData.posY || 0),
+                        cube.targetPos.z + (wordData.posZ || 0)
+                    );
+                    dummy.scale.setScalar(pulseMul);
+                    dummy.rotation.set(0, 0, 0);
+                    dummy.updateMatrix();
+                    wordData.mesh.setMatrixAt(i, dummy.matrix);
+                });
+                wordData.mesh.instanceMatrix.needsUpdate = true;
             }
         }
     });
 
-    // Update background cubes
-    if (vajbujState.bgCubesMesh && vajbujState.bgCubesMesh.visible) {
-        vajbujState.bgCubes.forEach((cube, i) => {
-            // Apply velocity with tempo multiplier
+    if (state.bgCubesMesh && state.bgCubesMesh.visible) {
+        state.bgCubes.forEach((cube, i) => {
             cube.position.add(cube.velocity.clone().multiplyScalar(tempoMultiplier));
-
-            // Apply spin
             cube.rotation.x += cube.spin.x * tempoMultiplier;
             cube.rotation.y += cube.spin.y * tempoMultiplier;
             cube.rotation.z += cube.spin.z * tempoMultiplier;
 
-            // Bounce off invisible walls
             const bounds = 15;
             ['x', 'y', 'z'].forEach(axis => {
                 if (Math.abs(cube.position[axis]) > bounds) {
@@ -4084,10 +6098,94 @@ function updateVajbujMode(delta) {
             dummy.rotation.copy(cube.rotation);
             dummy.scale.setScalar(1);
             dummy.updateMatrix();
-            vajbujState.bgCubesMesh.setMatrixAt(i, dummy.matrix);
+            state.bgCubesMesh.setMatrixAt(i, dummy.matrix);
         });
-        vajbujState.bgCubesMesh.instanceMatrix.needsUpdate = true;
+        state.bgCubesMesh.instanceMatrix.needsUpdate = true;
     }
+}
+
+function updateVajbujMode(delta) {
+    if (!vajbujState.active) {
+        if (VAJBUJ_CONFIG.enabled && VAJBUJ_CONFIG.autoTrigger &&
+            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout) {
+            startVajbujMode();
+        }
+        return;
+    }
+
+    const elapsed = (Date.now() - vajbujState.startTime) / 1000;
+    const fragmentDuration = VAJBUJ_CONFIG.audioEndTime - VAJBUJ_CONFIG.audioStartTime;
+    const progressNormalized = elapsed / fragmentDuration;
+
+    let tempoMultiplier = 1.0;
+    if (progressNormalized < VAJBUJ_CONFIG.slowPhaseEnd) {
+        tempoMultiplier = VAJBUJ_CONFIG.slowPhaseSpeed;
+    }
+
+    stepMusicLyricWords(vajbujState, VAJBUJ_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'VAJBUJ', enablePulse: false });
+}
+
+function updateMysenMode(delta) {
+    if (!mysenState.active) return;
+
+    const elapsed = (Date.now() - mysenState.startTime) / 1000;
+    let fragmentDuration = mysenState.playbackDurationSec;
+    if (!Number.isFinite(fragmentDuration) || fragmentDuration <= 0) {
+        fragmentDuration = resolveMysenFragmentDurationSec(mysenState.audio, MYSEN_CONFIG) || 1;
+    }
+    const progressNormalized = fragmentDuration > 0 ? elapsed / fragmentDuration : 0;
+
+    let tempoMultiplier = 1.0;
+    if (progressNormalized < MYSEN_CONFIG.slowPhaseEnd) {
+        tempoMultiplier = MYSEN_CONFIG.slowPhaseSpeed;
+    }
+
+    stepMusicLyricWords(mysenState, MYSEN_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'MYSEN', enablePulse: true });
+}
+
+function finalizeVajbujCleanup() {
+    if (vajbujFinalizeTimerId) {
+        clearTimeout(vajbujFinalizeTimerId);
+        vajbujFinalizeTimerId = null;
+    }
+    console.log('[VAJBUJ] Final shutdown cleanup');
+
+    if (vajbujState.audio) {
+        vajbujState.audio.pause();
+        vajbujState.audio.currentTime = 0;
+        vajbujState.audio.volume = 0;
+    }
+
+    if (vajbujState.bgCubesMesh) {
+        vajbujState.bgCubesMesh.visible = false;
+        vajbujState.bgCubesMesh.material.opacity = 1;
+    }
+
+    cleanupVajbujWords();
+    vajbujState.active = false;
+    vajbujState.isStopping = false;
+    vajbujState.lastActivityTime = Date.now();
+}
+
+function forceStopVajbujSilent() {
+    if (!vajbujState.active && !vajbujState.isStopping) return;
+    if (vajbujFinalizeTimerId) {
+        clearTimeout(vajbujFinalizeTimerId);
+        vajbujFinalizeTimerId = null;
+    }
+    if (vajbujState.audio) {
+        vajbujState.audio.pause();
+        vajbujState.audio.currentTime = 0;
+        vajbujState.audio.volume = 0;
+    }
+    if (vajbujState.bgCubesMesh) {
+        vajbujState.bgCubesMesh.material.opacity = 1;
+        vajbujState.bgCubesMesh.visible = false;
+    }
+    cleanupVajbujWords();
+    vajbujState.active = false;
+    vajbujState.isStopping = false;
+    if (window.vajbujButton) window.vajbujButton.classList.remove('vajbuj-active');
 }
 
 function stopVajbujMode() {
@@ -4097,60 +6195,268 @@ function stopVajbujMode() {
     console.log('[VAJBUJ] Initiating smooth shutdown');
     vajbujState.isStopping = true;
 
-    // 1. Mute / Fade out audio and visuals
     if (vajbujState.audio) {
-        // Fade out over 2 seconds
         fadeAudio(vajbujState.audio, vajbujState.audio.volume, 0, 2);
     }
 
-    // Fade out background cubes
     if (vajbujState.bgCubesMesh) {
         fadeVisualOpacity(vajbujState.bgCubesMesh.material, 1, 0, 2);
     }
 
-    // Fade out active words
     vajbujState.words.forEach(word => {
         if (word.mesh && word.mesh.material) {
             fadeVisualOpacity(word.mesh.material, 1, 0, 2);
         }
     });
 
-    // 2. Return camera to start position
     setCameraMode('manual');
     targetCameraAngle = 0;
     targetCameraVerticalAngle = 0;
     targetCameraRadius = CONFIG.initialZoom;
     cameraFocusPoint.set(0, 0, 0);
 
-    // Sync terminal menu highlight immediately
     if (window.vajbujButton) {
         window.vajbujButton.classList.remove('vajbuj-active');
     }
 
-    // 3. Final cleanup after ~2s
-    setTimeout(() => {
-        console.log('[VAJBUJ] Final shutdown cleanup');
-
-        // Stop and reset audio
-        if (vajbujState.audio) {
-            vajbujState.audio.pause();
-            vajbujState.audio.currentTime = 0;
-            vajbujState.audio.volume = 0;
-        }
-
-        // Hide background cubes
-        if (vajbujState.bgCubesMesh) {
-            vajbujState.bgCubesMesh.visible = false;
-        }
-
-        // Clean up all words
-        cleanupVajbujWords();
-
-        // Reset state
-        vajbujState.active = false;
-        vajbujState.isStopping = false;
-        vajbujState.lastActivityTime = Date.now();
+    if (vajbujFinalizeTimerId) clearTimeout(vajbujFinalizeTimerId);
+    vajbujFinalizeTimerId = setTimeout(() => {
+        vajbujFinalizeTimerId = null;
+        finalizeVajbujCleanup();
     }, 2000);
+}
+
+function finalizeMysenCleanup() {
+    if (mysenFinalizeTimerId) {
+        clearTimeout(mysenFinalizeTimerId);
+        mysenFinalizeTimerId = null;
+    }
+    console.log('[MYSEN] Final shutdown cleanup');
+
+    if (mysenState.audio) {
+        mysenState.audio.pause();
+        mysenState.audio.currentTime = 0;
+        mysenState.audio.volume = 0;
+    }
+
+    if (mysenState.bgCubesMesh) {
+        mysenState.bgCubesMesh.visible = false;
+        mysenState.bgCubesMesh.material.opacity = 1;
+    }
+
+    cleanupMysenWords();
+    mysenState.active = false;
+    mysenState.isStopping = false;
+    mysenState.lastActivityTime = Date.now();
+
+    setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
+    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    clearMysenPlaybackTimers();
+    mysenState.playbackDurationSec = null;
+}
+
+function forceStopMysenSilent() {
+    if (!mysenState.active && !mysenState.isStopping) return;
+    if (mysenFinalizeTimerId) {
+        clearTimeout(mysenFinalizeTimerId);
+        mysenFinalizeTimerId = null;
+    }
+    if (mysenState.audio) {
+        mysenState.audio.pause();
+        mysenState.audio.currentTime = 0;
+        mysenState.audio.volume = 0;
+    }
+    if (mysenState.bgCubesMesh) {
+        mysenState.bgCubesMesh.material.opacity = 1;
+        mysenState.bgCubesMesh.visible = false;
+    }
+    cleanupMysenWords();
+    mysenState.active = false;
+    mysenState.isStopping = false;
+    setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
+    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    clearMysenPlaybackTimers();
+    mysenState.playbackDurationSec = null;
+}
+
+function createMysenAudioElement() {
+    const primary = MYSEN_CONFIG.audioFile;
+    const fallback = MYSEN_CONFIG.audioFileFallback || null;
+    const audio = new Audio();
+    audio.volume = 0;
+    audio.preload = 'auto';
+
+    const trySrc = (src, isFallback) => {
+        audio.removeAttribute('src');
+        audio.src = src;
+        audio.load();
+        const onErr = () => {
+            audio.removeEventListener('error', onErr);
+            if (!isFallback && fallback) {
+                console.warn('[MYSEN] Could not load audioFile (404 or bad path):', src);
+                console.warn('[MYSEN] Trying audioFileFallback:', fallback);
+                trySrc(fallback, true);
+            } else {
+                console.error(
+                    '[MYSEN] Audio load failed. Add your MP3 as',
+                    primary,
+                    'or set MYSEN_CONFIG.audioFile / audioFileFallback in config.js. currentSrc:',
+                    audio.currentSrc || '(none)'
+                );
+            }
+        };
+        audio.addEventListener('error', onErr, { once: true });
+    };
+
+    trySrc(primary, false);
+    return audio;
+}
+
+function initMysenMode() {
+    if (!MYSEN_CONFIG.enabled) return;
+    if (MYSEN_CONFIG.disableOnMobile && IS_MOBILE) return;
+
+    mysenState.audio = createMysenAudioElement();
+
+    createMusicModeBackgroundCubes(mysenState, MYSEN_CONFIG);
+
+    if (loadedFontRegular) {
+        queueLyricVoxelPregeneration(MYSEN_CONFIG.lyrics, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN');
+    }
+
+    console.log('[MYSEN] Mode initialized.');
+}
+
+function startMysenMode() {
+    if (mysenState.active) return;
+
+    forceStopVajbujSilent();
+
+    introCameraFlyInActive = false;
+
+    console.log('[MYSEN] Starting remix mode');
+    clearMysenPlaybackTimers();
+    mysenState.playbackDurationSec = null;
+    mysenState.active = true;
+    mysenState.startTime = Date.now();
+    mysenState.currentLineIndex = 0;
+    mysenState.currentWordIndex = 0;
+    mysenState.completedLines = 0;
+    mysenState.displayedLines = [];
+
+    CONFIG.animationMode = 'repulsion';
+    isCinematic = false;
+    isFreeCam = false;
+    controls.enabled = false;
+    cameraAngle = 0;
+    cameraVerticalAngle = 0;
+    cameraRadius = CONFIG.initialZoom;
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = CONFIG.initialZoom;
+    cameraFocusPoint.set(0, 0, 0);
+    camera.fov = 45;
+    camera.updateProjectionMatrix();
+
+    cleanupMysenWords();
+    prepareMysenWords();
+
+    setMainTopkekSceneVisible(false, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
+
+    if (mysenState.bgCubesMesh) {
+        mysenState.bgCubesMesh.visible = true;
+        mysenState.bgCubesMesh.material.opacity = 1;
+    }
+
+    const audio = mysenState.audio;
+    audio.pause();
+    audio.volume = 0;
+    audio.currentTime = MYSEN_CONFIG.audioStartTime;
+
+    const startPlay = () => {
+        audio.play().catch((e) => {
+            console.warn('[MYSEN] Audio play failed:', e?.name || e);
+            console.warn(
+                '[MYSEN] Ensure MYSEN_CONFIG.audioFile exists (no 404) or a working audioFileFallback; currentSrc:',
+                audio.currentSrc || '(empty)'
+            );
+        });
+        fadeAudio(audio, 0, 1, MYSEN_CONFIG.fadeInDuration);
+        scheduleMysenPlaybackEnd(audio);
+    };
+
+    audio.onseeked = null;
+    audio.oncanplay = null;
+
+    let seekFallbackMysen = null;
+    audio.onseeked = () => {
+        startPlay();
+        audio.onseeked = null;
+        if (seekFallbackMysen) clearTimeout(seekFallbackMysen);
+    };
+
+    seekFallbackMysen = setTimeout(() => {
+        if (mysenState.active && audio.paused) {
+            console.log('[MYSEN] Seek fallback triggered');
+            startPlay();
+        }
+    }, 1000);
+
+    if (Math.abs(audio.currentTime - MYSEN_CONFIG.audioStartTime) < 0.1) {
+        startPlay();
+        if (seekFallbackMysen) clearTimeout(seekFallbackMysen);
+    }
+
+    if (window.mysenButton) window.mysenButton.classList.add('mysen-active');
+}
+
+function stopMysenMode() {
+    if (mysenState.isStopping) return;
+    if (!mysenState.active) return;
+
+    console.log('[MYSEN] Initiating smooth shutdown');
+    mysenState.isStopping = true;
+    clearMysenPlaybackTimers();
+
+    if (mysenState.audio) {
+        fadeAudio(mysenState.audio, mysenState.audio.volume, 0, 2);
+    }
+
+    if (mysenState.bgCubesMesh) {
+        fadeVisualOpacity(mysenState.bgCubesMesh.material, 1, 0, 2);
+    }
+
+    mysenState.words.forEach(word => {
+        if (word.mesh && word.mesh.material) {
+            fadeVisualOpacity(word.mesh.material, 1, 0, 2);
+        }
+    });
+
+    setCameraMode('manual');
+    targetCameraAngle = 0;
+    targetCameraVerticalAngle = 0;
+    targetCameraRadius = CONFIG.initialZoom;
+    cameraFocusPoint.set(0, 0, 0);
+
+    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+
+    if (mysenFinalizeTimerId) clearTimeout(mysenFinalizeTimerId);
+    mysenFinalizeTimerId = setTimeout(() => {
+        mysenFinalizeTimerId = null;
+        finalizeMysenCleanup();
+    }, 2000);
+}
+
+function cleanupMysenWords() {
+    mysenState.words.forEach(wordData => {
+        if (wordData.mesh) {
+            scene.remove(wordData.mesh);
+            wordData.mesh.geometry.dispose();
+            wordData.mesh.material.dispose();
+            wordData.mesh = null;
+        }
+    });
+    mysenState.words = [];
 }
 
 function cleanupVajbujWords() {
@@ -4322,6 +6628,55 @@ async function loadParticles(data) {
     const innerCount = data.inner.length;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
+    // Enable instanceColor tinting for the shader (instancing color varying).
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        let totalFromEmissiveRadiancePatched = false;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+            totalFromEmissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        let totalFromEmissivePatched = false;
+        if (totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+            totalFromEmissivePatched = true;
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', {
+                colorVarying,
+                emissiveRadiancePatched,
+                totalFromEmissiveRadiancePatched,
+                totalFromEmissivePatched,
+                shaderPatched: after !== before
+            });
+        }
+        shader.fragmentShader = after;
+    };
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCount);
     const color = new THREE.Color();
@@ -4339,6 +6694,8 @@ async function loadParticles(data) {
     let sIdx = 0;
     data.inner.forEach(p => {
         const pos = new THREE.Vector3(p.p[0], p.p[1], p.p[2]);
+        const zBias = CONFIG.innerCubeZBias ?? 0;
+        pos.z += (pos.z >= 0 ? 1 : -1) * zBias;
 
         dummy.position.copy(pos);
         dummy.scale.setScalar(1);
@@ -4379,6 +6736,8 @@ async function loadParticles(data) {
 
     loadState.generation = 100;
     updateProgress();
+    stopLoaderSimulation({ finalize: true });
+    applyVideoIblMaterialBoost();
 
     // Hide Loader
     loaderContainer.classList.add('hidden');
