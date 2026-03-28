@@ -80,7 +80,8 @@ export const CONFIG = {
                     gold: 6.2,
                     innerCubes: 0.5,
                     heart: 1.35,   
-                    vajbujBgCubes: 2.0
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
                 },
                 hemisphereFromVideo: {
                     intensity: 2.0,
@@ -95,7 +96,8 @@ export const CONFIG = {
                     gold: 2.2,
                     innerCubes: 0.5,
                     heart: 1.35,
-                    vajbujBgCubes: 2.0
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
                 },
                 hemisphereFromVideo: {
                     intensity: 1.2,
@@ -110,7 +112,8 @@ export const CONFIG = {
                     gold: 2.2,
                     innerCubes: 0.5,
                     heart: 1.35,
-                    vajbujBgCubes: 2.0
+                    vajbujBgCubes: 2.0,
+                    mysenBgCubes: 2.0
                 },
                 hemisphereFromVideo: {
                     intensity: 3,
@@ -151,7 +154,8 @@ export const CONFIG = {
             gold: 2.2,
             innerCubes: 0.1,
             heart: 1.35,
-            vajbujBgCubes: 2.0
+            vajbujBgCubes: 2.0,
+            mysenBgCubes: 2.0
         },
         bpmControl: {
             baseBpm: 120,
@@ -307,6 +311,12 @@ export const FX_CONFIG = {
                 speed: { min: 0.1, max: 8.0 },
                 spread: { min: 0.05, max: 1.0 },
                 decay: { min: 0.05, max: 3.0 }
+            },
+            /** Krótkie podpowiedzi pod polem (parametry bez liczbowego ranges). */
+            paramHints: {
+                frequency: 'np. 1/4, 1/8 · 0.25s, 2s · 1b, 2b (sync BPM)',
+                easing: 'np. linear, outCubic, inOutCubic',
+                variation: 'np. radial'
             }
         },
         letterEmission: {
@@ -320,11 +330,22 @@ export const FX_CONFIG = {
                 frequency: '1/8',
                 falloff: 0.65,
                 gain: 1.0,
+                pulseScale: 0.32,
                 easing: 'inOutCubic'
             },
             ranges: {
                 falloff: { min: 0.05, max: 1.5 },
-                gain: { min: 0.1, max: 4.0 }
+                gain: { min: 0.1, max: 4.0 },
+                pulseScale: { min: 0.05, max: 0.65 }
+            },
+            paramHints: {
+                target: 'main · subtitle · both',
+                distribution: 'sequential · random · pingpong',
+                color: '#rrggbb lub 0xrrggbb',
+                duration: 'jak frequency (beat, s, b)',
+                frequency: 'np. 1/8, 1/4 · 0.2s · 1b',
+                pulseScale: 'mnożnik pulsu skali (gain × pulseScale, max +0.55)',
+                easing: 'np. linear, inOutCubic, outCubic'
             }
         },
         repulsionSwarm: {
@@ -343,6 +364,10 @@ export const FX_CONFIG = {
                 radius: { min: 0.5, max: 12.0 },
                 speed: { min: 0.1, max: 6.0 },
                 turnRate: { min: 0.1, max: 6.0 }
+            },
+            paramHints: {
+                pattern: 'np. wander',
+                easing: 'np. linear, outCubic'
             }
         },
         gridNoiseMask: {
@@ -365,7 +390,12 @@ export const FX_CONFIG = {
                 brightness: { min: 0.0, max: 2.0 },
                 contrast: { min: 0.1, max: 3.0 },
                 speed: { min: 0.1, max: 6.0 },
-                threshold: { min: 0.0, max: 1.0 }
+                threshold: { min: 0.0, max: 1.0 },
+                bpmSync: { min: 0, max: 1 }
+            },
+            paramHints: {
+                noiseType: 'np. sine',
+                loopLength: 'np. 2b, 4b, 1s (faza / długość pętli)'
             }
         }
     },
@@ -380,6 +410,30 @@ export const FX_CONFIG = {
         le_start: 'fx start letterEmission',
         fx_bpm: 'fx bpm'
     }
+};
+
+/** Przykładowe presety do panelu FX dev (3 na każdy effectId); params mergowane z defaults przy starcie. */
+export const FX_SAMPLE_PRESETS = {
+    scatterBurst: [
+        { label: 'Fast beat', params: { frequency: '1/8', speed: 1.6, scale: 1.1 } },
+        { label: 'Wide spread', params: { spread: 0.85, decay: 0.85, speed: 1.2 } },
+        { label: 'Subtle', params: { scale: 0.75, speed: 0.65, spread: 0.35 } }
+    ],
+    letterEmission: [
+        { label: 'Random letters', params: { distribution: 'random', gain: 1.3, frequency: '1/4' } },
+        { label: 'Ping-pong', params: { distribution: 'pingpong', duration: '1/8', falloff: 0.9 } },
+        { label: 'Main only', params: { target: 'main', color: '#ffcc66', gain: 1.15 } }
+    ],
+    repulsionSwarm: [
+        { label: 'Dense swarm', params: { count: 8, radius: 4.5, speed: 1.4 } },
+        { label: 'Wide ring', params: { count: 4, radius: 8, turnRate: 0.6 } },
+        { label: 'Slow drift', params: { count: 3, speed: 0.5, turnRate: 0.4, pattern: 'wander' } }
+    ],
+    gridNoiseMask: [
+        { label: 'Heavy noise', params: { threshold: 0.35, speed: 2.2, brightness: 0.65 } },
+        { label: 'High contrast', params: { contrast: 2.0, threshold: 0.55, clampDown: 0.1 } },
+        { label: 'Calm grid', params: { speed: 0.5, threshold: 0.75, brightness: 0.4 } }
+    ]
 };
 
 // VAJBUJ SZMATO Mode Configuration
@@ -509,6 +563,74 @@ export const VAJBUJ_CONFIG = {
     finalSymbolScale: 2.0
 };
 
+/** MYSEN remix mode — console `/mysen start|stop`. Lyrics use `at` (seconds from fragment start) or `wordTimesSec`; voxel style like VAJBUJ but main TOPKEK mesh is hidden. */
+export const MYSEN_CONFIG = {
+    enabled: true,
+    /** When true, skip init on mobile (lighter scene). */
+    disableOnMobile: false,
+
+    /** Must exist on the static server (same origin). 404 → see audioFileFallback. */
+    audioFile: 'ASSETS/mysen/mysen-remix.mp3',
+    /** Used when audioFile fails (missing file / 404). Set null to disable. Often VAJBUJ clip until remix is in ASSETS/mysen/. */
+    audioFileFallback: 'VAJBUJ_TRIMMED.mp3',
+    audioStartTime: 0,
+    /** Absolute end time on the media timeline (seconds). Use `null` to play from audioStartTime to the natural end of the file (`audio.duration`). A finite number trims like a short clip. */
+    audioEndTime: null,
+    fadeInDuration: 1.5,
+    fadeOutDuration: 1.5,
+
+    /** Hide the background video plane while MYSEN plays (reduces visual clash). */
+    hideBackgroundVideo: true,
+
+    /**
+     * Lyrics: same shape as VAJBUJ plus optional `at` (seconds from audioStartTime) for variable tempo.
+     * Optional per-word pulse after assemble: `pulseScale`, `pulseMs`.
+     */
+    lyrics: [
+        { text: 'oko', color: 0xffffff, at: 0.5, pulseScale: 1.14, pulseMs: 380 },
+        { text: 'MYSEN', color: 0x66ccff, at: 2.0 },
+        { lineBreak: true },
+        { text: 'remix', color: 0xffffff, at: 4.5 }
+    ],
+
+    /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
+    wordTimesSec: [],
+
+    /** Global matchers: pulse when a word finishes assembling (in addition to per-line pulseScale). */
+    wordPulses: [{ matchText: 'oko', scale: 1.15, ms: 400 }],
+
+    wordAssemblyDuration: 1.8,
+    lyricsStartDelay: 0,
+    wordSize: 1.0,
+    wordHeight: 0.12,
+    wordThickness: 2,
+    lineSpacing: 2.0,
+    wordSpacing: 0.8,
+    lyricsOffsetY: 0.5,
+    scatterRadius: 6,
+    defaultWordColor: 0xffffff,
+
+    bgCubeColors: [
+        0x1a3a4a,
+        0x2d5a6b,
+        0x4a90a4,
+        0x6ec8d8,
+        0x88dde8,
+        0xa8f0ff
+    ],
+    bgCubeSize: 0.25,
+    bgCubeCount: IS_MOBILE ? 48 : 100,
+    bgCubeMaterial: {
+        metalness: 0.55,
+        roughness: 0.42,
+        envMapIntensity: 1
+    },
+
+    /** 0 = no slow phase; else fraction of fragment duration with slowPhaseSpeed multiplier on bg cubes. */
+    slowPhaseEnd: 0,
+    slowPhaseSpeed: 0.2
+};
+
 // Shader Configuration
 export const SHADER_CONFIG = {
     crt: {
@@ -522,9 +644,10 @@ export const SHADER_CONFIG = {
         flickerAmount: IS_MOBILE ? 0 : 0.02
     },
     bloom: {
-        // Kompromis: niższy próg niż 0.6 przywraca poświatę inner cubes; siła umiarkowana żeby skorupa nie przepalała.
-        threshold: 0.48,
-        strength: 0.72,
+        // RenderPass zapisuje obraz już po tone mappingu (ACES na rendererze); wysoki próg (np. 0.48) odcina prawie cały bloom.
+        // Oficjalny przykład three r160 używa threshold 0. Umiarkowany próg + siła utrzymują poświatę bez przepalenia.
+        threshold: 0.12,
+        strength: 0.82,
         alternateStrength: 0.32, // Siła bloom po naciśnięciu spacji
         radius: 0.85
     },
@@ -579,12 +702,14 @@ export const TERMINAL_HELP_LINES_COMPACT = [
     '/help full // Every command line + FX aliases. ex: /help full',
     '/clear // Clears console log. ex: /clear',
     '/vajbuj [start|stop] // VAJBUJ mode. ex: /vajbuj start',
+    '/mysen [start|stop] // MYSEN remix mode. ex: /mysen start',
     '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
-    '/postproc <status> // Bloom / SAO / CRT pass states. ex: /postproc status',
+    '/postproc <status> // Bloom / SAO / CRT + fake GI (video IBL). ex: /postproc status',
+    '/fakegi <on|off|status> // Wideo jako fake GI (PMREM + hemisphere). ex: /fakegi status',
     '/material <toggle|default|alt|status> // TOP/KEK materials. ex: /material toggle',
     '/light <1|2> color <#rrggbb|0xrrggbb> | /light <1|2> intensity <value> // Lights.',
     '/fx list // Effect ids and aliases (use for shortcut names). ex: /fx list',
-    '/fx dev // Toggle FX developer panel (params + preset). ex: /fx dev',
+    '/fx dev // Toggle FX developer panel (top overlay; params + preset). ex: /fx dev',
     '/fx on | /fx off // Enable or disable FX runtime. ex: /fx off',
     '/fx status | /fx bpm | /fx set | /fx trigger | /fx start | /fx stop // FX control.',
     'FX time tokens: 0.25s | 2s | 1b | 2b | 1/4 | 1/8'
@@ -596,15 +721,17 @@ export const TERMINAL_HELP_LINES_FULL = [
     '/help full // This full list. ex: /help full',
     '/clear // Clears console log. ex: /clear',
     '/vajbuj [start|stop] // Starts/stops VAJBUJ mode. ex: /vajbuj start',
+    '/mysen [start|stop] // Starts/stops MYSEN remix mode (hides TOPKEK letters). ex: /mysen start',
     '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
     '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
     '/crt <on|off> // Toggles CRT pass. ex: /crt off',
-    '/postproc <status> // Prints pass states. ex: /postproc status',
+    '/postproc <status> // Bloom / SAO / CRT + stan fake GI (video IBL, światła wideo). ex: /postproc status',
+    '/fakegi <on|off|status> // Włącza/wyłącza fake GI z wideo: PMREM → scene.environment, boost envMap, Hemisphere+Ambient z klatki. ex: /fakegi off',
     '/material <toggle|default|alt|status> // Switches TOP/KEK material mode. ex: /material toggle',
     '/light <1|2> color <#rrggbb|0xrrggbb> // Sets light color. ex: /light 1 color #66ccff',
     '/light <1|2> intensity <value> // Sets light intensity. ex: /light 2 intensity 1.8',
     '/fx list // Lists effect ids and aliases. ex: /fx list',
-    '/fx dev // Toggles FX developer panel (defaults, Trigger / Start / Stop, JSON preset). ex: /fx dev',
+    '/fx dev // Toggles top-centered FX developer panel (defaults, Trigger / Start / Stop, JSON preset). ex: /fx dev',
     '/fx on // Enables FX runtime (same as panel checkbox). ex: /fx on',
     '/fx off // Disables FX runtime. ex: /fx off',
     '/fx status // Shows FX runtime and active instances. ex: /fx status',

@@ -24,16 +24,38 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 
 ## [Unreleased]
 
+### Added
+- Konsola: **`/fakegi <on|off|status>`** — przełączanie fake GI z wideo (PMREM → `scene.environment`, boost `envMapIntensity`, Hemisphere/Ambient z koloru klatki); **`/postproc status`** dopisuje ten sam stan.
+- Tryb **MYSEN** (`/mysen start` / `/mysen stop`): remiks z `ASSETS/mysen`, ukrycie napisu TOPKEK i wideo tła (opcjonalnie), wokselowe słowa zsynchronizowane polem `at` (sekundy) lub `wordTimesSec` w `MYSEN_CONFIG`; puls słów (`pulseScale` / `pulseMs` lub `wordPulses`); sekcja w menu pod Vajbuj; wzajemne wyłączanie z VAJBUJ.
+
 ### Fixed
+- Glitch volumetryczny (HUD): trigger jednorazowy przekazuje czas ścienny (`Date.now()/1000`) jak pętla renderu — wcześniej `clock.getElapsedTime()` dawało `glitchEndTime` w skali ~sekund od startu strony przy `time` w skali Unix, więc efekt natychmiast wygasał i znikał.
+- Oświetlenie / bloom na napisie: cofnięto `vertexColors` na materiałach `defaultBox` / `glass` / `gold` oraz tint `setColorAt` przy Letter Emission (zostaje silniejszy puls skali + `pulseScale`) — `vertexColors` + instancje mogły obniżyć jasność w buforze i osłabić postprocess (bloom).
+- Bloom: obniżono `SHADER_CONFIG.bloom.threshold` (0.48 → 0.12) i lekko podniesiono `strength` — po `ACESFilmicToneMapping` w pierwszym przebiegu `RenderPass` bufor jest już ztone-mapowany; wysoki próg wycinał prawie całą poświatę (zgodnie z przykładem three.js z progiem ~0).
+- FX Repulsion Swarm: w trybie scatter/grid impuls jest nakładany na `currentPos` (wcześniej tylko `velocity`, ignorowane gdy kostka nie jest „w locie”); w trybie repulsion bez zmian (`velocity` + integracja w symulacji).
+- FX Letter Emission: silniejszy, konfigurowalny puls skali (`pulseScale`); `fx elapsed` liczone od `clock` (nie od mieszania z czasem ściennym).
+- Panel FX dev — lista Active: zwijanie podglądu parametrów działa (CSS `[hidden]` nie jest już nadpisywane przez `display: flex`); poprawiony podgląd „next” dla pętli (`nextFireAt` vs czas ścienny).
+- MYSEN: przy braku pliku `audioFile` (404) automatyczne przełączenie na `MYSEN_CONFIG.audioFileFallback` (domyślnie `VAJBUJ_TRIMMED.mp3`) oraz jaśniejsze logi przy `play()` bez źródła.
+- MYSEN: po powrocie do normalnej sceny zawsze przywracane jest widoczne wideo tła (`backgroundVideoMesh` + `play()` gdy użytkownik nie wstrzymał tła) — wcześniej przy `hideBackgroundVideo: false` lub zmianie opcji mesh mógł zostać z `visible: false`, co obcinało duży emisyjny fill (często odczuwany jako „niebieskie” światło).
+- MYSEN: domyślnie `audioEndTime: null` — odtwarzanie do naturalnego końca pliku (`audio.duration`); fade/stop liczone po `loadedmetadata`, zamiast sztywnych ~30 s z konfiguracji.
 - Poprawiono heurystykę `perf=auto`: profil lite włącza się przy `navigator.deviceMemory` ≤ 3 GB zamiast ≤ 4 GB, żeby na desktopie (np. Brave/Chrome raportujące 4 GB) nie wyłączać SAO i CRT.
 
+### Removed
+- Usunięto tymczasową instrumentację debug (żądania HTTP do serwera ingest, zmienne `_agentLog*`, regiony `agent log`) z `script.js`.
+
 ### Changed
+- Panel FX dev: zmiana kolejności aktywnych instancji (↑↓); przykładowe presety wybierane z dropdownu + przycisk „Add loop” zamiast trzech osobnych przycisków.
+- Panel FX dev (`/fx dev`): menubar (Minimize, Export all, zamknięcie × dwuklikowe z uzbrojeniem na czerwono), UI po angielsku; aktywne instancje po lewej, edytor po prawej; parametry w wierszach po 3 sloty [nazwa|pole|zakres]; „Export preset” pod blokiem parametrów; import „Choose file” + Apply; własny scrollbar; większe etykiety/hinty; `FX_SAMPLE_PRESETS` — angielskie etykiety.
+- Uaktualniono plan fragmentacji struktury (`docs/plans/2026_03/2026-03-28-plan-fragmentacji-struktury.md`): cienki katalog główny, moduły pod `src/`, agregacja CSS w root, strategia partiali HTML, doprecyzowanie zasady 8–12 granic domenowych vs liczba plików.
+- Panel FX dev: styl jak menu (zmienne `--menu-surface-*`, przyciski jak `mode-btn` z prawego panelu), pola z wartościami domyślnymi z konfiguracji, podpowiedzi `Zakres: …` / `paramHints` pod parametrami; w `FX_CONFIG.registry` dodano `paramHints` oraz zakres `bpmSync` dla grid noise.
+- Panel deweloperski FX (`/fx dev`): zamiast osadzenia w konsoli — pływający panel u góry ekranu (wyśrodkowany), z przyciskiem zamknięcia; mount do `document.body` w `fx-dev-panel.js`.
 - Konsola poleceń: maximize, restore i zwijanie logu to trzy osobne przyciski z ikonami SVG w jednym rzędzie (bez nachodzącego `.menu-section-toggle`); zwijanie obsługuje `terminal-shell.js` i klasa `topkek-terminal-shell--collapsed` z `TERMINAL_CONFIG.shellUi`.
 - Rozszerzono `knowledge_base.json` dla Buucha (GENIMG, tryb wydajności, FX, scena i tryby myszy, portfolio 3D vs Vimeo, slash vs czat, stack, podziękowania) oraz doprecyzowano APPSTAIN, Glitch Lab i SCNDBREJN — otwieranie z menu terminala po prawej zamiast nieobecnych w handlerze komend `/<nazwa>`.
 - Rozdzielono pomoc konsoli: domyślne `/help` pokazuje skróconą listę komend, `/help full` — pełną dokumentację (w tym aliasy FX); treści w `TERMINAL_HELP_LINES_COMPACT` / `TERMINAL_HELP_LINES_FULL` w `config.js`; komunikaty Usage/Buuch/welcome wskazują obie ścieżki; blok `.topkek-terminal-help-block` ma ograniczoną wysokość z przewijaniem pionowym.
 
 ### Added
-- Dodano panel deweloperski FX w konsoli (`/fx dev`): przełącznik runtime, BPM, Trigger / Start loop / Stop na efekt, pola parametrów, eksport/import presetu JSON (plik, schowek, wklejka); polecenia `/fx on` i `/fx off` włączają lub wyłączają runtime FX.
+- Panel FX dev — na liście aktywnych instancji przycisk ▾/▴ rozwija blok z aktualnymi parametrami instancji (`params` z runtime); stan rozwinięcia zachowany przy odświeżaniu listy do czasu zamknięcia lub usunięcia instancji.
+- Dodano panel deweloperski FX otwierany z konsoli (`/fx dev`): przełącznik runtime, BPM, Trigger / Start loop / Stop na efekt, pola parametrów, eksport/import presetu JSON (plik, schowek, wklejka); polecenia `/fx on` i `/fx off` włączają lub wyłączają runtime FX.
 - Dodano polskie odpowiedniki fraz w `knowledge_base.json` (Buuch dopasowuje też zapytania po polsku).
 - Dodano przycisk wstrzymania / wznowienia wideo tła w HUD (obok listy „Background”).
 - Dodano wizualne „chipy” w logu konsoli: tło i lewa obwódka zależnie od typu linii (komenda, odpowiedź, info, błąd, Buuch).
