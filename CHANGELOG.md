@@ -24,6 +24,9 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.0.0/), wersj
 
 ## [Unreleased]
 
+### Changed
+- MYSEN: domyślny tekst wokseli w `MYSEN_CONFIG.lyrics` — „BEZSEN - MYSEN” / „Topkek reimagined” (zamiast oko/MYSEN/remix).
+
 ### Added
 - Konsola: **`/fakegi <on|off|status>`** — przełączanie fake GI z wideo (PMREM → `scene.environment`, boost `envMapIntensity`, Hemisphere/Ambient z koloru klatki); **`/postproc status`** dopisuje ten sam stan.
 - Tryb **MYSEN** (`/mysen start` / `/mysen stop`): remiks z `ASSETS/mysen`, ukrycie napisu TOPKEK i wideo tła (opcjonalnie), wokselowe słowa zsynchronizowane polem `at` (sekundy) lub `wordTimesSec` w `MYSEN_CONFIG`; puls słów (`pulseScale` / `pulseMs` lub `wordPulses`); sekcja w menu pod Vajbuj; wzajemne wyłączanie z VAJBUJ.

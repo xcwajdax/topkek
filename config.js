@@ -587,17 +587,16 @@ export const MYSEN_CONFIG = {
      * Optional per-word pulse after assemble: `pulseScale`, `pulseMs`.
      */
     lyrics: [
-        { text: 'oko', color: 0xffffff, at: 0.5, pulseScale: 1.14, pulseMs: 380 },
-        { text: 'MYSEN', color: 0x66ccff, at: 2.0 },
+        { text: 'BEZSEN - MYSEN', color: 0x66ccff, at: 0.6 },
         { lineBreak: true },
-        { text: 'remix', color: 0xffffff, at: 4.5 }
+        { text: 'Topkek reimagined', color: 0xffffff, at: 2.2 }
     ],
 
     /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
     wordTimesSec: [],
 
     /** Global matchers: pulse when a word finishes assembling (in addition to per-line pulseScale). */
-    wordPulses: [{ matchText: 'oko', scale: 1.15, ms: 400 }],
+    wordPulses: [],
 
     wordAssemblyDuration: 1.8,
     lyricsStartDelay: 0,
