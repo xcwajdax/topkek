@@ -43,11 +43,11 @@
         </div>
         <div class="menu-section">
             <div class="menu-section-title">Vajbuj</div>
-            <div class="term-line" id="term-vajbuj">Type in terminal: vajbuj / vajbuj stop</div>
+            <div class="term-line" id="term-vajbuj">Type in terminal: vajbuj / vajbuj stop — Esc stops while playing</div>
         </div>
         <div class="menu-section">
             <div class="menu-section-title">MYSEN</div>
-            <div class="term-line" id="term-mysen">Type in terminal: /mysen start / /mysen stop</div>
+            <div class="term-line" id="term-mysen">Type in terminal: /mysen start / /mysen stop — Esc stops while playing</div>
         </div>
         <div class="menu-section">
             <div class="menu-section-title">Games</div>
@@ -280,6 +280,21 @@
     <!-- IMAGE VIEWER -->
     <div id="image-viewer" class="hidden">
         <img id="full-image" src="" alt="Full Screen Preview">
+    </div>
+
+    <!-- Spotify widget after natural end of VAJBUJ / MYSEN (see config.js originalTrackSpotifyEmbedSrc) -->
+    <div id="music-showcase-spotify-widget" class="music-showcase-spotify-widget hidden" role="dialog"
+        aria-modal="false" aria-labelledby="music-showcase-spotify-widget-title" aria-hidden="true">
+        <div class="music-showcase-spotify-widget-panel">
+            <button type="button" id="music-showcase-spotify-close" class="close-btn"
+                aria-label="Zamknij panel Spotify">×</button>
+            <div id="music-showcase-spotify-widget-title" class="music-showcase-spotify-widget-title">Spotify</div>
+            <div class="music-showcase-spotify-iframe-wrap">
+                <iframe id="music-showcase-spotify-iframe" title="Spotify — odtwarzacz" loading="lazy" src=""
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+        </div>
     </div>
 
     <script src="ASSETS/APPSTAIN/topkek_trump_head/trump-quotes.js"></script>

@@ -10,6 +10,10 @@ Długość odtwarzania: w `MYSEN_CONFIG` ustaw `audioEndTime: null`, żeby grać
 
 Tryb uruchamiasz z konsoli: `/mysen start` i zatrzymujesz: `/mysen stop`.
 
+Po **naturalnym** końcu odtwarzanego fragmentu (nie po `/mysen stop`) możesz pokazać embed Spotify oryginału: w [`config.js`](../../config.js) ustaw `MYSEN_CONFIG.originalTrackSpotifyEmbedSrc` na pełny adres iframe (jak z „Share → Embed” na Spotify) oraz opcjonalnie `originalTrackSpotifyWidgetTitle`. `null` wyłącza widget.
+
+Przy **`showBackgroundVideoDuringMysen: true`** możesz włączyć **`mysenBackgroundVideoFadeOut`** w [`config.js`](../../config.js): od `fadeStartSec` (np. 60 s od startu trybu) nieprzezroczystość płaszczyzny wideo tła maleje liniowo do `endOpacity` przy końcu odtwarzanego fragmentu; po wyjściu z MYSEN materiał jest resetowany.
+
 ## Grupy linii z timestampów — `mysenTimestampLineGroups`
 
 W [`config.js`](../../config.js), `MYSEN_CONFIG.mysenTimestampLineGroups`:
@@ -17,9 +21,10 @@ W [`config.js`](../../config.js), `MYSEN_CONFIG.mysenTimestampLineGroups`:
 - **`enabled`** — włącza logikę grup.
 - **`groups`** — tablica bloków `{ tMin, tMax, lineVanishAtMediaSec }`. Czas **`at`** słowa z `mysen_timestamps.txt` (oś pliku audio) musi mieścić się w `[tMin, tMax]` — wszystkie kolejne słowa z tego zakresu trafiają do **jednego wiersza** (jak zwrotka w jednej linii). Nie ma wtedy lotu z losowego punktu w FOV — słowa składają się na wspólnej „szynie”.
 - **`lineVanishAtMediaSec`** — znikanie wiersza, gdy **przybliżony czas na osi pliku** `audioStartTime + elapsed` (od startu `/mysen`, ta sama skala co pola `at` w timestampach) osiągnie tę wartość; wtedy cała linia przechodzi w rozproszenie (`spread`). Nie opieramy się tylko na `audio.currentTime`, żeby uniknąć braku rozlotu przy opóźnieniu odtwarzania lub innym klipie fallback.
+- **`splitLines`** (opcjonalne) — tablica `{ wordCount, offsetX?, offsetY? }`: zamiast jednej poziomej linii kolejne tokeny z pliku timestampów (w kolejności czasu) trafiają na **podwiersze** z przesunięciem; wszystkie nadal mają ten sam logiczny „wiersz” (wspólne znikanie przy `lineVanishAtMediaSec`). `wordCount` musi sumować się do liczby słów w grupie (np. 4+4 dla ośmiu tokenów).
 - **`seededRandomFly`** — dla słów **poza** żadną grupą: spawn nadal w frustum, ale **deterministyczny** (hash z `tekst` + `at`), żeby układ był „losowy”, lecz ten sam przy każdym odtworzeniu.
 
-Domyślna konfiguracja odpowiada pierwszej i drugiej zwrotce z obecnego `mysen_timestamps.txt` (ok. 23.7–30.36 s i 31.84–38.7 s) ze znikaniami przy **31.5 s** i **41.0 s**; reszta utworu zostaje przy jednym słowie na wiersz + seedowany spawn.
+Domyślna konfiguracja odpowiada pierwszej i drugiej zwrotce z obecnego `mysen_timestamps.txt` (ok. 23.7–30.36 s i 31.84–38.7 s) ze znikaniami przy **31.5 s** i **41.0 s**; te dwie grupy używają **`splitLines`** (dwa podwiersze na zwrotkę). Reszta utworu zostaje przy jednym słowie na wiersz + seedowany spawn.
 
 ## Animacja słów — `mysen-word-animation.json`
 
@@ -55,3 +60,13 @@ Przykład (pierwsze „Zamykam” z timestampów przy `23.740`):
   ]
 }
 ```
+
+## Showcase animation JSON (v1) — edytor + strona
+
+Uniwersalny dokument (`schemaVersion: 1`, `adapter: voxelLyricsMysen`) zastępuje **merge** intro + `mysen_timestamps.txt`, gdy w [`config.js`](../../config.js) włączysz `MYSEN_CONFIG.showcaseAnimationEnabled` i ustawisz `showcaseAnimationUrl` na plik JSON.
+
+- **Edytor (timeline + klucze + podgląd 3D):** [`tools/showcase-animation-editor.html`](../../tools/showcase-animation-editor.html) — instrukcja w [`tools/README.md`](../../tools/README.md).
+- **Przykład pliku:** [showcase-animation.sample.json](showcase-animation.sample.json).
+- **Pakiet legacy (jeden JSON do edytora):** [mysen-legacy-import-bundle.sample.json](mysen-legacy-import-bundle.sample.json).
+- **Klucze** `transformKeyframes` — czas `t` w sekundach od początku **fragmentu** (jak `elapsed` w MYSEN); `position` to dodatek do pozycji z layoutu lyriców; `rotationEuler` w **radianach**; `scale` mnoży skalę wokseli po złożeniu.
+- **Opcje słowa (pojawianie / znikanie), opcjonalnie na wpisie w `words`:** `persistentOnScreen` (alias w JSON: `mysenPersistentOnScreen`) — bez rozlotu intro; `groupedLine` — dla słów timestamp bez lotu z frustum, tylko szyna; `spawn`: `{ "x", "y", "z" }` — stały punkt startu lotu; `vanishAtMediaSec` — znikanie (rozlot) przy tej pozycji na osi **pliku audio** (sekundy media, jak `audio.currentTime`); `assemblyDurationSec` — czas składania wokseli dla tego słowa (nadpisuje `style.wordAssemblyDuration`).

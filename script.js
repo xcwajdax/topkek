@@ -14,7 +14,20 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
 import { initTopkekTerminalShell } from './terminal-shell.js';
 import { initFxDevPanel } from './fx-dev-panel.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, STROBE_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
+import { registerVajbujAutoBlocker, registerParticleMouseSimBlocker, isVajbujAutoStartBlocked, isParticleMouseSimSuppressed } from './showcase-registry.js';
+import {
+    createVoxelWord,
+    voxelStyleFromMusicConfig,
+    queueLyricVoxelPregeneration,
+    createVoxelGenerationTask
+} from './music-lyric-voxels.js';
+import { computeMusicShowcaseCameraResetValues } from './showcase-camera.js';
+import { capturePostprocessingSnapshot, restorePostprocessingSnapshot } from './postprocessing-snapshot.js';
+import { parseMysenTimestampLyricsFile } from './mysen-timestamp-parse.js';
+import { lyricsArrayFromShowcaseDoc, mergeShowcaseStyleIntoConfig } from './showcase-animation-adapters.js';
+import { validateShowcaseAnimationDoc } from './showcase-animation-schema.js';
+import { applyShowcaseTransformKeyframes } from './showcase-animation-runtime.js';
 
 const CUSTOM_TEXT_QUERY_PARAM = 'text';
 const MAX_CUSTOM_TEXT_LENGTH = 10;
@@ -178,11 +191,64 @@ const CRTShader = {
     `
 };
 
+const InvertShader = {
+    uniforms: {
+        'tDiffuse': { value: null },
+        'uInvert': { value: 0 }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float uInvert;
+        varying vec2 vUv;
+        void main() {
+            vec4 c = texture2D(tDiffuse, vUv);
+            c.rgb = mix(c.rgb, 1.0 - c.rgb, uInvert);
+            gl_FragColor = c;
+        }
+    `
+};
+
+function updateStrobeFlashTransform() {
+    if (!camera || !strobeFlashMesh) return;
+    const dist = STROBE_CONFIG.flashDistance;
+    const vFovRad = THREE.MathUtils.degToRad(camera.fov);
+    const halfH = Math.tan(vFovRad * 0.5) * dist;
+    const halfW = halfH * camera.aspect;
+    strobeFlashMesh.scale.set(halfW * 2, halfH * 2, 1);
+    strobeFlashMesh.position.set(0, 0, -dist);
+}
+
+function setStrobeActive(next) {
+    const want = !!next;
+    if (want && STROBE_CONFIG.disabled) return;
+    strobeActive = want;
+    const btn = document.getElementById('btn-strobe-toggle');
+    if (btn) {
+        btn.classList.toggle('active', strobeActive);
+        btn.setAttribute('aria-pressed', strobeActive ? 'true' : 'false');
+    }
+    if (!strobeActive) {
+        if (strobeFlashMesh) strobeFlashMesh.visible = false;
+        if (invertPass?.uniforms?.uInvert) invertPass.uniforms['uInvert'].value = 0;
+    }
+}
+
 // Configuration and State imported from config.js
 
 // State
-let scene, camera, renderer, composer, crtPass, bloomPass;
+let scene, camera, renderer, composer, crtPass, bloomPass, invertPass;
+let strobeFlashMesh = null;
+let strobeActive = STROBE_CONFIG.enabledByDefault && !STROBE_CONFIG.disabled;
 let saoPass = null;
+/** Baseline EffectComposer pass state before first VAJBUJ/MYSEN session in a row. */
+let _musicShowcasePostSnap = null;
 let keyDirectionalLight = null;
 let fillDirectionalLight = null;
 let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
@@ -695,7 +761,9 @@ let vajbujState = {
     lastActivityTime: Date.now(),
     isStopping: false,
     voxelCache: {}, // Cache for pre-calculated voxel data
-    generationQueue: [] // Queue for background processing
+    generationQueue: [], // Queue for background processing
+    /** After natural playback end only — show Spotify widget in finalize if embed URL set. */
+    pendingSpotifyWidgetAfterFinalize: false
 };
 
 let vajbujFinalizeTimerId = null;
@@ -704,6 +772,49 @@ let mysenFinalizeTimerId = null;
 /** Hide right-panel menu + left HUD during VAJBUJ/MYSEN; keep #topkek-terminal-shell visible. */
 function setMusicShowcaseMenuUiHidden(hidden) {
     document.body.classList.toggle('music-showcase-ui-minimal', !!hidden);
+}
+
+let musicShowcaseSpotifyKeydownHandler = null;
+
+function hideMusicShowcaseSpotifyWidget() {
+    if (musicShowcaseSpotifyKeydownHandler) {
+        window.removeEventListener('keydown', musicShowcaseSpotifyKeydownHandler, true);
+        musicShowcaseSpotifyKeydownHandler = null;
+    }
+    const iframe = document.getElementById('music-showcase-spotify-iframe');
+    if (iframe) iframe.src = '';
+    const root = document.getElementById('music-showcase-spotify-widget');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+}
+
+/** @param {string} embedSrc Full Spotify embed URL (iframe src). */
+function showMusicShowcaseSpotifyWidget(embedSrc, titleText) {
+    if (!embedSrc || typeof embedSrc !== 'string') return;
+    const root = document.getElementById('music-showcase-spotify-widget');
+    const iframe = document.getElementById('music-showcase-spotify-iframe');
+    const titleEl = document.getElementById('music-showcase-spotify-widget-title');
+    if (!root || !iframe) return;
+
+    hideMusicShowcaseSpotifyWidget();
+
+    if (titleEl) titleEl.textContent = titleText || 'Spotify';
+    iframe.src = embedSrc;
+    root.classList.remove('hidden');
+    root.setAttribute('aria-hidden', 'false');
+
+    musicShowcaseSpotifyKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (root.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideMusicShowcaseSpotifyWidget();
+    };
+    window.addEventListener('keydown', musicShowcaseSpotifyKeydownHandler, { capture: true });
+
+    document.getElementById('music-showcase-spotify-close')?.focus();
 }
 
 // MYSEN remix mode state (separate voxel cache from VAJBUJ)
@@ -737,8 +848,37 @@ let mysenState = {
     wordAnimationDoc: null,
     _wordAnimationLoadPromise: null,
     /** Shallow merge: MYSEN_CONFIG + JSON `defaults` (tylko dozwolone klucze), ustawiane przy starcie MYSEN. */
-    mergedMysenConfig: null
+    mergedMysenConfig: null,
+    /** Validated `showcase-animation` v1 document (voxelLyricsMysen), or null. */
+    showcaseAnimationDoc: null,
+    _showcaseAnimationLoadPromise: null,
+    pendingSpotifyWidgetAfterFinalize: false
 };
+
+/** Space held = momentary strobe (piano); release = off. */
+let strobeSpaceHeld = false;
+
+function clearStrobeSpaceHeld() {
+    strobeSpaceHeld = false;
+}
+
+function canUseStrobePianoSpace() {
+    if (!STROBE_CONFIG.pianoSpaceKey || STROBE_CONFIG.disabled) return false;
+    if (vajbujState.active || mysenState.active) return false;
+    const active = document.activeElement;
+    if (active) {
+        const tag = active.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+        if (active.isContentEditable) return false;
+        if (tag === 'BUTTON' || tag === 'A') return false;
+    }
+    return true;
+}
+
+registerVajbujAutoBlocker(() => mysenState.active || mysenState.isStopping);
+registerVajbujAutoBlocker(() => portfolioSceneActive);
+registerParticleMouseSimBlocker(() => portfolioSceneActive);
+registerParticleMouseSimBlocker(() => mysenState.active);
 
 const _mysenFrustumTmp = new THREE.Vector3();
 const _mysenFrustumDir = new THREE.Vector3();
@@ -817,7 +957,7 @@ function buildMysenEffectiveConfig() {
 }
 
 /**
- * Mutates merged lyric items before `prepareMusicLyricWords` (scale → poprawne width / voxele).
+ * Mutates merged lyric items before `prepareMysenLyricWords` (scale → poprawne width / voxele).
  * @param {object[]} merged
  * @param {unknown} overridesRaw
  */
@@ -909,25 +1049,6 @@ function queueMysenVoxelPregenForPreparedWords(state, lyricsConfig) {
     });
 }
 
-/** @returns {{ text: string, at: number, color?: number }[]} */
-function parseMysenTimestampLyricsFile(text) {
-    const out = [];
-    if (!text || typeof text !== 'string') return out;
-    const re = /^\s*([\d.]+)\s*-->\s*([\d.]+)\s*\|\s*(.+)$/;
-    // CRLF: split(/\n/) leaves trailing \r; . in regex does not match \r, so lines never matched.
-    const lines = text.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-        const m = lines[i].match(re);
-        if (!m) continue;
-        const start = parseFloat(m[1]);
-        const label = m[3].trim();
-        if (!label || /^muzyka$/i.test(label)) continue;
-        if (!Number.isFinite(start)) continue;
-        out.push({ text: label, at: start });
-    }
-    return out;
-}
-
 /** Highest lineIndex that would be assigned to a word in this lyric list (no trailing lineBreak after last word). */
 function lastFilledLineIndexInLyrics(lyrics) {
     let currentLineIdx = 0;
@@ -970,17 +1091,66 @@ function buildMergedMysenLyrics() {
                 continue;
             }
 
+            const buf = [];
             while (i < ts.length && findMysenTsLineGroup(ts[i].at, groups) === gr) {
-                const r = ts[i];
-                merged.push({
-                    text: r.text,
-                    color: r.color ?? MYSEN_CONFIG.timestampWordColor,
-                    at: r.at - startT,
-                    atSourceSec: r.at,
-                    lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
-                    mysenGroupedLine: true
-                });
+                buf.push(ts[i]);
                 i++;
+            }
+
+            const splitSpec = gr.splitLines;
+            if (Array.isArray(splitSpec) && splitSpec.length > 0) {
+                let t = 0;
+                for (let si = 0; si < splitSpec.length; si++) {
+                    const sl = splitSpec[si];
+                    const n = Math.max(0, Math.floor(sl.wordCount ?? 0));
+                    for (let k = 0; k < n && t < buf.length; k++, t++) {
+                        const r = buf[t];
+                        merged.push({
+                            text: r.text,
+                            color: r.color ?? MYSEN_CONFIG.timestampWordColor,
+                            at: r.at - startT,
+                            atSourceSec: r.at,
+                            lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
+                            mysenGroupedLine: true,
+                            offsetX: sl.offsetX ?? 0,
+                            offsetY: sl.offsetY ?? 0,
+                            mysenSplitRow: si
+                        });
+                    }
+                }
+                if (t < buf.length) {
+                    console.warn(
+                        '[MYSEN] splitLines wordCount sum < tokens in group; appending remainder on last row'
+                    );
+                    const lastSi = splitSpec.length - 1;
+                    const sl = splitSpec[lastSi];
+                    while (t < buf.length) {
+                        const r = buf[t++];
+                        merged.push({
+                            text: r.text,
+                            color: r.color ?? MYSEN_CONFIG.timestampWordColor,
+                            at: r.at - startT,
+                            atSourceSec: r.at,
+                            lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
+                            mysenGroupedLine: true,
+                            offsetX: sl.offsetX ?? 0,
+                            offsetY: sl.offsetY ?? 0,
+                            mysenSplitRow: lastSi
+                        });
+                    }
+                }
+            } else {
+                for (let bi = 0; bi < buf.length; bi++) {
+                    const r = buf[bi];
+                    merged.push({
+                        text: r.text,
+                        color: r.color ?? MYSEN_CONFIG.timestampWordColor,
+                        at: r.at - startT,
+                        atSourceSec: r.at,
+                        lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
+                        mysenGroupedLine: true
+                    });
+                }
             }
             merged.push({ lineBreak: true });
         }
@@ -1123,7 +1293,7 @@ function scheduleMysenPlaybackEnd(audio) {
         mysenState._stopTimeoutId = setTimeout(() => {
             mysenState._stopTimeoutId = null;
             if (!mysenState.active) return;
-            stopMysenMode();
+            stopMysenMode({ naturalEnd: true });
         }, stopMs);
     };
 
@@ -1132,6 +1302,13 @@ function scheduleMysenPlaybackEnd(audio) {
     } else {
         audio.addEventListener('loadedmetadata', () => runSchedule(), { once: true });
     }
+}
+
+/** Reset plane material after MYSEN fade-out (opacity / transparent). */
+function restoreBackgroundVideoMeshMaterialAfterMysen() {
+    if (!backgroundVideoMesh?.material) return;
+    backgroundVideoMesh.material.opacity = 1;
+    backgroundVideoMesh.material.transparent = false;
 }
 
 /** Hide TOPKEK shell + inner instanced mesh (and optionally background video) for music-only modes. */
@@ -1415,6 +1592,7 @@ function initSceneAndLoad() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+    renderer.domElement.tabIndex = 0;
 
     // Orbit Controls (Free Cam)
     controls = new OrbitControls(camera, renderer.domElement);
@@ -1425,7 +1603,25 @@ function initSceneAndLoad() {
     controls.zoomSpeed = CONFIG.freeCamZoomSpeed;
     controls.enabled = false; // Start disabled
 
-    // Post-Processing (zależnie od performanceRuntime: SAO / bloom / CRT)
+    // Strobe: white plane in camera space — camera must be in scene for children to render.
+    strobeFlashMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            depthTest: false,
+            depthWrite: false,
+            toneMapped: false,
+            side: THREE.DoubleSide
+        })
+    );
+    strobeFlashMesh.renderOrder = 999;
+    strobeFlashMesh.visible = false;
+    strobeFlashMesh.name = 'strobeFlashPlane';
+    camera.add(strobeFlashMesh);
+    updateStrobeFlashTransform();
+    scene.add(camera);
+
+    // Post-Processing (SAO / bloom / invert przed CRT / opcjonalnie CRT / Output)
     const renderScene = new RenderPass(scene, camera);
     composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
@@ -1455,6 +1651,9 @@ function initSceneAndLoad() {
     } else {
         bloomPass = null;
     }
+
+    invertPass = new ShaderPass(InvertShader);
+    composer.addPass(invertPass);
 
     if (performanceRuntime.enableCrt) {
         crtPass = new ShaderPass(CRTShader);
@@ -1642,12 +1841,35 @@ function initSceneAndLoad() {
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('keydown', (e) => {
         if (e.code === 'Escape') {
+            if (vajbujState.active && !vajbujState.isStopping) {
+                e.preventDefault();
+                stopVajbujMode();
+                lastInteractionTime = Date.now();
+                return;
+            }
+            if (mysenState.active && !mysenState.isStopping) {
+                e.preventDefault();
+                stopMysenMode();
+                lastInteractionTime = Date.now();
+                return;
+            }
             if (isCinematic || isFreeCam) {
                 setCameraMode('manual');
                 lastInteractionTime = Date.now();
             }
+            return;
+        }
+        if (e.code === 'Space' && canUseStrobePianoSpace()) {
+            e.preventDefault();
+            strobeSpaceHeld = true;
         }
     });
+
+    window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') clearStrobeSpaceHeld();
+    });
+
+    window.addEventListener('blur', clearStrobeSpaceHeld);
 
     // Touch Events
     window.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -2566,7 +2788,29 @@ function createUI() {
     cameraSection.appendChild(hudItems);
     cameraHud.appendChild(cameraSection);
     cameraHud.appendChild(mouseModeWrap);
-    
+
+    if (!STROBE_CONFIG.disabled) {
+        const sectionStrobe = document.createElement('div');
+        sectionStrobe.className = 'controls-section';
+        const strobeTitle = document.createElement('div');
+        strobeTitle.className = 'controls-category-title';
+        strobeTitle.textContent = 'Stroboskop';
+        sectionStrobe.appendChild(strobeTitle);
+        const strobeItems = document.createElement('div');
+        strobeItems.className = 'controls-category-items';
+        const btnStrobe = document.createElement('button');
+        btnStrobe.id = 'btn-strobe-toggle';
+        btnStrobe.type = 'button';
+        btnStrobe.className = 'mode-btn' + (strobeActive ? ' active' : '');
+        btnStrobe.innerText = '> Stroboskop';
+        btnStrobe.title = 'Przycisk: ciągły stroboskop. Spacja (przytrzymanie, tryb piano): efekt tylko dopóki trzymasz klawisz — nie działa w polu tekstowym / na przycisku w fokusie. Ostrzeżenie: migające światło. Wyłącza się przy starcie VAJBUJ/MYSEN.';
+        btnStrobe.setAttribute('aria-pressed', strobeActive ? 'true' : 'false');
+        btnStrobe.onclick = () => setStrobeActive(!strobeActive);
+        strobeItems.appendChild(btnStrobe);
+        sectionStrobe.appendChild(strobeItems);
+        cameraHud.appendChild(sectionStrobe);
+    }
+
     // --- Glitch Volumetric ---
     const sectionGlitch = document.createElement('div');
     sectionGlitch.className = 'controls-section';
@@ -3167,6 +3411,13 @@ function createUI() {
         backdrop.onclick = close;
     };
     initPortfolioVimeoModal();
+
+    const initMusicShowcaseSpotifyWidget = () => {
+        const closeBtn = document.getElementById('music-showcase-spotify-close');
+        if (!closeBtn) return;
+        closeBtn.addEventListener('click', () => hideMusicShowcaseSpotifyWidget());
+    };
+    initMusicShowcaseSpotifyWidget();
 
     const initPortfolioDetailModal = () => {
         const modal = document.getElementById('portfolio-detail-modal');
@@ -4766,6 +5017,7 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     if (crtPass) crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
+    updateStrobeFlashTransform();
 }
 
 
@@ -4774,6 +5026,7 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!camera || !scene || !renderer) return;
+    const frameDelta = clock.getDelta();
     updatePerformanceHud(performance.now());
 
     updateVideoBasedLighting(performance.now());
@@ -4971,7 +5224,7 @@ function animate() {
             debugMesh.position.copy(_rayPlaneHit); // Update debug sphere
 
             // Calculate Mouse Velocity (not when portfolio / MYSEN active - no sim interaction)
-            if (!portfolioSceneActive && !mysenState.active) {
+            if (!isParticleMouseSimSuppressed()) {
                 const now = Date.now();
                 const dt = (now - lastMouseTime) / 1000;
                 if (dt > 0 && dt < 0.1) {
@@ -4985,13 +5238,12 @@ function animate() {
             mouseVelocity.set(0, 0, 0);
         }
 
-        const simTarget = (portfolioSceneActive || mysenState.active)
+        const simTarget = isParticleMouseSimSuppressed()
             ? _simFarSim.set(1000, 1000, 1000)
             : _rayPlaneHit;
 
         const time = Date.now() * 0.001;
-        const delta = clock.getDelta();
-        updateFxRuntime(time, delta);
+        updateFxRuntime(time, frameDelta);
 
         if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState && motionDesignState.heartMesh && motionDesignState.heartCubes.length > 0) {
             const psc = PORTFOLIO_SCENE_CONFIG;
@@ -5569,11 +5821,27 @@ function animate() {
         crtPass.uniforms['time'].value = Date.now() * 0.001;
     }
 
+    updateStrobeFlashTransform();
+    if ((strobeActive || strobeSpaceHeld) && invertPass && strobeFlashMesh) {
+        const hz = STROBE_CONFIG.hz;
+        const phase = Math.floor(performance.now() * 0.001 * hz * 2) & 1;
+        if (phase === 0) {
+            invertPass.uniforms['uInvert'].value = 1;
+            strobeFlashMesh.visible = false;
+        } else {
+            invertPass.uniforms['uInvert'].value = 0;
+            strobeFlashMesh.visible = true;
+        }
+    } else if (invertPass) {
+        invertPass.uniforms['uInvert'].value = 0;
+        if (strobeFlashMesh) strobeFlashMesh.visible = false;
+    }
+
     composer.render();
 
     // Update Vajbuj mode
-    updateVajbujMode(clock.getDelta());
-    updateMysenMode(clock.getDelta());
+    updateVajbujMode(frameDelta);
+    updateMysenMode(frameDelta);
 
     // Process background voxel generation queues (VAJBUJ + MYSEN)
     const runLyricGenQueue = (state) => {
@@ -5701,140 +5969,8 @@ function initVajbujMode() {
     }
 }
 
-function queueLyricVoxelPregeneration(lyrics, font, state, lyricsConfig, logLabel) {
-    const uniqueWords = new Set();
-    lyrics.forEach((item) => {
-        if (!item.lineBreak) {
-            const word = item.text;
-            const scale = item.scale || 1.0;
-            uniqueWords.add(`${word}§${scale}`);
-        }
-    });
-
-    const styleSlice = {
-        wordSize: lyricsConfig.wordSize,
-        wordHeight: lyricsConfig.wordHeight,
-        wordThickness: lyricsConfig.wordThickness
-    };
-
-    console.log(`[${logLabel}] Queuing ${uniqueWords.size} unique words for background generation...`);
-
-    uniqueWords.forEach((key) => {
-        const sep = key.indexOf('§');
-        const word = key.slice(0, sep);
-        const scale = parseFloat(key.slice(sep + 1));
-        const task = createVoxelGenerationTask(word, scale, font, state.voxelCache, styleSlice);
-        state.generationQueue.push(task);
-    });
-}
-
 function startBackgroundGeneration(font) {
     queueLyricVoxelPregeneration(VAJBUJ_CONFIG.lyrics, font, vajbujState, VAJBUJ_CONFIG, 'VAJBUJ');
-}
-
-function createVoxelGenerationTask(word, scale, font, voxelCache, styleSlice) {
-    // State for the task
-    let step = 0;
-    let width = 0;
-    let voxelMap = new Map();
-    let gx, gy, minX, maxX, minY, maxY;
-    let textGeo, mesh;
-    let scanRaycaster = new THREE.Raycaster();
-    const voxelSize = CONFIG.particleSize;
-
-    return () => {
-        // Step 0: Init Geometry
-        if (step === 0) {
-            // Check cache first
-            const cacheKey = `${word}_${scale}`;
-            if (voxelCache[cacheKey]) return true; // Already done
-
-            // Replacement map for Polish characters
-            const polishMap = {
-                'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
-                'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
-                '.': '', ',': '', '!': '', '?': ''
-            };
-            const displayWord = word.split('').map(char => polishMap[char] || char).join('');
-
-            textGeo = new TextGeometry(displayWord, {
-                font: font,
-                size: styleSlice.wordSize * scale,
-                height: styleSlice.wordHeight * scale,
-                curveSegments: 4,
-                bevelEnabled: false
-            });
-            textGeo.computeBoundingBox();
-            width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
-
-            mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
-            mesh.updateMatrixWorld(); // Important for raycaster
-
-            minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
-            maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
-            minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
-            maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
-
-            gx = minX;
-            gy = minY;
-            step = 1;
-            return false; // Not done
-        }
-
-        // Step 1: Voxelization Loop (Chunked)
-        if (step === 1) {
-            const scanDir = new THREE.Vector3(0, 0, -1);
-            let iterations = 0;
-            const maxIter = 50; // Check 50 columns per frame
-
-            while (gx <= maxX) {
-                while (gy <= maxY) {
-                    const px = gx * voxelSize;
-                    const py = gy * voxelSize;
-
-                    scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
-                    const intersects = scanRaycaster.intersectObject(mesh);
-
-                    if (intersects.length > 0) {
-                        for (let z = 0; z < styleSlice.wordThickness; z++) {
-                            const key = `${gx},${gy},${z}`;
-                            if (!voxelMap.has(key)) {
-                                voxelMap.set(key, { x: px, y: py, z: z * voxelSize });
-                            }
-                        }
-                    }
-                    gy++;
-                }
-                gy = minY; // Reset Y
-                gx++; // Next X
-
-                iterations++;
-                if (iterations > 10) { // Small chunk size inside loop, yielding to supervisor loop
-                    return false;
-                }
-            }
-
-            // Loop finished
-            step = 2;
-            return false; // Yield one last time before finalizing
-        }
-
-        // Step 2: Finalize
-        if (step === 2) {
-            const positions = Array.from(voxelMap.values()).map(v => new THREE.Vector3(v.x, v.y, v.z));
-
-            voxelCache[`${word}_${scale}`] = {
-                positions: positions,
-                width: width
-            };
-
-            // Cleanup
-            if (textGeo) textGeo.dispose();
-            // mesh doesn't own geometry in this scope, but textGeo is disposed.
-
-            return true; // DONE
-        }
-    };
 }
 
 function createMusicModeBackgroundCubes(state, cfg) {
@@ -5912,10 +6048,15 @@ function createMusicModeBackgroundCubes(state, cfg) {
 function startVajbujMode() {
     if (vajbujState.active) return;
 
+    setStrobeActive(false);
+    clearStrobeSpaceHeld();
+
+    hideMusicShowcaseSpotifyWidget();
     setMusicShowcaseMenuUiHidden(true);
     forceStopMysenSilent();
 
     introCameraFlyInActive = false;
+    ensureMusicShowcasePostprocessingBaseline();
 
     console.log('[VAJBUJ] Starting music video mode!');
     vajbujState.active = true;
@@ -5925,20 +6066,7 @@ function startVajbujMode() {
     vajbujState.completedLines = 0;
     vajbujState.displayedLines = [];
 
-    // Reset camera to starting position
-    CONFIG.animationMode = 'repulsion'; // Ensure we are in repulsion mode for the animation to work
-    isCinematic = false;
-    isFreeCam = false;
-    controls.enabled = false;
-    cameraAngle = 0;
-    cameraVerticalAngle = 0;
-    cameraRadius = CONFIG.initialZoom;
-    targetCameraAngle = 0;
-    targetCameraVerticalAngle = 0;
-    targetCameraRadius = CONFIG.initialZoom;
-    cameraFocusPoint.set(0, 0, 0);
-    camera.fov = 45;
-    camera.updateProjectionMatrix();
+    applyMusicShowcaseCameraPreset();
 
     // Clear any existing word meshes
     cleanupVajbujWords();
@@ -5996,7 +6124,7 @@ function startVajbujMode() {
     }, (duration - VAJBUJ_CONFIG.fadeOutDuration) * 1000);
 
     setTimeout(() => {
-        stopVajbujMode();
+        stopVajbujMode({ naturalEnd: true });
     }, duration * 1000);
 
     if (window.vajbujButton) window.vajbujButton.classList.add('vajbuj-active');
@@ -6034,17 +6162,10 @@ function fadeVisualOpacity(material, fromOpacity, toOpacity, duration) {
     tick();
 }
 
-/**
- * @param {'vajbuj'|'mysen'} timingKind — vajbuj uses wordTimings (frames); mysen uses `at` or wordTimesSec
- */
-function prepareMusicLyricWords(config, state, timingKind, lyricsSource) {
-    state.words = [];
-
+function collectLyricsWordRows(src) {
     const allWords = [];
     let currentLineIdx = 0;
     let wordInLineIdx = 0;
-    const src = lyricsSource || config.lyrics;
-
     src.forEach((item) => {
         if (item.lineBreak) {
             currentLineIdx++;
@@ -6057,22 +6178,18 @@ function prepareMusicLyricWords(config, state, timingKind, lyricsSource) {
             });
         }
     });
+    return { allWords, totalLines: currentLineIdx + 1 };
+}
 
+/** VAJBUJ: word timings as 25fps frames + optional wordTimings array. */
+function prepareVajbujLyricWords() {
+    const config = VAJBUJ_CONFIG;
+    const state = vajbujState;
+    state.words = [];
+    const { allWords, totalLines } = collectLyricsWordRows(config.lyrics);
     const totalWords = allWords.length;
-    const totalLines = currentLineIdx + 1;
     const startT = config.audioStartTime || 0;
-    let fragmentDuration;
-    if (timingKind === 'mysen') {
-        const endT = config.audioEndTime;
-        if (endT != null && Number.isFinite(endT) && endT > startT) {
-            fragmentDuration = endT - startT;
-        } else {
-            const d = state.audio?.duration;
-            fragmentDuration = (Number.isFinite(d) && d > startT) ? d - startT : 180;
-        }
-    } else {
-        fragmentDuration = config.audioEndTime - config.audioStartTime;
-    }
+    const fragmentDuration = config.audioEndTime - config.audioStartTime;
     const fps = 25;
 
     allWords.forEach((wordData, globalIdx) => {
@@ -6089,31 +6206,18 @@ function prepareMusicLyricWords(config, state, timingKind, lyricsSource) {
             textGeo.dispose();
         }
 
-        let assembledAtSeconds;
-        if (timingKind === 'vajbuj') {
-            let targetFrame;
-            if (config.wordTimings.length >= totalWords) {
-                targetFrame = config.wordTimings[globalIdx];
-            } else {
-                const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
-                const lineStartNormalized = wordData.lineIndex / lineCountCalc;
-                const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
-                const wordStagger = 12;
-                targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
-            }
-            targetFrame += 18;
-            assembledAtSeconds = (targetFrame / fps) + (config.lyricsStartDelay || 0);
+        let targetFrame;
+        if (config.wordTimings.length >= totalWords) {
+            targetFrame = config.wordTimings[globalIdx];
         } else {
-            if (Number.isFinite(wordData.at)) {
-                assembledAtSeconds = wordData.at + (config.lyricsStartDelay || 0);
-            } else if (config.wordTimesSec && config.wordTimesSec.length > globalIdx) {
-                assembledAtSeconds = config.wordTimesSec[globalIdx] + (config.lyricsStartDelay || 0);
-            } else {
-                const t = totalWords > 1 ? globalIdx / (totalWords - 1) : 0;
-                assembledAtSeconds = t * fragmentDuration * 0.85 + (config.lyricsStartDelay || 0);
-            }
+            const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
+            const lineStartNormalized = wordData.lineIndex / lineCountCalc;
+            const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
+            const wordStagger = 12;
+            targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
         }
-
+        targetFrame += 18;
+        const assembledAtSeconds = (targetFrame / fps) + (config.lyricsStartDelay || 0);
         const startSeconds = Math.max(0, assembledAtSeconds - config.wordAssemblyDuration);
 
         const atSrc = Number.isFinite(wordData.atSourceSec)
@@ -6133,20 +6237,90 @@ function prepareMusicLyricWords(config, state, timingKind, lyricsSource) {
     });
 }
 
+/** MYSEN: `at` / wordTimesSec / spread on fragment; uses merged lyric list. */
+function prepareMysenLyricWords(config, state, lyricsSource) {
+    state.words = [];
+    const src = lyricsSource || config.lyrics;
+    const { allWords } = collectLyricsWordRows(src);
+    const totalWords = allWords.length;
+    const startT = config.audioStartTime || 0;
+    const endT = config.audioEndTime;
+    let fragmentDuration;
+    if (endT != null && Number.isFinite(endT) && endT > startT) {
+        fragmentDuration = endT - startT;
+    } else {
+        const d = state.audio?.duration;
+        fragmentDuration = (Number.isFinite(d) && d > startT) ? d - startT : 180;
+    }
+
+    allWords.forEach((wordData, globalIdx) => {
+        if (loadedFontRegular) {
+            const textGeo = new TextGeometry(wordData.text, {
+                font: loadedFontRegular,
+                size: config.wordSize * (wordData.scale || 1.0),
+                height: config.wordHeight * (wordData.scale || 1.0),
+                curveSegments: 4,
+                bevelEnabled: false
+            });
+            textGeo.computeBoundingBox();
+            wordData.width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+            textGeo.dispose();
+        }
+
+        let assembledAtSeconds;
+        if (Number.isFinite(wordData.at)) {
+            assembledAtSeconds = wordData.at + (config.lyricsStartDelay || 0);
+        } else if (config.wordTimesSec && config.wordTimesSec.length > globalIdx) {
+            assembledAtSeconds = config.wordTimesSec[globalIdx] + (config.lyricsStartDelay || 0);
+        } else {
+            const t = totalWords > 1 ? globalIdx / (totalWords - 1) : 0;
+            assembledAtSeconds = t * fragmentDuration * 0.85 + (config.lyricsStartDelay || 0);
+        }
+
+        const asmDur =
+            Number.isFinite(wordData.assemblyDurationSec) && wordData.assemblyDurationSec > 0
+                ? wordData.assemblyDurationSec
+                : config.wordAssemblyDuration;
+        const startSeconds = Math.max(0, assembledAtSeconds - asmDur);
+
+        const atSrc = Number.isFinite(wordData.atSourceSec)
+            ? wordData.atSourceSec
+            : startT + (Number.isFinite(wordData.at) ? wordData.at : 0);
+
+        state.words.push({
+            ...wordData,
+            atSourceSec: atSrc,
+            startTime: startSeconds,
+            assembledTime: assembledAtSeconds,
+            state: 'waiting',
+            mesh: null,
+            cubes: [],
+            progress: 0
+        });
+    });
+}
+
 function prepareVajbujWords() {
-    prepareMusicLyricWords(VAJBUJ_CONFIG, vajbujState, 'vajbuj');
+    prepareVajbujLyricWords();
     const lineCount = vajbujState.words.length ? vajbujState.words[vajbujState.words.length - 1].lineIndex + 1 : 0;
     console.log(`[VAJBUJ] Prepared ${vajbujState.words.length} words in ${lineCount} lines.`);
 }
 
 function prepareMysenWords() {
     const eff = mysenState.mergedMysenConfig || MYSEN_CONFIG;
-    const merged = buildMergedMysenLyrics();
-    const lastIntro = lastFilledLineIndexInLyrics(eff.introLyrics || eff.lyrics);
-    mysenState.firstTimestampLineIndex = lastIntro >= 0 ? lastIntro + 1 : 6;
+    let merged;
+    if (mysenState.showcaseAnimationDoc) {
+        merged = lyricsArrayFromShowcaseDoc(mysenState.showcaseAnimationDoc);
+        const fts = mysenState.showcaseAnimationDoc.timing?.firstTimestampLineIndex;
+        mysenState.firstTimestampLineIndex = Number.isFinite(fts) ? fts : 99999;
+    } else {
+        merged = buildMergedMysenLyrics();
+        const lastIntro = lastFilledLineIndexInLyrics(eff.introLyrics || eff.lyrics);
+        mysenState.firstTimestampLineIndex = lastIntro >= 0 ? lastIntro + 1 : 6;
+        applyMysenWordAnimationToMergedLyrics(merged, mysenState.wordAnimationDoc?.overrides);
+    }
 
-    applyMysenWordAnimationToMergedLyrics(merged, mysenState.wordAnimationDoc?.overrides);
-    prepareMusicLyricWords(eff, mysenState, 'mysen', merged);
+    prepareMysenLyricWords(eff, mysenState, merged);
     queueMysenVoxelPregenForPreparedWords(mysenState, eff);
 
     const firstTs = mysenState.firstTimestampLineIndex;
@@ -6176,148 +6350,6 @@ function prepareMysenWords() {
 
     const lineCount = mysenState.words.length ? mysenState.words[mysenState.words.length - 1].lineIndex + 1 : 0;
     console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines (timestamp line ≥ ${mysenState.firstTimestampLineIndex}).`);
-}
-
-function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
-    const word = wordData.text;
-    const polishMap = {
-        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
-        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
-        '.': '', ',': '', '!': '', '?': ''
-    };
-
-    const displayWord = word.split('').map(char => polishMap[char] || char).join('');
-
-    const wordScale = wordData.scale || 1.0;
-    const voxelSize = CONFIG.particleSize;
-    const scatterRadius = voxelStyle.scatterRadius;
-
-    const cacheKey = `${word}_${wordScale}`;
-    let cubePositions = [];
-    let width = 0;
-
-    if (voxelCache && voxelCache[cacheKey]) {
-        cubePositions = voxelCache[cacheKey].positions;
-        width = voxelCache[cacheKey].width;
-    } else {
-        const textGeo = new TextGeometry(displayWord, {
-            font: font,
-            size: voxelStyle.wordSize * wordScale,
-            height: voxelStyle.wordHeight * wordScale,
-            curveSegments: 4,
-            bevelEnabled: false
-        });
-
-        textGeo.computeBoundingBox();
-        width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
-
-        const mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
-        const voxelMap = new Map();
-
-        const minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
-        const maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
-        const minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
-        const maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
-
-        const scanRaycaster = new THREE.Raycaster();
-        const scanDir = new THREE.Vector3(0, 0, -1);
-
-        for (let gx = minX; gx <= maxX; gx++) {
-            for (let gy = minY; gy <= maxY; gy++) {
-                const px = gx * voxelSize;
-                const py = gy * voxelSize;
-
-                scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
-                const intersects = scanRaycaster.intersectObject(mesh);
-
-                if (intersects.length > 0) {
-                    for (let z = 0; z < voxelStyle.wordThickness; z++) {
-                        const key = `${gx},${gy},${z}`;
-                        if (!voxelMap.has(key)) {
-                            voxelMap.set(key, {
-                                x: px,
-                                y: py,
-                                z: z * voxelSize
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        voxelMap.forEach(v => cubePositions.push(new THREE.Vector3(v.x, v.y, v.z)));
-
-        voxelCache[cacheKey] = {
-            positions: cubePositions,
-            width: width
-        };
-
-        textGeo.dispose();
-    }
-
-    const cubeGeo = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
-    const cubeMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        metalness: 0.3,
-        roughness: 0.7,
-        emissive: new THREE.Color(0xffffff).multiplyScalar(0.2),
-        transparent: true,
-        opacity: 1
-    });
-
-    const instancedMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubePositions.length);
-    instancedMesh.visible = false;
-
-    const initColor = new THREE.Color(0x050505);
-    for (let i = 0; i < cubePositions.length; i++) {
-        instancedMesh.setColorAt(i, initColor);
-    }
-
-    const cubes = cubePositions.map((pos) => {
-        const scatterPos = new THREE.Vector3(
-            pos.x + (Math.random() - 0.5) * scatterRadius * 2,
-            pos.y + (Math.random() - 0.5) * scatterRadius * 2 - 5,
-            pos.z + (Math.random() - 0.5) * scatterRadius
-        );
-
-        const delay = Math.pow(Math.random(), 3) * 0.7;
-
-        return {
-            targetPos: pos.clone(),
-            scatterPos: scatterPos,
-            currentPos: scatterPos.clone(),
-            currentScale: 0,
-            delay,
-            shouldOvershoot: Math.random() < 0.3,
-            overshootMagnitude: 0.3 + Math.random() * 0.4
-        };
-    });
-
-    // Center the word
-    const centerX = width / 2;
-    cubes.forEach(cube => {
-        cube.targetPos.x -= centerX;
-        cube.scatterPos.x -= centerX;
-        cube.currentPos.x -= centerX;
-    });
-
-    // textGeo.dispose(); // Removed to fix ReferenceError
-
-    return {
-        mesh: instancedMesh,
-        cubes: cubes,
-        width: width
-    };
-}
-
-function voxelStyleFromMusicConfig(config) {
-    return {
-        wordSize: config.wordSize,
-        wordHeight: config.wordHeight,
-        wordThickness: config.wordThickness,
-        scatterRadius: config.scatterRadius,
-        defaultWordColor: config.defaultWordColor
-    };
 }
 
 function maybeStartWordPulse(wordData, config) {
@@ -6352,6 +6384,13 @@ function getWordPulseScaleMul(wordData) {
     return 1 + (wordData._pulseScaleMax - 1) * p;
 }
 
+/** Spread phase duration for VAJBUJ path (no MYSEN_CONFIG fallback). */
+function getVajbujSpreadDurationSec(config) {
+    const v = config.spread?.durationSec;
+    if (Number.isFinite(v) && v > 0) return v;
+    return 1.35;
+}
+
 /** Mysen lyric timing uses wall `elapsed` from mode start; keep spread/vanish on same axis as `assembledTime` (not raw audio.currentTime, which can lag or differ with fallback clip). */
 function getMysenSpreadDurationSec(config) {
     const v = config.spread?.durationSec;
@@ -6366,24 +6405,45 @@ function getMysenApproxMediaSec(config, elapsed) {
     return startT + elapsed;
 }
 
-function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
-    const { consoleTag = 'MUSIC', enablePulse = false, mysenMode = false, deltaSec = 1 / 60 } = options;
+/**
+ * Shared voxel-lyric tick. VAJBUJ uses timestampLyricsStyle=false (no MYSEN-only fly/spread/vanish).
+ * MYSEN passes timestampLyricsStyle=true and mysenWallElapsedSec for intro/outro spread.
+ */
+function stepLyricWordsShared(state, config, elapsed, tempoMultiplier, options = {}) {
+    const {
+        consoleTag = 'MUSIC',
+        enablePulse = false,
+        deltaSec = 1 / 60,
+        timestampLyricsStyle = false,
+        firstTimestampLineIndex = 99999,
+        mysenWallElapsedSec = 0,
+        getSpreadDurationSec = getVajbujSpreadDurationSec
+    } = options;
+
     const tempColor = new THREE.Color();
     const asmEndCol = new THREE.Color();
     const asmStartCol = new THREE.Color();
     const vStyle = voxelStyleFromMusicConfig(config);
-    const firstTs = mysenState.firstTimestampLineIndex ?? 99999;
+    const firstTs = firstTimestampLineIndex;
+    const getSpreadDur = getSpreadDurationSec;
 
     state.words.forEach((wordData) => {
         if (wordData.state === 'done') return;
 
-        const wordScaleMul = wordData.assembledScale > 0 ? wordData.assembledScale : 1;
+        const kx = wordData._showcaseOx || 0;
+        const ky = wordData._showcaseOy || 0;
+        const kz = wordData._showcaseOz || 0;
+        const krX = wordData._showcaseRx || 0;
+        const krY = wordData._showcaseRy || 0;
+        const krZ = wordData._showcaseRz || 0;
+        const showKfMul = wordData._showcaseScaleMul > 0 ? wordData._showcaseScaleMul : 1;
+        const wordScaleMul = (wordData.assembledScale > 0 ? wordData.assembledScale : 1) * showKfMul;
 
         if (wordData.state === 'spreading' && wordData.mesh && wordData.cubes) {
             const introDur = config.introOutroSpread?.spreadDurationSec;
             const dur = wordData._introOutroSpread && Number.isFinite(introDur) && introDur > 0
                 ? introDur
-                : getMysenSpreadDurationSec(config);
+                : getSpreadDur(config);
             wordData._spreadT = (wordData._spreadT || 0) + deltaSec;
             const u = dur > 0 ? wordData._spreadT / dur : 1;
             const t = Math.min(1, Math.max(0, u));
@@ -6397,12 +6457,12 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                 const sx = cube.targetPos.x !== 0 ? Math.sign(cube.targetPos.x) : (i % 2 === 0 ? 1 : -1);
                 const sy = cube.targetPos.y !== 0 ? Math.sign(cube.targetPos.y) : (i % 3 === 0 ? 1 : -1);
                 dummy.position.set(
-                    cube.targetPos.x + sx * amp * 0.2 + px,
-                    cube.targetPos.y + sy * amp * 0.2 + py,
-                    cube.targetPos.z + pz
+                    cube.targetPos.x + sx * amp * 0.2 + px + kx,
+                    cube.targetPos.y + sy * amp * 0.2 + py + ky,
+                    cube.targetPos.z + pz + kz
                 );
                 dummy.scale.setScalar(pulseMul * (1 - t) * wordScaleMul);
-                dummy.rotation.set(0, 0, 0);
+                dummy.rotation.set(krX, krY, krZ);
                 dummy.updateMatrix();
                 wordData.mesh.setMatrixAt(i, dummy.matrix);
             });
@@ -6424,7 +6484,11 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                 wordData.width = voxelWord.width;
 
                 let lineX = 0;
-                const wordsInThisLine = state.words.filter(w => w.lineIndex === wordData.lineIndex);
+                const wordsInThisLine = state.words.filter(
+                    (w) =>
+                        w.lineIndex === wordData.lineIndex &&
+                        w.mysenSplitRow === wordData.mysenSplitRow
+                );
                 const currentWordIdxInLine = wordsInThisLine.indexOf(wordData);
 
                 for (let i = 0; i < currentWordIdxInLine; i++) {
@@ -6445,10 +6509,13 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
 
                 const startX = -totalLineWidth / 2;
                 wordData.posX = startX + lineX + (wordData.width / 2) + (wordData.offsetX || 0);
-                wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
+                let initShift = state.completedLines - wordData.lineIndex;
+                if (initShift < 0) initShift = 0;
+                wordData.posY =
+                    config.lyricsOffsetY + initShift * config.lineSpacing + (wordData.offsetY || 0);
                 wordData.posZ = wordData.offsetZ || 0;
 
-                const isTsWord = mysenMode && state === mysenState && wordData.lineIndex >= firstTs;
+                const isTsWord = timestampLyricsStyle && wordData.lineIndex >= firstTs;
                 const groupedTsLine = wordData.mysenGroupedLine === true;
                 const hasFixedSpawn =
                     Number.isFinite(wordData.spawnX) &&
@@ -6502,12 +6569,17 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
             let shiftCount = state.completedLines - wordData.lineIndex;
             if (shiftCount < 0) shiftCount = 0;
 
-            const targetLineY = config.lyricsOffsetY + shiftCount * config.lineSpacing;
+            const targetLineY =
+                config.lyricsOffsetY +
+                shiftCount * config.lineSpacing +
+                (wordData.offsetY || 0);
 
-            if (wordData.posY === undefined) wordData.posY = config.lyricsOffsetY;
+            if (wordData.posY === undefined) {
+                wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
+            }
             wordData.posY += (targetLineY - wordData.posY) * 0.1;
 
-            const isTsWord = mysenMode && state === mysenState && wordData.lineIndex >= firstTs;
+            const isTsWord = timestampLyricsStyle && wordData.lineIndex >= firstTs;
             if (isTsWord && wordData._railX != null && wordData.state === 'assembling') {
                 const flyBlend = wordData.progress ?? 0;
                 wordData.posX = THREE.MathUtils.lerp(wordData._spawnX, wordData._railX, flyBlend);
@@ -6522,7 +6594,10 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
 
             if (wordData.state === 'assembling') {
                 const assemblyElapsed = elapsed - wordData.startTime;
-                const assemblyDuration = config.wordAssemblyDuration;
+                const assemblyDuration =
+                    Number.isFinite(wordData.assemblyDurationSec) && wordData.assemblyDurationSec > 0
+                        ? wordData.assemblyDurationSec
+                        : config.wordAssemblyDuration;
                 wordData.progress = Math.min(assemblyElapsed / assemblyDuration, 1);
 
                 const hexAsmEnd =
@@ -6579,12 +6654,12 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                         }
 
                         dummy.position.set(
-                            cube.currentPos.x + (wordData.posX || 0) + jx,
-                            cube.currentPos.y + (wordData.posY || 0) + jy,
-                            cube.currentPos.z + (wordData.posZ || 0) + jz
+                            cube.currentPos.x + (wordData.posX || 0) + jx + kx,
+                            cube.currentPos.y + (wordData.posY || 0) + jy + ky,
+                            cube.currentPos.z + (wordData.posZ || 0) + jz + kz
                         );
                         dummy.scale.setScalar(cube.currentScale * pulseMul * wordScaleMul);
-                        dummy.rotation.set(0, 0, 0);
+                        dummy.rotation.set(krX, krY, krZ);
                         dummy.updateMatrix();
                         wordData.mesh.setMatrixAt(i, dummy.matrix);
                     });
@@ -6605,10 +6680,9 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                     }
 
                     const vanishAtMedia = wordData.lineVanishAtSourceSec;
-                    const spreadDur = getMysenSpreadDurationSec(config);
+                    const spreadDur = getSpreadDur(config);
                     const goSpreadTs =
-                        mysenMode &&
-                        state === mysenState &&
+                        timestampLyricsStyle &&
                         isTsWord &&
                         spreadDur > 0 &&
                         !Number.isFinite(vanishAtMedia);
@@ -6621,15 +6695,20 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                     }
                 }
             } else if (wordData.mesh && wordData.cubes) {
-                if (wordData.state === 'assembled' && mysenMode && state === mysenState && wordData.lineIndex < firstTs) {
+                if (
+                    wordData.state === 'assembled' &&
+                    timestampLyricsStyle &&
+                    wordData.lineIndex < firstTs &&
+                    !wordData.mysenPersistentOnScreen
+                ) {
                     const ios = config.introOutroSpread;
                     if (
                         ios &&
                         ios.enabled !== false &&
-                        (getMysenSpreadDurationSec(config) > 0 ||
+                        (getSpreadDur(config) > 0 ||
                             (Number.isFinite(ios.spreadDurationSec) && ios.spreadDurationSec > 0))
                     ) {
-                        const wall = (Date.now() - mysenState.startTime) / 1000;
+                        const wall = mysenWallElapsedSec;
                         const d = ios.delaySec ?? 4;
                         const st = ios.lineStaggerSec ?? 0.35;
                         if (wall >= d + wordData.lineIndex * st) {
@@ -6641,11 +6720,10 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                 }
                 if (
                     wordData.state === 'assembled' &&
-                    mysenMode &&
-                    state === mysenState &&
+                    timestampLyricsStyle &&
                     isTsWord &&
                     Number.isFinite(wordData.lineVanishAtSourceSec) &&
-                    getMysenSpreadDurationSec(config) > 0
+                    getSpreadDur(config) > 0
                 ) {
                     const mediaSec = getMysenApproxMediaSec(config, elapsed);
                     if (mediaSec >= wordData.lineVanishAtSourceSec) {
@@ -6656,12 +6734,12 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                 }
                 wordData.cubes.forEach((cube, i) => {
                     dummy.position.set(
-                        cube.targetPos.x + (wordData.posX || 0) + jx,
-                        cube.targetPos.y + (wordData.posY || 0) + jy,
-                        cube.targetPos.z + (wordData.posZ || 0) + jz
+                        cube.targetPos.x + (wordData.posX || 0) + jx + kx,
+                        cube.targetPos.y + (wordData.posY || 0) + jy + ky,
+                        cube.targetPos.z + (wordData.posZ || 0) + jz + kz
                     );
                     dummy.scale.setScalar(pulseMul * wordScaleMul);
-                    dummy.rotation.set(0, 0, 0);
+                    dummy.rotation.set(krX, krY, krZ);
                     dummy.updateMatrix();
                     wordData.mesh.setMatrixAt(i, dummy.matrix);
                 });
@@ -6695,10 +6773,35 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
     }
 }
 
+function stepVajbujLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
+    stepLyricWordsShared(state, config, elapsed, tempoMultiplier, {
+        ...options,
+        timestampLyricsStyle: false,
+        firstTimestampLineIndex: 99999,
+        mysenWallElapsedSec: 0,
+        getSpreadDurationSec: getVajbujSpreadDurationSec
+    });
+}
+
+function stepMysenLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
+    const firstTs = state.firstTimestampLineIndex ?? 99999;
+    stepLyricWordsShared(state, config, elapsed, tempoMultiplier, {
+        ...options,
+        timestampLyricsStyle: true,
+        firstTimestampLineIndex: firstTs,
+        mysenWallElapsedSec: (Date.now() - state.startTime) / 1000,
+        getSpreadDurationSec: getMysenSpreadDurationSec
+    });
+}
+
 function updateVajbujMode(delta) {
     if (!vajbujState.active) {
-        if (VAJBUJ_CONFIG.enabled && VAJBUJ_CONFIG.autoTrigger &&
-            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout) {
+        if (
+            !isVajbujAutoStartBlocked() &&
+            VAJBUJ_CONFIG.enabled &&
+            VAJBUJ_CONFIG.autoTrigger &&
+            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout
+        ) {
             startVajbujMode();
         }
         return;
@@ -6713,7 +6816,7 @@ function updateVajbujMode(delta) {
         tempoMultiplier = VAJBUJ_CONFIG.slowPhaseSpeed;
     }
 
-    stepMusicLyricWords(vajbujState, VAJBUJ_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'VAJBUJ', enablePulse: false });
+    stepVajbujLyricWords(vajbujState, VAJBUJ_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'VAJBUJ', enablePulse: false });
 }
 
 function updateMysenMode(delta) {
@@ -6739,12 +6842,75 @@ function updateMysenMode(delta) {
         backgroundVideoEl.playbackRate = r0 + (r1 - r0) * Math.min(1, progressNormalized);
     }
 
-    stepMusicLyricWords(mysenState, eff, elapsed, tempoMultiplier, {
+    const bgFade = MYSEN_CONFIG.mysenBackgroundVideoFadeOut;
+    if (
+        MYSEN_CONFIG.showBackgroundVideoDuringMysen &&
+        backgroundVideoMesh &&
+        backgroundVideoMesh.visible &&
+        backgroundVideoMesh.material &&
+        bgFade &&
+        bgFade.enabled !== false
+    ) {
+        const fo = bgFade;
+        const t0 = Number.isFinite(fo.fadeStartSec) ? fo.fadeStartSec : 60;
+        const startOp = Number.isFinite(fo.startOpacity)
+            ? Math.min(1, Math.max(0, fo.startOpacity))
+            : 1;
+        const endOp = Number.isFinite(fo.endOpacity)
+            ? Math.min(1, Math.max(0, fo.endOpacity))
+            : 0;
+        let opacity = startOp;
+        if (elapsed >= t0 && fragmentDuration > t0) {
+            const span = fragmentDuration - t0;
+            const u = Math.min(1, Math.max(0, (elapsed - t0) / span));
+            opacity = startOp + (endOp - startOp) * u;
+        }
+        backgroundVideoMesh.material.opacity = opacity;
+        backgroundVideoMesh.material.transparent = opacity < 0.999;
+    }
+
+    if (mysenState.showcaseAnimationDoc) {
+        applyShowcaseTransformKeyframes(mysenState, mysenState.showcaseAnimationDoc, elapsed);
+    }
+
+    stepMysenLyricWords(mysenState, eff, elapsed, tempoMultiplier, {
         consoleTag: 'MYSEN',
         enablePulse: true,
-        mysenMode: true,
         deltaSec: delta
     });
+}
+
+function applyMusicShowcaseCameraPreset() {
+    const z = computeMusicShowcaseCameraResetValues(CONFIG);
+    CONFIG.animationMode = z.animationMode;
+    isCinematic = z.isCinematic;
+    isFreeCam = z.isFreeCam;
+    controls.enabled = z.controlsEnabled;
+    cameraAngle = z.cameraAngle;
+    cameraVerticalAngle = z.cameraVerticalAngle;
+    cameraRadius = z.cameraRadius;
+    targetCameraAngle = z.targetCameraAngle;
+    targetCameraVerticalAngle = z.targetCameraVerticalAngle;
+    targetCameraRadius = z.targetCameraRadius;
+    cameraFocusPoint.set(z.focusX, z.focusY, z.focusZ);
+    camera.fov = z.cameraFov;
+    camera.updateProjectionMatrix();
+}
+
+function getPostprocessingPassBundle() {
+    return { bloomPass, saoPass, crtPass };
+}
+
+function ensureMusicShowcasePostprocessingBaseline() {
+    if (_musicShowcasePostSnap != null) return;
+    _musicShowcasePostSnap = capturePostprocessingSnapshot(getPostprocessingPassBundle());
+}
+
+function tryReleaseMusicShowcasePostprocessingBaseline() {
+    if (!vajbujState.active && !mysenState.active && _musicShowcasePostSnap) {
+        restorePostprocessingSnapshot(getPostprocessingPassBundle(), _musicShowcasePostSnap);
+        _musicShowcasePostSnap = null;
+    }
 }
 
 function finalizeVajbujCleanup() {
@@ -6770,6 +6936,16 @@ function finalizeVajbujCleanup() {
     vajbujState.isStopping = false;
     vajbujState.lastActivityTime = Date.now();
     setMusicShowcaseMenuUiHidden(false);
+    tryReleaseMusicShowcasePostprocessingBaseline();
+
+    const showSpotify = vajbujState.pendingSpotifyWidgetAfterFinalize;
+    vajbujState.pendingSpotifyWidgetAfterFinalize = false;
+    const spSrc = VAJBUJ_CONFIG.originalTrackSpotifyEmbedSrc;
+    if (showSpotify && spSrc) {
+        requestAnimationFrame(() => {
+            showMusicShowcaseSpotifyWidget(spSrc, VAJBUJ_CONFIG.originalTrackSpotifyWidgetTitle);
+        });
+    }
 }
 
 function forceStopVajbujSilent() {
@@ -6790,12 +6966,16 @@ function forceStopVajbujSilent() {
     cleanupVajbujWords();
     vajbujState.active = false;
     vajbujState.isStopping = false;
+    vajbujState.pendingSpotifyWidgetAfterFinalize = false;
     if (window.vajbujButton) window.vajbujButton.classList.remove('vajbuj-active');
+    tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
-function stopVajbujMode() {
+function stopVajbujMode(opts = {}) {
     if (vajbujState.isStopping) return;
     if (!vajbujState.active) return;
+
+    vajbujState.pendingSpotifyWidgetAfterFinalize = opts.naturalEnd === true;
 
     console.log('[VAJBUJ] Initiating smooth shutdown');
     vajbujState.isStopping = true;
@@ -6861,11 +7041,22 @@ function finalizeMysenCleanup() {
     if (backgroundVideoEl) {
         applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
     }
+    restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
     if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
     setMusicShowcaseMenuUiHidden(false);
+    tryReleaseMusicShowcasePostprocessingBaseline();
+
+    const showSpotifyM = mysenState.pendingSpotifyWidgetAfterFinalize;
+    mysenState.pendingSpotifyWidgetAfterFinalize = false;
+    const spSrcM = MYSEN_CONFIG.originalTrackSpotifyEmbedSrc;
+    if (showSpotifyM && spSrcM) {
+        requestAnimationFrame(() => {
+            showMusicShowcaseSpotifyWidget(spSrcM, MYSEN_CONFIG.originalTrackSpotifyWidgetTitle);
+        });
+    }
 }
 
 function forceStopMysenSilent() {
@@ -6886,6 +7077,7 @@ function forceStopMysenSilent() {
     cleanupMysenWords();
     mysenState.active = false;
     mysenState.isStopping = false;
+    mysenState.pendingSpotifyWidgetAfterFinalize = false;
     if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
         setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
         mysenState.savedBgSrcForMysen = null;
@@ -6893,10 +7085,12 @@ function forceStopMysenSilent() {
     if (backgroundVideoEl) {
         applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
     }
+    restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
     if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
+    tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
 function createMysenAudioElement() {
@@ -6974,12 +7168,47 @@ function initMysenMode() {
             });
     }
 
+    mysenState.showcaseAnimationDoc = null;
+    mysenState._showcaseAnimationLoadPromise = Promise.resolve();
+    if (MYSEN_CONFIG.showcaseAnimationEnabled && MYSEN_CONFIG.showcaseAnimationUrl) {
+        const url = MYSEN_CONFIG.showcaseAnimationUrl;
+        mysenState._showcaseAnimationLoadPromise = fetch(url)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((json) => {
+                if (!json || typeof json !== 'object') {
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                const v = validateShowcaseAnimationDoc(json);
+                if (!v.ok) {
+                    console.warn('[MYSEN] Showcase animation JSON invalid:', v.error);
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                mysenState.showcaseAnimationDoc = v.doc;
+                console.log('[MYSEN] Showcase animation document loaded:', url);
+                if (loadedFontRegular) {
+                    const lyr = lyricsArrayFromShowcaseDoc(v.doc);
+                    const cfg = { ...MYSEN_CONFIG, ...(v.doc.style || {}) };
+                    queueLyricVoxelPregeneration(lyr, loadedFontRegular, mysenState, cfg, 'MYSEN-showcase');
+                }
+            })
+            .catch((e) => {
+                console.warn('[MYSEN] Showcase animation fetch failed:', e);
+                mysenState.showcaseAnimationDoc = null;
+            });
+    }
+
     console.log('[MYSEN] Mode initialized.');
 }
 
 async function startMysenMode() {
     if (mysenState.active) return;
 
+    setStrobeActive(false);
+    clearStrobeSpaceHeld();
+
+    hideMusicShowcaseSpotifyWidget();
     setMusicShowcaseMenuUiHidden(true);
     forceStopVajbujSilent();
 
@@ -6988,11 +7217,17 @@ async function startMysenMode() {
     try {
         await ensureMysenTimestampsLoaded();
         await ensureMysenWordAnimationLoaded();
+        await mysenState._showcaseAnimationLoadPromise;
     } catch (e) {
         setMusicShowcaseMenuUiHidden(false);
+        tryReleaseMusicShowcasePostprocessingBaseline();
         throw e;
     }
     mysenState.mergedMysenConfig = buildMysenEffectiveConfig();
+    if (mysenState.showcaseAnimationDoc) {
+        mergeShowcaseStyleIntoConfig(mysenState.mergedMysenConfig, mysenState.showcaseAnimationDoc);
+    }
+    ensureMusicShowcasePostprocessingBaseline();
 
     console.log('[MYSEN] Starting remix mode');
     clearMysenPlaybackTimers();
@@ -7004,19 +7239,7 @@ async function startMysenMode() {
     mysenState.completedLines = 0;
     mysenState.displayedLines = [];
 
-    CONFIG.animationMode = 'repulsion';
-    isCinematic = false;
-    isFreeCam = false;
-    controls.enabled = false;
-    cameraAngle = 0;
-    cameraVerticalAngle = 0;
-    cameraRadius = CONFIG.initialZoom;
-    targetCameraAngle = 0;
-    targetCameraVerticalAngle = 0;
-    targetCameraRadius = CONFIG.initialZoom;
-    cameraFocusPoint.set(0, 0, 0);
-    camera.fov = 45;
-    camera.updateProjectionMatrix();
+    applyMusicShowcaseCameraPreset();
 
     cleanupMysenWords();
     prepareMysenWords();
@@ -7025,6 +7248,8 @@ async function startMysenMode() {
         mysenState.savedBgSrcForMysen = activeBackgroundVideoSource?.src ?? null;
         setBackgroundVideoBySrc(MYSEN_CONFIG.mysenBackgroundVideoSrc);
     }
+
+    restoreBackgroundVideoMeshMaterialAfterMysen();
 
     setMainTopkekSceneVisible(false, { hideBackgroundVideo: mysenHideBackgroundVideoWhileActive() });
 
@@ -7075,9 +7300,11 @@ async function startMysenMode() {
     if (window.mysenButton) window.mysenButton.classList.add('mysen-active');
 }
 
-function stopMysenMode() {
+function stopMysenMode(opts = {}) {
     if (mysenState.isStopping) return;
     if (!mysenState.active) return;
+
+    mysenState.pendingSpotifyWidgetAfterFinalize = opts.naturalEnd === true;
 
     console.log('[MYSEN] Initiating smooth shutdown');
     mysenState.isStopping = true;

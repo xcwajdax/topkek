@@ -462,6 +462,14 @@ export const VAJBUJ_CONFIG = {
     fadeInDuration: 1.5, // seconds
     fadeOutDuration: 1.5, // seconds
 
+    /**
+     * Po naturalnym końcu fragmentu (nie po `vajbuj stop`): pływający embed Spotify z oryginałem.
+     * Pełny adres iframe, np. https://open.spotify.com/embed/track/TRACK_ID?utm_source=generator — `null` wyłącza.
+     */
+    originalTrackSpotifyEmbedSrc: null,
+    /** Nagłówek panelu (widoczny nad playerem). */
+    originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
+
     // Lyrics - each object can have custom properties
     lyrics: [
         { text: "Podchodzę", color: 0xffffff, offsetX: 0, offsetY: 0 },
@@ -585,12 +593,19 @@ export const MYSEN_CONFIG = {
     /** Must exist on the static server (same origin). 404 → see audioFileFallback. */
     audioFile: 'ASSETS/mysen/mysen-remix.mp3',
     /** Used when audioFile fails (missing file / 404). Set null to disable. Often VAJBUJ clip until remix is in ASSETS/mysen/. */
-    audioFileFallback: 'VAJBUJ_TRIMMED.mp3',
+    audioFileFallback: null,
     audioStartTime: 0,
     /** Absolute end time on the media timeline (seconds). Use `null` to play from audioStartTime to the natural end of the file (`audio.duration`). A finite number trims like a short clip. */
     audioEndTime: null,
     fadeInDuration: 1.5,
     fadeOutDuration: 1.5,
+
+    /**
+     * Po naturalnym końcu odtwarzanego fragmentu (nie po `/mysen stop`): embed Spotify z oryginałem utworu.
+     * Pełny `src` iframe (jak w VAJBUJ_CONFIG); `null` wyłącza widget.
+     */
+    originalTrackSpotifyEmbedSrc: null,
+    originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
 
     /**
      * When true, keep the background video plane visible during MYSEN (e.g. torus). When false, uses hideBackgroundVideo.
@@ -609,6 +624,17 @@ export const MYSEN_CONFIG = {
         end: 0.35
     },
 
+    /**
+     * Gdy `showBackgroundVideoDuringMysen`: od `fadeStartSec` (sekundy od startu trybu, ta sama oś co `elapsed`)
+     * płaszczyzna wideo tła płynnie przechodzi z `startOpacity` do `endOpacity` aż do końca odtwarzanego fragmentu.
+     */
+    mysenBackgroundVideoFadeOut: {
+        enabled: true,
+        fadeStartSec: 60,
+        startOpacity: 1,
+        endOpacity: 0
+    },
+
     /** Fetch and append word timings (skips lines labeled Muzyka). */
     timestampLyricsEnabled: true,
     timestampLyricsUrl: 'ASSETS/mysen/mysen_timestamps.txt',
@@ -619,6 +645,13 @@ export const MYSEN_CONFIG = {
     wordAnimationUrl: 'ASSETS/mysen/mysen-word-animation.json',
 
     /**
+     * Gdy `showcaseAnimationEnabled` i ustawiony `showcaseAnimationUrl`: fetch JSON v1 (`schemaVersion` + `adapter: voxelLyricsMysen`)
+     * zastępuje merge intro + timestamp — słowa i klucze z dokumentu. Zob. `tools/README.md`.
+     */
+    showcaseAnimationEnabled: false,
+    showcaseAnimationUrl: null,
+
+    /**
      * Grupowanie słów z `mysen_timestamps.txt` w jeden wiersz (bez lotu z frustum), znikanie całej linii przy `lineVanishAtMediaSec` (sekundy na osi pliku audio).
      * Słowa spoza przedziałów `tMin`–`tMax`: jedno słowo = jeden wiersz; przy `seededRandomFly` spawn jest deterministyczny per słowo (powtarzalny).
      */
@@ -626,8 +659,28 @@ export const MYSEN_CONFIG = {
         enabled: true,
         seededRandomFly: true,
         groups: [
-            { tMin: 23.7, tMax: 30.36, lineVanishAtMediaSec: 31.5 },
-            { tMin: 31.84, tMax: 38.7, lineVanishAtMediaSec: 41.0 }
+            {
+                tMin: 23.7,
+                tMax: 30.36,
+                lineVanishAtMediaSec: 31.5,
+                /**
+                 * Dwa podwiersze w jednym logicznym wierszu (wspólne znikanie): najpierw N słów z pliku
+                 * timestampów na „szynę” z offsetem, potem kolejne M — bez lineBreak między nimi (jeden lineIndex).
+                 */
+                splitLines: [
+                    { wordCount: 4, offsetX: -1.45, offsetY: 0.62 },
+                    { wordCount: 4, offsetX: 1.35, offsetY: -0.28 }
+                ]
+            },
+            {
+                tMin: 31.84,
+                tMax: 38.7,
+                lineVanishAtMediaSec: 41.0,
+                splitLines: [
+                    { wordCount: 4, offsetX: -1.05, offsetY: 0.22 },
+                    { wordCount: 4, offsetX: 1.55, offsetY: -0.58 }
+                ]
+            }
         ]
     },
 
@@ -659,11 +712,18 @@ export const MYSEN_CONFIG = {
 
     /** Intro only (merged at runtime with timestamp words). Pierwsza linia: tytuł; TOPKEK mniejszy niż domyślny rozmiar słów. */
     introLyrics: [
-        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22 },
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22, mysenPersistentOnScreen: true },
         { lineBreak: true },
-        { text: 'TOPKEK', color: 0xffffff, at: 0.52, scale: 0.72 },
+        {
+            text: 'TOPKEK',
+            color: 0xffffff,
+            at: 0.52,
+            scale: 0.72,
+            /** Nie bierze udziału w introOutroSpread — zostaje na scenie podczas zwrotek. */
+            mysenPersistentOnScreen: true
+        },
         { lineBreak: true },
-        { text: 'reimagined', color: 0xaaccff, at: 0.78 }
+        { text: 'reimagined', color: 0xaaccff, at: 0.78, mysenPersistentOnScreen: true }
     ],
 
     /**
@@ -671,11 +731,17 @@ export const MYSEN_CONFIG = {
      * Runtime prepare uses introLyrics + timestamp file; this fallback lists intro for pregen queue before fetch completes.
      */
     lyrics: [
-        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22 },
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22, mysenPersistentOnScreen: true },
         { lineBreak: true },
-        { text: 'TOPKEK', color: 0xffffff, at: 0.52, scale: 0.72 },
+        {
+            text: 'TOPKEK',
+            color: 0xffffff,
+            at: 0.52,
+            scale: 0.72,
+            mysenPersistentOnScreen: true
+        },
         { lineBreak: true },
-        { text: 'reimagined', color: 0xaaccff, at: 0.78 }
+        { text: 'reimagined', color: 0xaaccff, at: 0.78, mysenPersistentOnScreen: true }
     ],
 
     /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
@@ -762,6 +828,19 @@ export const SHADER_CONFIG = {
 
 };
 
+/** Stroboskop: naprzemienna inwersja kolorów (postprocess) i biały quad przed kamerą (scena). */
+export const STROBE_CONFIG = {
+    /** Liczba pełnych cykli (faza inwersji + faza białego) na sekundę. */
+    hz: IS_MOBILE ? 4 : 6,
+    enabledByDefault: false,
+    /** Gdy true — brak UI i brak włączenia efektu (np. mobile / photosensitivity). */
+    disabled: IS_MOBILE,
+    /** Odległość płaszczyzny od kamery w przestrzeni kamery (oś -Z). */
+    flashDistance: 0.35,
+    /** Spacja w trybie „piano”: efekt tylko przy trzymanym klawiszu (desktop). */
+    pianoSpaceKey: !IS_MOBILE
+};
+
 /** Terminal shell UI (bottom of #right-panel): prompt, log limits, welcome text — no logic. */
 export const TERMINAL_CONFIG = {
     maxLogLines: 200,
@@ -798,8 +877,8 @@ export const TERMINAL_HELP_LINES_COMPACT = [
     '/help // Short list. ex: /help',
     '/help full // Every command line + FX aliases. ex: /help full',
     '/clear // Clears console log. ex: /clear',
-    '/vajbuj [start|stop] // VAJBUJ mode. ex: /vajbuj start',
-    '/mysen [start|stop] // MYSEN remix mode. ex: /mysen start',
+    '/vajbuj [start|stop] // VAJBUJ mode. Esc = stop. ex: /vajbuj start',
+    '/mysen [start|stop] // MYSEN remix mode. Esc = stop. ex: /mysen start',
     '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
     '/postproc <status> // Bloom / SAO / CRT + fake GI (video IBL). ex: /postproc status',
     '/fakegi <on|off|status> // Wideo jako fake GI (PMREM + hemisphere). ex: /fakegi status',
@@ -817,8 +896,8 @@ export const TERMINAL_HELP_LINES_FULL = [
     '/help // Short list. ex: /help',
     '/help full // This full list. ex: /help full',
     '/clear // Clears console log. ex: /clear',
-    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode. ex: /vajbuj start',
-    '/mysen [start|stop] // Starts/stops MYSEN remix mode (hides TOPKEK letters). ex: /mysen start',
+    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode; Esc interrupts like stop. ex: /vajbuj start',
+    '/mysen [start|stop] // Starts/stops MYSEN remix mode; Esc interrupts like stop. ex: /mysen start',
     '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
     '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
     '/crt <on|off> // Toggles CRT pass. ex: /crt off',

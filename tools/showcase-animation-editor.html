@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOPKEK — Showcase animation editor</title>
+    <link rel="stylesheet" href="./showcase-animation-editor.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <header class="editor-toolbar">
+        <strong>Showcase JSON</strong>
+        <div class="editor-file-slot">
+            <input type="file" id="audio-file" class="editor-file-input" accept="audio/*" />
+            <label for="audio-file" class="editor-choose-file">Audio</label>
+            <span class="editor-file-name" id="audio-file-name" aria-live="polite"></span>
+        </div>
+        <button type="button" class="editor-chrome-btn" id="btn-play">Play</button>
+        <button type="button" class="editor-chrome-btn" id="btn-pause">Pause</button>
+        <div class="editor-file-slot">
+            <input type="file" id="import-project" class="editor-file-input" accept="application/json,.json" />
+            <label for="import-project" class="editor-choose-file">Wczytaj projekt</label>
+            <span class="editor-file-name" id="import-project-name" aria-live="polite"></span>
+        </div>
+        <button type="button" class="editor-chrome-btn" id="btn-export">Pobierz JSON</button>
+        <button type="button" class="editor-chrome-btn" id="btn-copy">Kopiuj JSON</button>
+        <span class="status-line" id="time-display">t = 0.00 s</span>
+        <span class="status-line editor-hint" title="Ścieżka względem rootu serwera (topkek/)"
+            >Auto: <code>?doc=ASSETS/mysen/showcase-animation.sample.json</code> lub <code>MYSEN_CONFIG</code> gdy showcase włączony; <code>?noautoload=1</code> — bez fetch z configu</span>
+        <label>audioStart <input type="number" id="inp-audio-start" value="0" step="0.01" /></label>
+        <label>firstTsIdx <input type="number" id="inp-first-ts" value="99999" step="1" /></label>
+    </header>
+
+    <div class="editor-main">
+        <aside class="editor-panel editor-scroll">
+            <h2>Słowa</h2>
+            <button type="button" id="btn-add-word">+ Słowo</button>
+            <button type="button" id="btn-add-break">+ Nowa linia</button>
+            <button type="button" id="btn-del-item">Usuń zaznaczone</button>
+            <ul class="word-list editor-scroll" id="word-list"></ul>
+        </aside>
+
+        <div id="preview-wrap">
+            <div id="preview-canvas-container"></div>
+            <div class="timeline-bar" id="timeline-bar" title="Klik = seek">
+                <div class="timeline-markers" id="timeline-markers"></div>
+                <div class="timeline-playhead" id="timeline-playhead"></div>
+            </div>
+        </div>
+
+        <aside class="editor-panel editor-scroll">
+            <h2>Właściwości</h2>
+            <div class="prop-grid" id="prop-panel">
+                <label>id</label>
+                <input type="text" id="prop-id" class="editor-hud-input" />
+                <label>text</label>
+                <input type="text" id="prop-text" class="editor-hud-input" />
+                <label>at (s)</label>
+                <input type="number" id="prop-at" class="editor-hud-input" step="0.01" />
+                <label>color (#hex)</label>
+                <input type="text" id="prop-color" class="editor-hud-input" placeholder="ffffff" />
+                <label>scale</label>
+                <input type="number" id="prop-scale" class="editor-hud-input" step="0.05" min="0.1" />
+                <h3 class="prop-subheading">Pojawianie / znikanie</h3>
+                <label>lot (timestamp)</label>
+                <select id="prop-fly-mode" class="editor-hud-input">
+                    <option value="default">domyślny (timestamp)</option>
+                    <option value="rail">tylko szyna</option>
+                    <option value="fixed">punkt startowy (spawn)</option>
+                </select>
+                <label>spawn x,y,z</label>
+                <input type="text" id="prop-spawn" class="editor-hud-input" placeholder="20, 6, 0" title="Gdy tryb: punkt startowy" />
+                <label>znikanie (media s)</label>
+                <input type="number" id="prop-vanish-media" class="editor-hud-input" step="0.01" placeholder="pusty = brak" title="Oś pliku audio; puste = domyślne zachowanie MYSEN" />
+                <button type="button" id="btn-vanish-now" class="editor-chrome-btn">Ustaw znikanie = teraz (media)</button>
+                <label>składanie (s)</label>
+                <input type="number" id="prop-assembly-dur" class="editor-hud-input" step="0.05" min="0.05" placeholder="globalne" title="Puste = wordAssemblyDuration ze stylu" />
+                <label>persistent</label>
+                <input type="checkbox" id="prop-persistent" title="Zostaje przy intro spread (mysenPersistentOnScreen)" />
+                <label>Keyframe: px py pz</label>
+                <input type="text" id="kf-pos" class="editor-hud-input" placeholder="0,0,0" />
+                <label>Keyframe: rot rx ry rz (rad)</label>
+                <input type="text" id="kf-rot" class="editor-hud-input" placeholder="0,0,0" />
+                <label>Keyframe: scale</label>
+                <input type="number" id="kf-scale" class="editor-hud-input" step="0.05" min="0.1" value="1" />
+                <button type="button" id="btn-add-kf">Dodaj klucz przy t</button>
+            </div>
+            <h2>Klucze (wybrane słowo)</h2>
+            <ul class="keyframe-list editor-scroll" id="kf-list"></ul>
+        </aside>
+    </div>
+
+    <p class="status-line" id="validation-msg"></p>
+
+    <script type="module" src="./showcase-animation-editor.js"></script>
+</body>
+
+</html>

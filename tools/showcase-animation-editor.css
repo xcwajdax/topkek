@@ -1,0 +1,465 @@
+/* TOPKEK terminal-HUD chrome — tokens + patterns from .cursor/skills/topkek-ui-design */
+:root {
+    --menu-surface-bg: rgba(0, 0, 0, 0.28);
+    --menu-surface-border: 1px solid rgba(76, 175, 80, 0.4);
+    --menu-surface-radius: 2px;
+    --menu-surface-shadow: 0 0 10px rgba(76, 175, 80, 0.12);
+    --menu-label-color: rgba(200, 255, 200, 0.82);
+    --menu-text-color: rgba(210, 255, 210, 0.9);
+    --accent-green: #4caf50;
+    --accent-green-light: #81c784;
+    --accent-green-hover-border: rgba(129, 199, 132, 0.85);
+    --accent-green-glow: rgba(76, 175, 80, 0.5);
+    --editor-chrome-fill: rgba(0, 0, 0, 0.52);
+    --editor-input-bg: rgba(0, 0, 0, 0.45);
+    --transition-fast: color 0.2s ease, text-shadow 0.2s ease, border-color 0.2s ease,
+        background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --transition-fast: none;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: 'Courier New', Courier, monospace;
+    background-color: #111;
+    color: var(--menu-text-color);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+}
+
+/* Modal-style scrollbars (#glitch-content recipe) — Firefox + WebKit on same node */
+.editor-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #4caf50 #111;
+}
+
+.editor-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.editor-scroll::-webkit-scrollbar-track {
+    background: #111;
+}
+
+.editor-scroll::-webkit-scrollbar-thumb {
+    background: #4caf50;
+    border: 1px solid #111;
+}
+
+.editor-scroll::-webkit-scrollbar-thumb:hover {
+    background: #66bb6a;
+}
+
+.editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    padding: 0.65rem 1rem;
+    border-bottom: var(--menu-surface-border);
+    background: var(--editor-chrome-fill);
+    box-shadow: var(--menu-surface-shadow);
+    align-items: center;
+    color: var(--menu-text-color);
+}
+
+.editor-toolbar + .editor-toolbar {
+    border-top: none;
+}
+
+.editor-toolbar strong {
+    color: var(--menu-label-color);
+    letter-spacing: 0.06em;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    margin-right: 0.25rem;
+}
+
+.editor-toolbar-tag {
+    color: var(--menu-label-color);
+    letter-spacing: 0.06em;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    margin-right: 0.15rem;
+}
+
+.editor-toolbar label,
+.editor-toolbar input[type='number'] {
+    font-size: 0.8rem;
+    font-family: inherit;
+}
+
+/* Hidden file input (cf. .topkek-fx-dev-file-input) */
+.editor-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.editor-file-slot {
+    position: relative;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+    min-width: 0;
+    max-width: min(100%, 22rem);
+}
+
+.editor-file-slot:focus-within .editor-choose-file {
+    outline: 1px solid var(--accent-green-hover-border);
+    outline-offset: 2px;
+}
+
+.editor-choose-file {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.28rem 0.5rem;
+    margin: 0;
+    max-width: 7.5rem;
+    font-family: inherit;
+    font-size: 0.72rem;
+    text-align: center;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    border-radius: var(--menu-surface-radius);
+    color: var(--accent-green);
+    transition: var(--transition-fast);
+    text-transform: none;
+    letter-spacing: 0.02em;
+}
+
+.editor-choose-file:hover {
+    color: var(--accent-green-light);
+    text-shadow: 0 0 5px var(--accent-green-glow);
+    border-color: var(--accent-green-hover-border);
+}
+
+.editor-file-name {
+    font-size: 0.68rem;
+    color: var(--menu-label-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 10rem;
+}
+
+/* Square chrome buttons (cf. .topkek-fx-dev-panel .topkek-fx-dev-btn.mode-btn) */
+.editor-toolbar .editor-chrome-btn {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    border-radius: var(--menu-surface-radius);
+    color: var(--accent-green);
+    padding: 0.28rem 0.55rem;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.75rem;
+    transition: var(--transition-fast);
+    text-align: center;
+    text-decoration: none;
+    text-shadow: none;
+}
+
+.editor-toolbar .editor-chrome-btn:hover {
+    color: var(--accent-green-light);
+    text-shadow: 0 0 5px var(--accent-green-glow);
+    border-color: var(--accent-green-hover-border);
+}
+
+.editor-toolbar .editor-chrome-btn:focus-visible {
+    outline: 1px solid var(--accent-green-hover-border);
+    outline-offset: 2px;
+}
+
+.editor-toolbar .editor-chrome-btn:active {
+    color: #000;
+    background: rgba(76, 175, 80, 0.45);
+    text-shadow: none;
+}
+
+.editor-toolbar input[type='number'] {
+    width: 4rem;
+    padding: 0.25rem 0.35rem;
+    background: var(--editor-input-bg);
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    border-radius: 0;
+    color: var(--accent-green-light);
+    font-family: inherit;
+}
+
+.editor-toolbar input[type='number']:focus-visible {
+    outline: 1px solid var(--accent-green-hover-border);
+    outline-offset: 1px;
+}
+
+.editor-main {
+    display: grid;
+    grid-template-columns: 260px 1fr 280px;
+    flex: 1;
+    min-height: 0;
+}
+
+.editor-panel {
+    border-right: var(--menu-surface-border);
+    padding: 0.65rem 0.75rem;
+    overflow: auto;
+    background: var(--editor-chrome-fill);
+    box-shadow: var(--menu-surface-shadow);
+}
+
+.editor-panel:last-of-type {
+    border-right: none;
+    border-left: var(--menu-surface-border);
+}
+
+.editor-panel h2 {
+    margin: 0 0 0.5rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--menu-label-color);
+}
+
+.editor-panel button {
+    font-family: inherit;
+    font-size: 0.75rem;
+    background: transparent;
+    border: none;
+    color: var(--accent-green);
+    cursor: pointer;
+    padding: 0.25rem 0;
+    margin-right: 0.75rem;
+    margin-bottom: 0.35rem;
+    transition: var(--transition-fast);
+    text-align: left;
+}
+
+.editor-panel button:hover {
+    color: var(--accent-green-light);
+    text-shadow: 0 0 5px var(--accent-green-glow);
+    text-decoration: underline;
+}
+
+.editor-panel button:focus-visible {
+    outline: 2px solid var(--accent-green);
+    outline-offset: 2px;
+}
+
+#preview-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 320px;
+    background: #000;
+}
+
+#preview-canvas-container {
+    flex: 1;
+    min-height: 280px;
+    position: relative;
+}
+
+#preview-canvas-container canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.word-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 42vh;
+    overflow: auto;
+}
+
+.word-list li {
+    padding: 0.35rem 0.45rem;
+    margin-bottom: 2px;
+    border-radius: var(--menu-surface-radius);
+    cursor: pointer;
+    font-size: 0.78rem;
+    border: 1px solid transparent;
+    transition: var(--transition-fast);
+}
+
+.word-list li:hover {
+    background: rgba(76, 175, 80, 0.12);
+}
+
+.word-list li:focus-visible {
+    outline: 2px solid var(--accent-green);
+    outline-offset: 0;
+}
+
+.word-list li.selected {
+    border-color: rgba(76, 175, 80, 0.55);
+    background: rgba(76, 175, 80, 0.22);
+    box-shadow: 0 0 8px rgba(76, 175, 80, 0.15);
+}
+
+.word-list li.linebreak {
+    color: var(--menu-label-color);
+    font-style: italic;
+    opacity: 0.85;
+}
+
+.prop-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+}
+
+.prop-grid label {
+    grid-column: 1 / -1;
+    color: var(--menu-label-color);
+    margin-top: 0.25rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.prop-grid .prop-subheading {
+    grid-column: 1 / -1;
+    margin: 0.6rem 0 0.15rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid rgba(76, 175, 80, 0.25);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--menu-label-color);
+}
+
+.prop-grid input[type='checkbox']#prop-persistent {
+    grid-column: 1 / -1;
+    justify-self: start;
+    width: auto;
+    accent-color: var(--accent-green);
+}
+
+/* HUD text/number fields (cf. #camera-hud .camera-hud-select) */
+.editor-hud-input {
+    width: 100%;
+    padding: 3px 6px;
+    margin: 0;
+    box-sizing: border-box;
+    background: var(--editor-input-bg);
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    border-radius: 0;
+    color: var(--accent-green-light);
+    font-family: inherit;
+    font-size: 12px;
+    caret-color: var(--accent-green);
+}
+
+.editor-hud-input:focus-visible {
+    outline: 1px solid var(--accent-green-hover-border);
+    outline-offset: 0;
+}
+
+.prop-grid button {
+    grid-column: 1 / -1;
+    margin-top: 0.25rem;
+}
+
+.timeline-bar {
+    height: 36px;
+    background: rgba(0, 0, 0, 0.55);
+    border-top: var(--menu-surface-border);
+    position: relative;
+    cursor: pointer;
+    box-shadow: inset 0 0 12px rgba(76, 175, 80, 0.06);
+}
+
+.timeline-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--accent-green-light);
+    box-shadow: 0 0 6px var(--accent-green-glow);
+    pointer-events: none;
+    margin-left: -1px;
+}
+
+.timeline-markers {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.timeline-marker {
+    position: absolute;
+    top: 4px;
+    width: 5px;
+    height: 28px;
+    background: rgba(156, 204, 101, 0.92);
+    border-radius: 1px;
+    transform: translateX(-50%);
+    opacity: 0.9;
+    box-shadow: 0 0 4px rgba(129, 199, 132, 0.45);
+}
+
+.keyframe-list {
+    font-size: 0.72rem;
+    max-height: 120px;
+    overflow: auto;
+    margin: 0;
+    padding-left: 1.1rem;
+    color: var(--menu-text-color);
+}
+
+.status-line {
+    font-size: 0.72rem;
+    color: var(--menu-label-color);
+    padding: 0.35rem 1rem;
+    letter-spacing: 0.04em;
+}
+
+.editor-hint {
+    flex: 1 1 100%;
+    font-size: 0.68rem;
+    line-height: 1.4;
+    opacity: 0.92;
+}
+
+.editor-hint code {
+    color: var(--accent-green-light);
+    font-size: inherit;
+}
+
+@media (max-width: 900px) {
+    .editor-main {
+        grid-template-columns: 1fr;
+    }
+
+    .editor-panel:last-of-type {
+        border-left: none;
+        border-top: var(--menu-surface-border);
+    }
+
+    .editor-file-name {
+        max-width: 100%;
+    }
+}
