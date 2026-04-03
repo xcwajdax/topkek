@@ -1475,7 +1475,7 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.85);
 }
 
-/* Two-step banner launch: first click arms (shows CTA), second runs /cmd via console shell */
+/* Two-step banner launch: English CTA on hover/focus; stays visible when armed until second click */
 #right-panel #terminal-menu .term-menu-banner-armed-overlay {
     position: absolute;
     left: 0;
@@ -1488,16 +1488,17 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     padding: 0.35rem 0.5rem 0.45rem;
     pointer-events: none;
     background: linear-gradient(to top, rgba(0, 14, 8, 0.94) 0%, rgba(0, 28, 14, 0.72) 55%, transparent 100%);
-    animation: term-menu-banner-armed-fade 0.22s ease;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.22s ease, visibility 0s linear 0.22s;
 }
 
-@keyframes term-menu-banner-armed-fade {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
+#right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-armed-overlay,
+#right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-armed-overlay,
+#right-panel #terminal-menu .term-menu-banner-block--armed .term-menu-banner-armed-overlay {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.22s ease, visibility 0s linear 0s;
 }
 
 #right-panel #terminal-menu .term-menu-banner-armed-text {
@@ -1518,8 +1519,11 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    #right-panel #terminal-menu .term-menu-banner-armed-overlay {
-        animation: none;
+    #right-panel #terminal-menu .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block--armed .term-menu-banner-armed-overlay {
+        transition-duration: 0.01ms;
     }
 }
 
