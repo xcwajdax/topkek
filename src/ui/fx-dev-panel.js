@@ -2,7 +2,7 @@
  * Developer panel for terminal FX (FX_CONFIG.registry) — toggled via /fx dev.
  * Top-centered menubar + [ Active | editor ].
  */
-import { FX_CONFIG, FX_SAMPLE_PRESETS } from './config.js';
+import { FX_CONFIG, FX_SAMPLE_PRESETS } from '../../config.js';
 
 function formatFxDefaultForInput(value) {
     if (value === undefined || value === null) return '';

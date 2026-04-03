@@ -3,7 +3,7 @@
  */
 import * as THREE from 'three';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
-import { CONFIG } from './config.js';
+import { CONFIG } from '../../config.js';
 
 export function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
     const word = wordData.text;
@@ -17,9 +17,29 @@ export function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
 
     const wordScale = wordData.scale || 1.0;
     const voxelSize = CONFIG.particleSize;
-    const scatterRadius = voxelStyle.scatterRadius;
+    const eff = {
+        wordSize:
+            Number.isFinite(wordData.wordSize) && wordData.wordSize > 0 ? wordData.wordSize : voxelStyle.wordSize,
+        wordHeight:
+            Number.isFinite(wordData.wordHeight) && wordData.wordHeight > 0
+                ? wordData.wordHeight
+                : voxelStyle.wordHeight,
+        wordThickness:
+            Number.isFinite(wordData.wordThickness) && wordData.wordThickness > 0
+                ? wordData.wordThickness
+                : voxelStyle.wordThickness,
+        scatterRadius:
+            Number.isFinite(wordData.scatterRadius) && wordData.scatterRadius > 0
+                ? wordData.scatterRadius
+                : voxelStyle.scatterRadius
+    };
+    const scatterRadius = eff.scatterRadius;
+    const preset =
+        typeof wordData.materialPresetId === 'string' && wordData.materialPresetId.length
+            ? wordData.materialPresetId
+            : 'standard';
 
-    const cacheKey = `${word}_${wordScale}`;
+    const cacheKey = `${word}_${wordScale}_${eff.wordSize}_${eff.wordHeight}_${eff.wordThickness}_${eff.scatterRadius}_${preset}`;
     let cubePositions = [];
     let width = 0;
 
@@ -29,8 +49,8 @@ export function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
     } else {
         const textGeo = new TextGeometry(displayWord, {
             font: font,
-            size: voxelStyle.wordSize * wordScale,
-            height: voxelStyle.wordHeight * wordScale,
+            size: eff.wordSize * wordScale,
+            height: eff.wordHeight * wordScale,
             curveSegments: 4,
             bevelEnabled: false
         });
@@ -58,7 +78,7 @@ export function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
                 const intersects = scanRaycaster.intersectObject(mesh);
 
                 if (intersects.length > 0) {
-                    for (let z = 0; z < voxelStyle.wordThickness; z++) {
+                    for (let z = 0; z < eff.wordThickness; z++) {
                         const key = `${gx},${gy},${z}`;
                         if (!voxelMap.has(key)) {
                             voxelMap.set(key, {
@@ -83,14 +103,37 @@ export function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
     }
 
     const cubeGeo = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
-    const cubeMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        metalness: 0.3,
-        roughness: 0.7,
-        emissive: new THREE.Color(0xffffff).multiplyScalar(0.2),
-        transparent: true,
-        opacity: 1
-    });
+    /** @type {import('three').MeshStandardMaterial} */
+    let cubeMat;
+    if (preset === 'neon') {
+        cubeMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            metalness: 0.25,
+            roughness: 0.45,
+            emissive: new THREE.Color(0x6688ff),
+            emissiveIntensity: 0.48,
+            transparent: true,
+            opacity: 1
+        });
+    } else if (preset === 'matte') {
+        cubeMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            metalness: 0.05,
+            roughness: 0.95,
+            emissive: new THREE.Color(0xffffff).multiplyScalar(0.08),
+            transparent: true,
+            opacity: 1
+        });
+    } else {
+        cubeMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            metalness: 0.3,
+            roughness: 0.7,
+            emissive: new THREE.Color(0xffffff).multiplyScalar(0.2),
+            transparent: true,
+            opacity: 1
+        });
+    }
 
     const instancedMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubePositions.length);
     instancedMesh.visible = false;

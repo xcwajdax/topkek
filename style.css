@@ -1425,6 +1425,21 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     pointer-events: auto;
 }
 
+#right-panel #terminal-menu .term-menu-category-heading {
+    pointer-events: none;
+    margin: 0 0 6px 0;
+    font-size: 11px;
+    color: var(--menu-label-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+#right-panel #terminal-menu .term-menu-category-spacer {
+    pointer-events: none;
+    min-height: 1em;
+    margin-bottom: 2px;
+}
+
 /* Terminal menu: isolate stacking so later .menu-section never paints over the banner video */
 #right-panel #terminal-menu.menu-collapsible-section > .menu-section-content {
     position: relative;
@@ -1571,6 +1586,11 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     color: #e8f5e9;
 }
 
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-vajbuj.vajbuj-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
+}
+
 #right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-banner-drawer-inner {
     border-top-color: rgba(129, 199, 132, 0.45);
     background: linear-gradient(to bottom, rgba(20, 60, 28, 0.95) 0%, rgba(8, 32, 14, 0.98) 100%);
@@ -1578,6 +1598,11 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
 
 #right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-banner-hint {
     color: #e8f5e9;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
 }
 
 #right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-banner-drawer-inner {
@@ -1589,41 +1614,16 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     color: #e8f5e9;
 }
 
-/* NEWSKIN strip: always-on neon green brand layer + saturated display title (sans); hides on hover/focus so video is unobstructed */
-#right-panel #terminal-menu .newskin-menu-banner-brand {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    opacity: 1;
-    visibility: visible;
-    transition: opacity 0.24s ease, visibility 0s linear 0s;
-    background:
-        linear-gradient(to top, rgba(0, 0, 0, 0.28) 0%, transparent 52%);
-    box-shadow: inset 0 0 42px rgba(57, 255, 100, 0.18);
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
 }
 
-#right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-wrap--newskin):hover .newskin-menu-banner-brand,
-#right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-wrap--newskin):focus-within .newskin-menu-banner-brand {
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.24s ease, visibility 0s linear 0.24s;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    #right-panel #terminal-menu .newskin-menu-banner-brand,
-    #right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-wrap--newskin):hover .newskin-menu-banner-brand,
-    #right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-wrap--newskin):focus-within .newskin-menu-banner-brand {
-        transition-duration: 0.01ms;
-    }
-}
-
-#right-panel #terminal-menu .newskin-menu-banner-brand-title {
+/* Shared neon Orbitron headline: banner drawers + section hover drawers */
+#right-panel #terminal-menu .term-menu-drawer-display-title {
+    display: block;
     margin: 0;
-    padding: 0 0.08em;
+    padding: 0 0.08em 2px 0;
     font-family: 'Orbitron', system-ui, sans-serif;
     font-weight: 800;
     font-size: clamp(0.73rem, 3.6vw, 1.25rem);
@@ -1640,20 +1640,8 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
         0 1px 3px rgba(0, 0, 0, 0.92);
 }
 
-#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .newskin-menu-banner-brand {
-    background:
-        radial-gradient(ellipse 92% 78% at 50% 42%, rgba(0, 255, 140, 0.48) 0%, rgba(100, 255, 150, 0.3) 38%, rgba(0, 70, 28, 0.55) 72%, rgba(0, 18, 8, 0.78) 100%),
-        linear-gradient(to top, rgba(0, 0, 0, 0.22) 0%, transparent 52%);
-    box-shadow: inset 0 0 52px rgba(100, 255, 140, 0.26);
-}
-
-#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .newskin-menu-banner-brand-title {
-    color: #d8ffc8;
-    filter: saturate(1.85) brightness(1.18);
-}
-
 @media (prefers-reduced-motion: no-preference) {
-    @keyframes newskin-menu-banner-brand-pulse {
+    @keyframes term-menu-drawer-display-title-pulse {
         0%,
         100% {
             filter: saturate(1.65) brightness(1.12);
@@ -1663,17 +1651,23 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
         }
     }
 
-    #right-panel #terminal-menu .newskin-menu-banner-brand-title {
-        animation: newskin-menu-banner-brand-pulse 2.8s ease-in-out infinite;
+    #right-panel #terminal-menu .term-menu-drawer-display-title {
+        animation: term-menu-drawer-display-title-pulse 2.8s ease-in-out infinite;
     }
 
-    #right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .newskin-menu-banner-brand-title {
+    #right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-drawer-display-title {
         animation-duration: 2.2s;
     }
 }
 
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-drawer-display-title {
+        animation: none;
+    }
+}
+
 #right-panel #terminal-menu .term-menu-banner-drawer-inner.newskin-menu-banner-drawer-hint {
-    justify-content: flex-end;
+    justify-content: flex-start;
 }
 
 /* MYSEN menu banner: poster covers video until hover/focus; overlay copy only on hover */
@@ -1769,6 +1763,73 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     }
 }
 
+/* Lower terminal blocks: same hover drawer pattern as video banners */
+#right-panel #terminal-menu .term-menu-section-hover-block {
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-rows: auto 0fr;
+    margin-bottom: 8px;
+    border-radius: var(--menu-surface-radius);
+    border: var(--menu-surface-border);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    overflow: hidden;
+    outline: none;
+    transition: grid-template-rows 0.32s ease;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:hover,
+#right-panel #terminal-menu .term-menu-section-hover-block:focus-within {
+    z-index: 3;
+    grid-template-rows: auto 1fr;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:focus-visible {
+    box-shadow: var(--menu-surface-shadow), inset 0 0 0 1px rgba(76, 175, 80, 0.85);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-section-hover-block {
+        transition: none;
+    }
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:last-child {
+    margin-bottom: 0;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block .menu-section {
+    margin-bottom: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 3px;
+    padding: 8px 10px 10px;
+    line-height: normal;
+    pointer-events: none;
+    border-top: 1px solid rgba(76, 175, 80, 0.22);
+    background: linear-gradient(to bottom, rgba(0, 24, 12, 0.92) 0%, rgba(0, 10, 6, 0.96) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer-hint {
+    white-space: pre-line;
+}
+
 #right-panel #terminal-menu .menu-section {
     position: relative;
     z-index: 1;
@@ -1801,9 +1862,9 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
 }
 
 #term-anim-portfolio.portfolio-active,
-#term-mysen.mysen-active {
-    background: rgba(76, 175, 80, 0.25);
-    border-radius: 4px;
+#term-mysen.term-menu-banner-mysen-wrap.mysen-active {
+    box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.5);
+    border-radius: var(--menu-surface-radius);
 }
 
 /* Shared: Glitch Lab & GENIMG modals */
@@ -2329,8 +2390,9 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     border: 0;
 }
 
-/* /newskin — jak sekcja terminal menu (#right-panel .menu-section), wyśrodkowana; WebGL widać przez scrim */
-#newskin-modal {
+/* /newskin + Pushka Studio — jak sekcja terminal menu (#right-panel .menu-section), wyśrodkowana; WebGL widać przez scrim */
+#newskin-modal,
+#pushka-modal {
     position: fixed;
     inset: 0;
     z-index: 2250;
@@ -2345,11 +2407,13 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     padding: 25px;
 }
 
-#newskin-modal.hidden {
+#newskin-modal.hidden,
+#pushka-modal.hidden {
     display: none;
 }
 
-#newskin-modal.newskin-modal--minimized {
+#newskin-modal.newskin-modal--minimized,
+#pushka-modal.newskin-modal--minimized {
     align-items: flex-start;
 }
 
@@ -2361,7 +2425,8 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     cursor: pointer;
 }
 
-#newskin-modal.newskin-modal--minimized .newskin-modal-scrim {
+#newskin-modal.newskin-modal--minimized .newskin-modal-scrim,
+#pushka-modal.newskin-modal--minimized .newskin-modal-scrim {
     opacity: 0;
     pointer-events: none;
     cursor: default;
@@ -2385,6 +2450,12 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     background: var(--menu-surface-bg);
     box-shadow: var(--menu-surface-shadow);
     pointer-events: auto;
+}
+
+/* Pushka Studio: wide panel so Vimeo’s default player chrome fits (16∶9 scales with width). */
+#pushka-modal .newskin-modal-menu-section {
+    width: min(960px, calc(100vw - 48px));
+    max-width: min(960px, calc(100vw - 48px));
 }
 
 .newskin-modal-header {
@@ -2440,7 +2511,8 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     transition: transform 0.2s ease;
 }
 
-#newskin-modal.newskin-modal--minimized #newskin-modal-minimize .newskin-modal-icon {
+#newskin-modal.newskin-modal--minimized #newskin-modal-minimize .newskin-modal-icon,
+#pushka-modal.newskin-modal--minimized #pushka-modal-minimize .newskin-modal-icon {
     transform: rotate(180deg);
 }
 
@@ -2452,7 +2524,8 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     min-height: 0;
 }
 
-#newskin-modal.newskin-modal--minimized .newskin-modal-body {
+#newskin-modal.newskin-modal--minimized .newskin-modal-body,
+#pushka-modal.newskin-modal--minimized .newskin-modal-body {
     display: none;
 }
 
@@ -2460,15 +2533,22 @@ body.music-showcase-ui-minimal #topkek-terminal-shell {
     margin: 0;
     text-align: center;
     line-height: 1.45;
+    white-space: pre-line;
 }
 
-body.newskin-modal-open {
+body.newskin-modal-open,
+body.pushka-modal-open {
     overflow: hidden;
 }
 
 @media (max-width: 400px) {
     .newskin-modal-menu-section {
         width: min(280px, calc(100vw - 24px));
+    }
+
+    #pushka-modal .newskin-modal-menu-section {
+        width: calc(100vw - 24px);
+        max-width: calc(100vw - 24px);
     }
 }
 

@@ -3,7 +3,18 @@
  */
 
 import { parseMysenTimestampLyricsFile } from './mysen-timestamp-parse.js';
+import { buildMergedMysenLyricsArray, lastFilledLineIndexInLyrics } from './mysen-merge-lyrics-from-timestamps.js';
 import { SHOWCASE_ANIMATION_SCHEMA_VERSION } from './showcase-animation-schema.js';
+
+/**
+ * @param {string | undefined} p
+ * @returns {string}
+ */
+function fileNameFromRepoPath(p) {
+    if (!p || typeof p !== 'string') return 'audio.mp3';
+    const s = p.replace(/\\/g, '/').split('/').pop();
+    return s && s.length ? s : 'audio.mp3';
+}
 
 /** Single-file legacy import for the showcase editor (intro + raw TS text + wordAnimation in one JSON). */
 export const MYSEN_LEGACY_IMPORT_BUNDLE_KIND = 'mysenLegacyImportBundle';
@@ -40,6 +51,18 @@ export function lyricsArrayFromShowcaseDoc(doc) {
             showcaseWordId: id,
             atSourceSec: startT + at
         };
+        if (Number.isFinite(w.wordSize) && w.wordSize > 0) entry.wordSize = w.wordSize;
+        if (Number.isFinite(w.wordHeight) && w.wordHeight > 0) entry.wordHeight = w.wordHeight;
+        if (Number.isFinite(w.wordThickness) && w.wordThickness > 0) entry.wordThickness = w.wordThickness;
+        if (Number.isFinite(w.scatterRadius) && w.scatterRadius > 0) entry.scatterRadius = w.scatterRadius;
+        if (typeof w.materialPresetId === 'string' && w.materialPresetId.length) {
+            entry.materialPresetId = w.materialPresetId;
+        }
+        if (typeof w.wordFxId === 'string' && w.wordFxId.length && w.wordFxId !== 'none') {
+            entry.wordFxId = w.wordFxId;
+        }
+        if (Number.isFinite(w.visibleFromFragSec)) entry.visibleFromFragSec = w.visibleFromFragSec;
+        if (Number.isFinite(w.visibleToFragSec)) entry.visibleToFragSec = w.visibleToFragSec;
         if (w.mysenPersistentOnScreen === true || w.persistentOnScreen === true) {
             entry.mysenPersistentOnScreen = true;
         }
@@ -58,9 +81,105 @@ export function lyricsArrayFromShowcaseDoc(doc) {
         if (Number.isFinite(w.assemblyDurationSec) && w.assemblyDurationSec > 0) {
             entry.assemblyDurationSec = w.assemblyDurationSec;
         }
+        if (Number.isFinite(w.offsetX)) entry.offsetX = w.offsetX;
+        if (Number.isFinite(w.offsetY)) entry.offsetY = w.offsetY;
+        if (Number.isFinite(w.offsetZ)) entry.offsetZ = w.offsetZ;
+        if (Number.isFinite(w.mysenSplitRow)) entry.mysenSplitRow = w.mysenSplitRow;
         out.push(entry);
     }
     return out;
+}
+
+/**
+ * Build a showcase animation document from the same merge as /mysen without `showcaseAnimationUrl`
+ * (intro + timestamp rows + line groups). For authoring in tools/showcase-animation-editor.
+ *
+ * @param {object} mysenConfig — MYSEN_CONFIG-shaped
+ * @param {{ text: string, at: number, color?: number }[]} timestampRows
+ * @param {object | null} [wordAnimDoc] — parsed mysen-word-animation.json (optional `defaults`)
+ * @returns {import('./showcase-animation-schema.js').ShowcaseAnimationDoc}
+ */
+export function buildShowcaseAnimationDocFromMysenRuntimeMerge(mysenConfig, timestampRows, wordAnimDoc = null) {
+    const merged = buildMergedMysenLyricsArray(mysenConfig, timestampRows);
+    const intro = mysenConfig.introLyrics || mysenConfig.lyrics;
+    const lastIntro = lastFilledLineIndexInLyrics(intro);
+    const firstTimestampLineIndex = lastIntro >= 0 ? lastIntro + 1 : 6;
+
+    /** @type {import('./showcase-animation-schema.js').ShowcaseWordEntry[]} */
+    const words = [];
+    let wn = 0;
+    for (let i = 0; i < merged.length; i++) {
+        const item = merged[i];
+        if (item.lineBreak === true) {
+            words.push({ lineBreak: true });
+            continue;
+        }
+        const id = `w_${wn++}`;
+        /** @type {import('./showcase-animation-schema.js').ShowcaseWordEntry} */
+        const ent = {
+            id,
+            text: item.text,
+            at: Number.isFinite(item.at) ? item.at : 0,
+            color: typeof item.color === 'number' ? item.color : (mysenConfig.timestampWordColor ?? 0xffffff),
+            scale: typeof item.scale === 'number' && item.scale > 0 ? item.scale : 1
+        };
+        if (item.mysenPersistentOnScreen === true) ent.mysenPersistentOnScreen = true;
+        if (item.mysenGroupedLine === true) ent.groupedLine = true;
+        if (Number.isFinite(item.mysenSplitRow)) ent.mysenSplitRow = item.mysenSplitRow;
+        if (Number.isFinite(item.offsetX)) ent.offsetX = item.offsetX;
+        if (Number.isFinite(item.offsetY)) ent.offsetY = item.offsetY;
+        if (Number.isFinite(item.offsetZ)) ent.offsetZ = item.offsetZ;
+        if (Number.isFinite(item.lineVanishAtSourceSec)) ent.vanishAtMediaSec = item.lineVanishAtSourceSec;
+        if (Number.isFinite(item.assemblyDurationSec) && item.assemblyDurationSec > 0) {
+            ent.assemblyDurationSec = item.assemblyDurationSec;
+        }
+        words.push(ent);
+    }
+
+    /** @type {Record<string, unknown>} */
+    const style = {
+        wordSize: mysenConfig.wordSize,
+        wordHeight: mysenConfig.wordHeight,
+        wordThickness: mysenConfig.wordThickness,
+        scatterRadius: mysenConfig.scatterRadius,
+        defaultWordColor: mysenConfig.defaultWordColor,
+        wordAssemblyDuration: mysenConfig.wordAssemblyDuration,
+        lyricsStartDelay: mysenConfig.lyricsStartDelay,
+        lineSpacing: mysenConfig.lineSpacing,
+        wordSpacing: mysenConfig.wordSpacing,
+        lyricsOffsetY: mysenConfig.lyricsOffsetY
+    };
+    if (mysenConfig.spread && typeof mysenConfig.spread === 'object') {
+        style.spread = { ...mysenConfig.spread };
+    }
+    if (mysenConfig.randomFly && typeof mysenConfig.randomFly === 'object') {
+        style.randomFly = { ...mysenConfig.randomFly };
+    }
+    if (wordAnimDoc?.defaults && typeof wordAnimDoc.defaults === 'object') {
+        Object.assign(style, wordAnimDoc.defaults);
+    }
+
+    return {
+        schemaVersion: SHOWCASE_ANIMATION_SCHEMA_VERSION,
+        adapter: 'voxelLyricsMysen',
+        audio: {
+            durationSec: 0,
+            suggestedFileName: fileNameFromRepoPath(mysenConfig.audioFile),
+            exportHintPath: typeof mysenConfig.audioFile === 'string' ? mysenConfig.audioFile : undefined
+        },
+        timing: {
+            audioStartTime: mysenConfig.audioStartTime ?? 0,
+            audioEndTime: mysenConfig.audioEndTime ?? null,
+            firstTimestampLineIndex
+        },
+        words,
+        transformKeyframes: {},
+        postprocessKeyframes: {},
+        volumetricKeyframes: {},
+        customKeyframes: {},
+        cameraPreview: { fovDeg: 45 },
+        style
+    };
 }
 
 /**
@@ -155,6 +274,11 @@ export function buildShowcaseDocFromLegacyMysen(introLyrics, timestampRows, audi
             firstTimestampLineIndex: 99999
         },
         words,
+        transformKeyframes: {},
+        postprocessKeyframes: {},
+        volumetricKeyframes: {},
+        customKeyframes: {},
+        cameraPreview: { fovDeg: 45 },
         style: wordAnimDoc?.defaults && typeof wordAnimDoc.defaults === 'object' ? wordAnimDoc.defaults : undefined
     };
 }

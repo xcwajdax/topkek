@@ -56,7 +56,7 @@ def main():
         handler_cls = QuietHTTPRequestHandler
     server = HTTPServer(("", port), handler_cls)
     print(
-        "Serving %s at http://localhost:%s (client disconnect noise suppressed)"
+        "Serving %s at http://127.0.0.1:%s/ (use this URL on Windows if localhost fails; client disconnect noise suppressed)"
         % (SCRIPT_DIR, port)
     )
     try:

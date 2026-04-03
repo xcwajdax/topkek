@@ -4,7 +4,16 @@
 
 **Plik:** [showcase-animation-editor.html](showcase-animation-editor.html)
 
-Edytor dokumentu JSON `schemaVersion: 1`, `adapter: voxelLyricsMysen` — słowa na timeline, klucze transformacji (pozycja / rotacja Euler w radianach / skala), **panel pojawiania / znikania** (lot: domyślny timestamp / tylko szyna / spawn, `vanishAtMediaSec`, czas składania per słowo, persistent), import i eksport. Podgląd 3D używa tego samego pipeline’u wokseli co MYSEN (`music-lyric-voxels.js`).
+Edytor dokumentu showcase **schemaVersion 1 lub 2** (`adapter: voxelLyricsMysen` albo `voxelLyricsVajbuj` w pliku — **runtime MYSEN** ładuje tylko `voxelLyricsMysen`). Moduły: `editor-project-io.js` (import/eksport pakietu), `editor-timeline.js` (oś 60 FPS, przeciąganie kluczy), `editor-preview-scene.js` (FOV + siatka XZ), współdzielone w [`../src/showcase/`](../src/showcase/): `showcase-animation-schema.js`, `showcase-effect-catalog.js`, `showcase-pack-schema.js` itd.
+
+### Funkcje (v2)
+
+- **Źródło projektu:** lista (nowy v2, nowy + audio, preset MYSEN sample JSON, **MYSEN jak /mysen** — ten sam merge co runtime: `introLyrics` + `timestampLyricsUrl` + grupy z `MYSEN_CONFIG`, opcjonalnie domyślne z `wordAnimationUrl`; preset VAJBUJ sample; fetch z `MYSEN_CONFIG.showcaseAnimationUrl` gdy włączone).
+- **Timeline:** transport (play/pause/głośność) nad osią, zoom (px/s), etykiety w **klatkach** (`60f`), przeciąganie **kluczy transformacji** słowa, pasmo między skrajnymi kluczami, **zakres widoczności** słowa (niebieski prostokąt, przeciąganie krawędzi).
+- **Słowa:** parametry statyczne — `wordSize` / `wordHeight` / `wordThickness` / `scatterRadius`, `materialPresetId`, `wordFxId`, `visibleFromFragSec` / `visibleToFragSec` (oś czasu fragmentu jak `elapsed` MYSEN).
+- **Zakładki:** Postproc / Volumetryka / Custom — tory skalarne `{ t, v }` (lista z katalogu `showcase-effect-catalog.js`); runtime MYSEN stosuje postproc i mnożniki env sześcianów z dokumentu.
+- **Pakiet folderu:** `showcase-pack.json` + `animation.json` + audio — **zapis przez File System Access API** (`Eksport folderu` / `Import folderu`); w przeglądarkach bez API — pobranie samych JSON.
+- **Import jednego pliku:** JSON showcase (v1/v2) lub pakiet legacy `mysenLegacyImportBundle` (jak wcześniej).
 
 ### Uruchomienie
 
@@ -14,42 +23,37 @@ Z katalogu głównego projektu (`topkek/`), nie z `tools/`:
 python -m http.server 8002
 ```
 
-Otwórz w przeglądarce: `http://localhost:8002/tools/showcase-animation-editor.html`
+Otwórz: `http://localhost:8002/tools/showcase-animation-editor.html`
 
-Bez serwera HTTP moduły ES i `fetch` do assetów nie zadziałają poprawnie.
+**Ważne:** root serwera musi być folder `topkek/` (tam gdzie leży `ASSETS/`). Strona edytora jest w podkatalogu `/tools/` — fetch do plików projektu jest rozwiązywany względem rootu repozytorium (nie względem `/tools/`), żeby uniknąć błędnego URL `/tools/ASSETS/...` (404).
 
-### Automatyczne wczytanie dokumentu JSON
+### Automatyczne wczytanie
 
-1. **Parametr URL (pierwszeństwo):** `doc` lub `animation` — ścieżka względna do rootu serwera (katalog `topkek/`), np. dokument showcase **albo** pakiet `mysenLegacyImportBundle`, np.  
-   `http://localhost:8002/tools/showcase-animation-editor.html?doc=ASSETS/mysen/mysen-legacy-import-bundle.sample.json`
-2. **Z `config.js`:** jeśli w URL **nie** ma `doc` / `animation`, a `MYSEN_CONFIG.showcaseAnimationEnabled === true` i ustawiony jest niepusty `showcaseAnimationUrl`, edytor przy starcie zrobi `fetch` tego pliku (ten sam co strona główna w MYSEN).
-3. **Wyłączenie punktu 2:** `?noautoload=1` lub `?autoload=0` — bez pobierania z konfiguracji (pusty dokument na starcie, o ile nie podano `doc=`). Jawny `doc=` nadal działa.
+1. **URL:** `?doc=` / `?animation=` — ścieżka względna do rootu serwera (showcase JSON lub legacy bundle).
+2. **Config:** gdy brak `doc=`, włączone `MYSEN_CONFIG.showcaseAnimationEnabled` i `showcaseAnimationUrl`.
+3. **Wyłączenie:** `?noautoload=1` lub `?autoload=0`.
 
-Przy błędzie sieci lub walidacji dokument pozostaje pusty (jak po starcie bez auto-load); komunikat jest w pasku walidacji pod edytorem.
+### Integracja ze stroną (MYSEN)
 
-### Audio
+1. Zapisz `animation.json` (np. w `ASSETS/mysen/moja-animacja/`).
+2. W [config.js](../config.js): `showcaseAnimationEnabled: true`, `showcaseAnimationUrl` → ten plik, `audioFile` zgodnie z utworem.
+3. **Tylko** `adapter: "voxelLyricsMysen"` — inaczej `script.js` odrzuci dokument przy starcie MYSEN.
 
-Wgrywany plik audio jest tylko w pamięci przeglądarki (blob URL). W wyeksportowanym JSON znajdują się `suggestedFileName` / `exportHintPath` — **trzeba ręcznie** skopiować plik MP3 pod ścieżkę w repo i ustawić `MYSEN_CONFIG.audioFile` zgodnie z projektem.
+### Pakiet (manifest)
 
-### Integracja ze stroną
+`showcase-pack.json` (walidacja: `showcase-pack-schema.js`):
 
-1. Zapisz JSON np. jako `ASSETS/mysen/moja-animacja.json`.
-2. W [config.js](../config.js) ustaw `MYSEN_CONFIG.showcaseAnimationEnabled: true` oraz `showcaseAnimationUrl` na ten plik.
-3. Uruchom `/mysen start` — merge intro + timestamp z pliku jest **pomijany**, gdy wczytano poprawny dokument showcase.
+- `kind`: `"showcasePack"`
+- `schemaVersion`: `1`
+- `experienceId`: `mysen` | `vajbuj` | …
+- `files.animation`, `files.audio` (względem folderu pakietu)
 
-### Wczytaj projekt (jeden plik)
+### Moduły powiązane w repo
 
-Przycisk **Wczytaj projekt** akceptuje:
+- [../src/showcase/showcase-animation-schema.js](../src/showcase/showcase-animation-schema.js), [../src/showcase/showcase-animation-adapters.js](../src/showcase/showcase-animation-adapters.js), [../src/showcase/showcase-animation-pass-runtime.js](../src/showcase/showcase-animation-pass-runtime.js), [../src/showcase/music-lyric-voxels.js](../src/showcase/music-lyric-voxels.js).
 
-1. **Gotowy dokument showcase v1** — ten sam format co eksport (`schemaVersion`, `adapter: voxelLyricsMysen`, …).
-2. **Pakiet legacy MYSEN** — jeden JSON z polami:
-   - `kind`: `"mysenLegacyImportBundle"`
-   - `version`: `1`
-   - `mediaStart`: liczba (sekundy, jak wcześniej przy imporcie)
-   - `intro`: tablica jak `MYSEN_CONFIG.introLyrics` (może być `[]`)
-   - `timestampLyrics`: cała treść pliku `mysen_timestamps.txt` jako jeden string (z `\n`)
-   - `wordAnimation`: opcjonalnie obiekt jak w `mysen-word-animation.json` (do `style` trafiają `defaults`)
+### Legacy import (jeden plik JSON)
 
-Przykład: [../ASSETS/mysen/mysen-legacy-import-bundle.sample.json](../ASSETS/mysen/mysen-legacy-import-bundle.sample.json).
+Pakiet `mysenLegacyImportBundle` v1 — zob. [../ASSETS/mysen/mysen-legacy-import-bundle.sample.json](../ASSETS/mysen/mysen-legacy-import-bundle.sample.json).
 
 Grupy `mysenTimestampLineGroups` nadal **nie** są odtwarzane z pakietu legacy.

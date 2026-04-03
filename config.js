@@ -77,6 +77,15 @@ export const CONFIG = {
     portfolio: {
         sampleVimeoUrl: "https://player.vimeo.com/video/1170695269"
     },
+    /** Terminal menu: muted loop above Vajbuj; idle = first frame, hover/focus plays */
+    vajbujMenuBannerVideo: 'ASSETS/UI/Vajbuj_baner.mp4',
+    /** Terminal menu: MYSEN banner — trimmed loop + static poster when idle */
+    mysenMenuBannerVideo: 'ASSETS/UI/mysen_menu_banner_last3s.mp4',
+    mysenMenuBannerPoster: 'ASSETS/UI/mysen_menu_banner_poster.png',
+    /** Terminal menu: NEWSKIN banner — same hover behavior as VAJBUJ strip */
+    newskinMenuBannerVideo: 'ASSETS/UI/newskin_baner.mp4',
+    /** Terminal menu: PUSHKA banner strip (muted loop on hover) */
+    pushkaMenuBannerVideo: 'ASSETS/UI/pushka_baner.mp4',
     // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
     backgroundVideo: {
         /** Mnożnik RGB na teksturze wideo (płaszczyzna + bake PMREM) — jaśniejsze tło i mocniejsze odbicia */
@@ -452,6 +461,8 @@ export const FX_SAMPLE_PRESETS = {
 // VAJBUJ SZMATO Mode Configuration
 export const VAJBUJ_CONFIG = {
     enabled: true,
+    /** Neon strip title in terminal menu banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'VAJBUJ',
     autoTrigger: false, // Disabled - use button instead
     inactivityTimeout: 15000, // ms before Vajbuj activates (not used when autoTrigger=false)
 
@@ -469,6 +480,15 @@ export const VAJBUJ_CONFIG = {
     originalTrackSpotifyEmbedSrc: null,
     /** Nagłówek panelu (widoczny nad playerem). */
     originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
+
+    /**
+     * Po naturalnym końcu fragmentu: modal z YouTube (embed URL). Ma pierwszeństwo przed Spotify.
+     * `null` wyłącza; pełny src iframe, np. https://www.youtube.com/embed/VIDEO_ID
+     */
+    originalTrackYoutubeEmbedSrc: 'https://www.youtube.com/embed/5nuFcR65q0M',
+    originalTrackYoutubeModalTitle: 'Original',
+    originalTrackYoutubeAttributionEn:
+        "This is a fan-made excerpt from a track by an artist whose work really hits home for me. It's also a wink at 'vibe coding,' which I can't stand — call it agentic design, just shuffling cognitive load across a few extra Brave tabs.",
 
     // Lyrics - each object can have custom properties
     lyrics: [
@@ -587,6 +607,8 @@ export const VAJBUJ_CONFIG = {
 /** MYSEN remix mode — console `/mysen start|stop`. Lyrics use `at` (seconds from fragment start) or `wordTimesSec`; voxel style like VAJBUJ but main TOPKEK mesh is hidden. */
 export const MYSEN_CONFIG = {
     enabled: true,
+    /** Neon strip title in terminal menu banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'MYSEN',
     /** When true, skip init on mobile (lighter scene). */
     disableOnMobile: false,
 
@@ -606,6 +628,11 @@ export const MYSEN_CONFIG = {
      */
     originalTrackSpotifyEmbedSrc: null,
     originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
+
+    /** Po naturalnym końcu: modal YouTube (pierwszeństwo przed Spotify). `null` wyłącza. */
+    originalTrackYoutubeEmbedSrc: 'https://www.youtube.com/embed/O8ZFLG7x4_o',
+    originalTrackYoutubeModalTitle: 'Original',
+    originalTrackYoutubeAttributionEn: "A three-piece band who, sadly, don't play live very often.",
 
     /**
      * When true, keep the background video plane visible during MYSEN (e.g. torus). When false, uses hideBackgroundVideo.
@@ -869,6 +896,80 @@ export const TERMINAL_CONFIG = {
     shellUi: {
         maximizedClass: 'topkek-terminal-shell--maximized',
         collapsedClass: 'topkek-terminal-shell--collapsed'
+    },
+    /** Terminal menu video banners (EN): shown on strip hover/focus; same text while armed until second click. */
+    menuBannerStartAnimationLabelEn: 'START ANIMATION',
+    /** @deprecated Use menuBannerStartAnimationLabelEn */
+    menuBannerArmedLabel: 'START ANIMATION',
+    /**
+     * Lower menu blocks (MYSEN / Games / Software): hover drawer copy.
+     * `hint` may use `\n` for line breaks (see `.term-menu-section-drawer-hint` in `style.css`).
+     */
+    menuSectionHoverDrawers: {
+        games: {
+            displayTitle: 'GAMES',
+            hint: 'In-development games — APPSTAIN and side experiments.\nClick green lines or use console commands where listed.'
+        },
+        software: {
+            displayTitle: 'SOFTWARE',
+            hint: 'Tools, generators, demos, portfolio tests, agents.\nMost entries are wired to the terminal; try /help for commands.'
+        }
+    }
+};
+
+/** Terminal menu: PUSHKA banner + Vimeo showreel modal (`/pushka` / baner). */
+export const PUSHKA_CONFIG = {
+    enabled: true,
+    /** Neon title in banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'PUSHKA STUDIO',
+    /** Vimeo page or player URL (ID extracted if needed). */
+    vimeoUrl: 'https://vimeo.com/1151936108',
+    /** Two-step banner overlay (replaces default START ANIMATION). */
+    menuBannerArmedLabel: 'OPEN VIDEO',
+    /** Armed state `aria-label` second phrase (after em dash). */
+    menuBannerArmSecondHint: 'click or Enter again to open video',
+    /** Modal header (matches drawer title). */
+    modalTitle: 'PUSHKA STUDIO',
+    /** Body copy under the player (newlines OK). */
+    modalCaption:
+        'Pushka Studio is one of Leading production house from Poland. We work together probably forever. My custom pushka showreel is coming soon',
+    /** Banner drawer hint (shown under neon title). */
+    menuBannerHint:
+        'Pushka Studio is one of Leading production house from Poland. We work together probably forever. My custom pushka showreel is coming soon'
+};
+
+/**
+ * `/newskin` — YouTube modal; tło = to samo wideo co `backgroundVideo` (płaszczyzna 3D + VideoTexture),
+ * więc przechodzi przez EffectComposer (bloom / CRT / SAO / …) i fake GI jak zwykłe BG.
+ */
+export const NEWSKIN_CONFIG = {
+    enabled: true,
+    videoSrc: 'ASSETS/newskin/assets/logo_02.mp4',
+    youtubeVideoId: '3EPtw8e9NNc',
+    /** Text under the YouTube frame. */
+    caption: 'Z chłopakami współpracuję obecnie',
+    /** Main voxel headline while modal is open (spaces = separate letters; helvetiker regular = thin). */
+    displayText: 'N E W S K I N',
+    /** Panel header (terminal-menu style). */
+    panelTitle: 'NEWSKIN',
+    /** Uniform scale of `backgroundVideoMesh` while modal is open (>1 = „przybliżenie” kadru). */
+    bgVideoScale: 2,
+    /** Optional RGB gain on plane + PMREM sphere; falls back to CONFIG.backgroundVideo.mapColorGain. */
+    mapColorGain: 1.9,
+    /** Optional per-material env boost while newskin clip plays (merged over global defaults). */
+    envMapIntensityBoost: {
+        defaultBox: 20.0,
+        glass: 8.0,
+        gold: 8.5,
+        innerCubes: 1.0,
+        heart: 4.0,
+        vajbujBgCubes: 5.5,
+        mysenBgCubes: 5.5
+    },
+    /** Optional hemisphere/ambient snapshot tuning (merged over CONFIG.backgroundVideo.hemisphereFromVideo). */
+    hemisphereFromVideo: {
+        intensity: 4.0,
+        ambientIntensity: 1.5
     }
 };
 
@@ -879,6 +980,9 @@ export const TERMINAL_HELP_LINES_COMPACT = [
     '/clear // Clears console log. ex: /clear',
     '/vajbuj [start|stop] // VAJBUJ mode. Esc = stop. ex: /vajbuj start',
     '/mysen [start|stop] // MYSEN remix mode. Esc = stop. ex: /mysen start',
+    '/pushka // Opens Pushka Studio Vimeo showreel panel. ex: /pushka',
+    '/agents // AGENTS intro (stream text + link to simulacja-www). ex: /agents',
+    '/newskin // Promo: clip BG 3D + YouTube; ×/Esc/scrim zamyka tylko embed (scena zostaje); wyjście: zmiana tła w HUD. ex: /newskin',
     '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
     '/postproc <status> // Bloom / SAO / CRT + fake GI (video IBL). ex: /postproc status',
     '/fakegi <on|off|status> // Wideo jako fake GI (PMREM + hemisphere). ex: /fakegi status',
@@ -898,6 +1002,9 @@ export const TERMINAL_HELP_LINES_FULL = [
     '/clear // Clears console log. ex: /clear',
     '/vajbuj [start|stop] // Starts/stops VAJBUJ mode; Esc interrupts like stop. ex: /vajbuj start',
     '/mysen [start|stop] // Starts/stops MYSEN remix mode; Esc interrupts like stop. ex: /mysen start',
+    '/pushka // Opens Pushka Studio Vimeo showreel in a panel (like /newskin). ex: /pushka',
+    '/agents // Opens AGENTS intro (ASSETS/agents/): streamed copy + CTA to session replay (simulacja-www). ex: /agents',
+    '/newskin // Newskin clip on main BG + YouTube modal; close hides embed only (BG/text stay); full exit: change BG in HUD. ex: /newskin',
     '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
     '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
     '/crt <on|off> // Toggles CRT pass. ex: /crt off',

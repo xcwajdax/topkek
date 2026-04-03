@@ -46,8 +46,10 @@ Dokument opisuje technologie, metody pracy, zależności i konwencje używane w 
 | Zależność   | Wersja   | Sposób dostarczenia |
 |------------|----------|----------------------|
 | Three.js   | 0.160.0  | Import map → unpkg CDN |
+| Orbitron (Google Fonts) | zmienna (CSS2 API) | `fonts.googleapis.com` / `fonts.gstatic.com` — neonowe nagłówki szuflad w menu terminala (banery VAJBUJ / NEWSKIN, bloki MYSEN / Games / Software; klasa `.term-menu-drawer-display-title`) |
+| vis-network | 9.1.9   | jsDelivr CDN ([dokumentacja](https://visjs.org/)) — tylko podstrona **AGENTS · symulacja** (`ASSETS/agents/simulacja-www/index.html`), graf mapy Katalogu |
 
-Brak innych zewnętrznych bibliotek JS/CSS – projekt jest w pełni „vanilla” poza Three.js.
+Poza powyższym główna aplikacja jest „vanilla”; symulacja AGENTS ładuje vis-network jako osobny skrypt klasyczny (bez bundlera), patrz `IMPLEMENTACJA.md` w tym katalogu.
 
 ---
 
@@ -64,6 +66,9 @@ Brak innych zewnętrznych bibliotek JS/CSS – projekt jest w pełni „vanilla�
 | `particles_mobile.json` | Dane cząsteczek dla wersji mobilnej |
 | `keyframes.txt`      | Numery klatek (np. do synchronizacji z animacją/After Effects) |
 | `keyframes.aep`      | Projekt After Effects (animacje / keyframe’y) |
+| `src/showcase/`      | Moduły ES: showcase / MYSEN / animacja dokumentu (importowane z `script.js` i z `tools/`) |
+| `src/ui/`            | Moduły ES: konsola terminala, panel FX, Buuch chat |
+| `knowledge_base.json` | Baza intencji Buucha (ładowana przez `fetch` z poziomu strony głównej) |
 | `ASSETS/`            | Zasoby: obrazy, audio, wideo, fonty, podprojekty |
 
 ### ASSETS
@@ -114,7 +119,7 @@ Brak innych zewnętrznych bibliotek JS/CSS – projekt jest w pełni „vanilla�
 
 ### Zasoby zewnętrzne
 - Three.js: **tylko** z unpkg (wersja 0.160.0)
-- Brak innych CDN dla JS/CSS w głównej aplikacji
+- Wyjątek: **Google Fonts** (Orbitron) — typografia nagłówków szuflad menu terminala (`.term-menu-drawer-display-title` w `style.css`, ładowane z `index.html`); reszta UI bez dodatkowych CDN dla JS/CSS
 
 ---
 
@@ -133,7 +138,7 @@ Brak innych zewnętrznych bibliotek JS/CSS – projekt jest w pełni „vanilla�
 ## 7. Dokumentacja i pliki towarzyszące
 
 - **README** i opisy:** w katalogu nadrzędnym (np. `README_GL_PL.md`, `README_GL_ENG.md`) oraz w `ASSETS/APPSTAIN/topkek_trump_head/README.md`
-- **Instrukcje / notatki:** np. `VAJBUJ-instrukcja-zwrotki.md` w katalogu projektu
+- **Instrukcje / notatki:** np. `docs/VAJBUJ-instrukcja-zwrotki.md`
 - W tym katalogu: **WYTYCZNE_PROJEKTU.md** (ten plik) jako punkt odniesienia dla stacku, zależności i metod pracy
 
 ---

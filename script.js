@@ -12,22 +12,31 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { initTopkekTerminalShell } from './terminal-shell.js';
-import { initFxDevPanel } from './fx-dev-panel.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, STROBE_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
-import { registerVajbujAutoBlocker, registerParticleMouseSimBlocker, isVajbujAutoStartBlocked, isParticleMouseSimSuppressed } from './showcase-registry.js';
+import { initTopkekTerminalShell } from './src/ui/terminal-shell.js';
+import { initFxDevPanel } from './src/ui/fx-dev-panel.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, STROBE_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, NEWSKIN_CONFIG, PUSHKA_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL, TERMINAL_CONFIG } from './config.js';
+import { registerVajbujAutoBlocker, registerParticleMouseSimBlocker, isVajbujAutoStartBlocked, isParticleMouseSimSuppressed } from './src/showcase/showcase-registry.js';
 import {
     createVoxelWord,
     voxelStyleFromMusicConfig,
     queueLyricVoxelPregeneration,
     createVoxelGenerationTask
-} from './music-lyric-voxels.js';
-import { computeMusicShowcaseCameraResetValues } from './showcase-camera.js';
-import { capturePostprocessingSnapshot, restorePostprocessingSnapshot } from './postprocessing-snapshot.js';
-import { parseMysenTimestampLyricsFile } from './mysen-timestamp-parse.js';
-import { lyricsArrayFromShowcaseDoc, mergeShowcaseStyleIntoConfig } from './showcase-animation-adapters.js';
-import { validateShowcaseAnimationDoc } from './showcase-animation-schema.js';
-import { applyShowcaseTransformKeyframes } from './showcase-animation-runtime.js';
+} from './src/showcase/music-lyric-voxels.js';
+import { computeMusicShowcaseCameraResetValues } from './src/showcase/showcase-camera.js';
+import { capturePostprocessingSnapshot, restorePostprocessingSnapshot } from './src/showcase/postprocessing-snapshot.js';
+import { parseMysenTimestampLyricsFile } from './src/showcase/mysen-timestamp-parse.js';
+import { buildMergedMysenLyricsArray, lastFilledLineIndexInLyrics } from './src/showcase/mysen-merge-lyrics-from-timestamps.js';
+import { lyricsArrayFromShowcaseDoc, mergeShowcaseStyleIntoConfig } from './src/showcase/showcase-animation-adapters.js';
+import {
+    normalizeShowcaseAnimationDocForRuntime,
+    validateShowcaseAnimationDoc
+} from './src/showcase/showcase-animation-schema.js';
+import {
+    applyShowcaseCustomKeyframes,
+    applyShowcasePostprocessKeyframes,
+    applyShowcaseVolumetricKeyframes
+} from './src/showcase/showcase-animation-pass-runtime.js';
+import { applyShowcaseTransformKeyframes } from './src/showcase/showcase-animation-runtime.js';
 
 const CUSTOM_TEXT_QUERY_PARAM = 'text';
 const MAX_CUSTOM_TEXT_LENGTH = 10;
@@ -387,10 +396,14 @@ function updateBackgroundBeatIndicator(elapsedSeconds) {
     });
 }
 
-function setBackgroundVideoBySrc(nextSrc) {
+async function setBackgroundVideoBySrc(nextSrc) {
     const bgCfg = CONFIG.backgroundVideo;
     const sources = bgCfg?.sources;
     if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0 || !nextSrc) return;
+
+    if (newskinBackgroundRestore != null) {
+        await closeNewskinModalAsync();
+    }
 
     const normalizedTarget = normalizeBackgroundVideoSrc(nextSrc);
     const next = sources.find(s => normalizeBackgroundVideoSrc(s?.src) === normalizedTarget);
@@ -691,13 +704,21 @@ function applyVideoIblMaterialBoost() {
     applyStd(goldMaterial, 'gold');
     if (innerCubeInstancedMesh?.material) applyStd(innerCubeInstancedMesh.material, 'innerCubes');
 
-    const hv = boost.vajbujBgCubes;
+    let hv = boost.vajbujBgCubes;
+    if (vajbujState.active && vajbujState._showcaseVolBoost?.vajbujBgCubes != null) {
+        const k = vajbujState._showcaseVolBoost.vajbujBgCubes;
+        hv = (hv ?? 1) * k;
+    }
     if (hv != null && vajbujState.bgCubesMesh?.material) {
         const base = VAJBUJ_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
         vajbujState.bgCubesMesh.material.envMapIntensity = base * hv;
     }
 
-    const hm = boost.mysenBgCubes;
+    let hm = boost.mysenBgCubes;
+    if (mysenState.active && mysenState._showcaseVolBoost?.mysenBgCubes != null) {
+        const k = mysenState._showcaseVolBoost.mysenBgCubes;
+        hm = (hm ?? 1) * k;
+    }
     if (hm != null && mysenState.bgCubesMesh?.material) {
         const baseM = MYSEN_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
         mysenState.bgCubesMesh.material.envMapIntensity = baseM * hm;
@@ -763,7 +784,8 @@ let vajbujState = {
     voxelCache: {}, // Cache for pre-calculated voxel data
     generationQueue: [], // Queue for background processing
     /** After natural playback end only — show Spotify widget in finalize if embed URL set. */
-    pendingSpotifyWidgetAfterFinalize: false
+    pendingSpotifyWidgetAfterFinalize: false,
+    _showcaseVolBoost: {}
 };
 
 let vajbujFinalizeTimerId = null;
@@ -781,6 +803,7 @@ function hideMusicShowcaseSpotifyWidget() {
         window.removeEventListener('keydown', musicShowcaseSpotifyKeydownHandler, true);
         musicShowcaseSpotifyKeydownHandler = null;
     }
+    hideMusicShowcaseYoutubeModal();
     const iframe = document.getElementById('music-showcase-spotify-iframe');
     if (iframe) iframe.src = '';
     const root = document.getElementById('music-showcase-spotify-widget');
@@ -817,6 +840,396 @@ function showMusicShowcaseSpotifyWidget(embedSrc, titleText) {
     document.getElementById('music-showcase-spotify-close')?.focus();
 }
 
+let musicShowcaseYoutubeKeydownHandler = null;
+
+function hideMusicShowcaseYoutubeModal() {
+    if (musicShowcaseYoutubeKeydownHandler) {
+        window.removeEventListener('keydown', musicShowcaseYoutubeKeydownHandler, true);
+        musicShowcaseYoutubeKeydownHandler = null;
+    }
+    const iframe = document.getElementById('music-showcase-youtube-iframe');
+    if (iframe) iframe.src = '';
+    const root = document.getElementById('music-showcase-youtube-modal');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+}
+
+/**
+ * @param {{ embedSrc: string, title?: string, bodyText?: string }} opts
+ */
+function showMusicShowcaseYoutubeModal(opts) {
+    const embedSrc = opts?.embedSrc;
+    if (!embedSrc || typeof embedSrc !== 'string') return;
+
+    hideMusicShowcaseSpotifyWidget();
+
+    const root = document.getElementById('music-showcase-youtube-modal');
+    const iframe = document.getElementById('music-showcase-youtube-iframe');
+    const titleEl = document.getElementById('music-showcase-youtube-modal-title');
+    const bodyEl = document.getElementById('music-showcase-youtube-attribution');
+    if (!root || !iframe) return;
+
+    if (titleEl) titleEl.textContent = opts.title || 'Original';
+    if (bodyEl) {
+        const t = opts.bodyText;
+        bodyEl.textContent = typeof t === 'string' ? t : '';
+    }
+
+    iframe.src = embedSrc;
+    root.classList.remove('hidden');
+    root.setAttribute('aria-hidden', 'false');
+
+    musicShowcaseYoutubeKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (root.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideMusicShowcaseYoutubeModal();
+    };
+    window.addEventListener('keydown', musicShowcaseYoutubeKeydownHandler, { capture: true });
+
+    document.getElementById('music-showcase-youtube-close')?.focus();
+}
+
+/** Snapshot of main BG plane while `/newskin` modal is open (restored on close). */
+let newskinBackgroundRestore = null;
+/** `CONFIG.text` before opening newskin (restored after particle regen on close). */
+let newskinSavedConfigText = null;
+let newskinModalKeydownHandler = null;
+let pushkaModalKeydownHandler = null;
+
+function syncNewskinModalBodyOverflow() {
+    const m = document.getElementById('newskin-modal');
+    if (!m || m.classList.contains('hidden')) {
+        document.body.classList.remove('newskin-modal-open');
+        return;
+    }
+    if (m.classList.contains('newskin-modal--minimized')) {
+        document.body.classList.remove('newskin-modal-open');
+    } else {
+        document.body.classList.add('newskin-modal-open');
+    }
+}
+
+function syncPushkaModalBodyOverflow() {
+    const m = document.getElementById('pushka-modal');
+    if (!m || m.classList.contains('hidden')) {
+        document.body.classList.remove('pushka-modal-open');
+        return;
+    }
+    if (m.classList.contains('newskin-modal--minimized')) {
+        document.body.classList.remove('pushka-modal-open');
+    } else {
+        document.body.classList.add('pushka-modal-open');
+    }
+}
+
+/** Vimeo page or player URL → `player.vimeo.com` embed with autoplay. */
+function normalizeVimeoEmbedUrl(rawUrl) {
+    let url = String(rawUrl || '').trim();
+    if (!url) return '';
+    if (!url.includes('player.vimeo.com')) {
+        const match = url.match(/vimeo\.com\/(\d+)/);
+        if (match && match[1]) {
+            url = `https://player.vimeo.com/video/${match[1]}`;
+        }
+    }
+    if (!url.includes('autoplay=')) {
+        const sep = url.includes('?') ? '&' : '?';
+        url += `${sep}autoplay=1`;
+    }
+    return url;
+}
+
+function buildNewskinActiveVideoSource() {
+    const c = NEWSKIN_CONFIG;
+    const profile = { src: c.videoSrc };
+    if (c.mapColorGain != null && c.mapColorGain !== '') {
+        const g = Number(c.mapColorGain);
+        if (Number.isFinite(g)) profile.mapColorGain = g;
+    }
+    if (c.envMapIntensityBoost && typeof c.envMapIntensityBoost === 'object') {
+        profile.envMapIntensityBoost = { ...c.envMapIntensityBoost };
+    }
+    if (c.hemisphereFromVideo && typeof c.hemisphereFromVideo === 'object') {
+        profile.hemisphereFromVideo = { ...c.hemisphereFromVideo };
+    }
+    return profile;
+}
+
+function applyNewskinSceneBackground() {
+    if (!backgroundVideoEl || !backgroundVideoMesh || !NEWSKIN_CONFIG?.videoSrc) return false;
+
+    newskinBackgroundRestore = {
+        activeSource: activeBackgroundVideoSource,
+        meshScale: backgroundVideoMesh.scale.clone(),
+        meshPosition: backgroundVideoMesh.position.clone(),
+        userPaused: backgroundVideoUserPaused
+    };
+
+    activeBackgroundVideoSource = buildNewskinActiveVideoSource();
+    backgroundVideoUserPaused = false;
+
+    backgroundVideoEl.src = NEWSKIN_CONFIG.videoSrc;
+    backgroundVideoEl.load();
+    applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    backgroundVideoEl.play().catch(() => {});
+
+    const sc = Number(NEWSKIN_CONFIG.bgVideoScale);
+    const u = Number.isFinite(sc) && sc > 0 ? sc : 2;
+    backgroundVideoMesh.scale.set(u, u, 1);
+
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
+
+    if (backgroundVideoTexture) backgroundVideoTexture.needsUpdate = true;
+    if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
+    updateBackgroundVideoPlayToggleUi();
+    return true;
+}
+
+function restoreNewskinSceneBackground() {
+    if (!newskinBackgroundRestore) return;
+    const r = newskinBackgroundRestore;
+    newskinBackgroundRestore = null;
+
+    if (!backgroundVideoEl || !backgroundVideoMesh) return;
+
+    activeBackgroundVideoSource = r.activeSource;
+    backgroundVideoMesh.scale.copy(r.meshScale);
+    backgroundVideoMesh.position.copy(r.meshPosition);
+    backgroundVideoUserPaused = r.userPaused;
+
+    const bgCfg = CONFIG.backgroundVideo;
+    const sources = bgCfg?.sources;
+    const nextSrc =
+        r.activeSource?.src ||
+        (Array.isArray(sources) && sources.length ? sources[0].src : null) ||
+        bgCfg?.src;
+
+    if (nextSrc) {
+        backgroundVideoEl.src = nextSrc;
+        backgroundVideoEl.load();
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+        if (!r.userPaused) backgroundVideoEl.play().catch(() => {});
+    }
+
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
+
+    if (backgroundVideoTexture) backgroundVideoTexture.needsUpdate = true;
+    if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
+
+    const bgSelect = document.getElementById('bg-video-select');
+    if (bgSelect && nextSrc) {
+        const norm = normalizeBackgroundVideoSrc(nextSrc);
+        if (Array.from(bgSelect.options).some((o) => o.value === norm)) {
+            bgSelect.value = norm;
+        }
+    }
+    updateBackgroundVideoPlayToggleUi();
+}
+
+/**
+ * Hide the YouTube promo dialog only. Keeps NEWSKIN scene state (3D BG clip, voxel text, `newskinBackgroundRestore`).
+ * Full teardown: `closeNewskinModalAsync` (e.g. HUD background change).
+ */
+function hideNewskinYoutubePanel() {
+    if (newskinModalKeydownHandler) {
+        window.removeEventListener('keydown', newskinModalKeydownHandler, true);
+        newskinModalKeydownHandler = null;
+    }
+
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncNewskinModalBodyOverflow();
+
+    document.querySelector('.term-menu-banner-wrap--newskin')?.focus();
+}
+
+function closePushkaStudioModal() {
+    if (pushkaModalKeydownHandler) {
+        window.removeEventListener('keydown', pushkaModalKeydownHandler, true);
+        pushkaModalKeydownHandler = null;
+    }
+    const modal = document.getElementById('pushka-modal');
+    const iframe = document.getElementById('pushka-modal-vimeo-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncPushkaModalBodyOverflow();
+    document.querySelector('.term-menu-banner-wrap--pushka')?.focus();
+}
+
+/** @returns {string|null} Error message, or `null` if opened. */
+function openPushkaStudioModal() {
+    if (PUSHKA_CONFIG?.enabled === false) return 'Pushka: disabled in config.';
+    const modal = document.getElementById('pushka-modal');
+    const iframe = document.getElementById('pushka-modal-vimeo-iframe');
+    if (!modal || !iframe) return 'pushka: UI missing.';
+    if (!modal.classList.contains('hidden')) return 'pushka: panel already open.';
+
+    const embedUrl = normalizeVimeoEmbedUrl(PUSHKA_CONFIG?.vimeoUrl);
+    if (!embedUrl) return 'pushka: no Vimeo URL in config.';
+
+    iframe.src = embedUrl;
+    modal.classList.remove('hidden');
+    modal.classList.remove('newskin-modal--minimized');
+    modal.setAttribute('aria-hidden', 'false');
+    syncPushkaModalBodyOverflow();
+
+    const minBtn = document.getElementById('pushka-modal-minimize');
+    if (minBtn) {
+        minBtn.setAttribute('aria-expanded', 'true');
+        minBtn.setAttribute('aria-label', 'Minimalizuj panel');
+        minBtn.title = 'Minimalizuj';
+    }
+
+    pushkaModalKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (modal.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closePushkaStudioModal();
+    };
+    window.addEventListener('keydown', pushkaModalKeydownHandler, { capture: true });
+
+    document.getElementById('pushka-modal-close')?.focus();
+    return null;
+}
+
+async function closeNewskinModalAsync() {
+    setNewskinTerminalMenuActive(false);
+    if (newskinModalKeydownHandler) {
+        window.removeEventListener('keydown', newskinModalKeydownHandler, true);
+        newskinModalKeydownHandler = null;
+    }
+
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncNewskinModalBodyOverflow();
+
+    if (newskinSavedConfigText != null && loadedFont && loadedFontRegular) {
+        CONFIG.text = newskinSavedConfigText;
+        newskinSavedConfigText = null;
+        try {
+            await regenerateMainTextParticles(loadedFont);
+        } catch (err) {
+            console.warn('[newskin] restore particles failed:', err);
+        }
+    }
+
+    restoreNewskinSceneBackground();
+}
+
+function closeNewskinModal() {
+    return closeNewskinModalAsync();
+}
+
+/** @returns {Promise<string|null>} Resolves `null` on success, or an error string. */
+async function openNewskinModalAsync() {
+    if (!NEWSKIN_CONFIG?.enabled) return 'newskin disabled in config.';
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (!modal || !iframe) return 'newskin: UI missing.';
+
+    if (!modal.classList.contains('hidden')) return 'newskin: already open.';
+
+    if (!backgroundVideoEl || !backgroundVideoMesh) {
+        return 'newskin: no 3D background video (CONFIG.backgroundVideo).';
+    }
+    if (!loadedFont || !loadedFontRegular) return 'newskin: fonts not ready yet.';
+
+    const promoSceneAlreadyActive = newskinBackgroundRestore != null;
+
+    if (!promoSceneAlreadyActive) {
+        if (!applyNewskinSceneBackground()) return 'newskin: could not apply scene background.';
+
+        const savedText = CONFIG.text;
+        CONFIG.text = NEWSKIN_CONFIG.displayText || 'N E W S K I N';
+        newskinSavedConfigText = savedText;
+
+        try {
+            await regenerateMainTextParticles(loadedFontRegular);
+        } catch (err) {
+            console.warn('[newskin] particle regen failed:', err);
+            CONFIG.text = savedText;
+            newskinSavedConfigText = null;
+            restoreNewskinSceneBackground();
+            return 'newskin: particle rebuild failed.';
+        }
+    }
+
+    iframe.src = `https://www.youtube.com/embed/${NEWSKIN_CONFIG.youtubeVideoId}?rel=0`;
+
+    modal.classList.remove('hidden');
+    modal.classList.remove('newskin-modal--minimized');
+    modal.setAttribute('aria-hidden', 'false');
+    syncNewskinModalBodyOverflow();
+
+    const minBtn = document.getElementById('newskin-modal-minimize');
+    if (minBtn) {
+        minBtn.setAttribute('aria-expanded', 'true');
+        minBtn.setAttribute('aria-label', 'Minimalizuj panel');
+        minBtn.title = 'Minimalizuj';
+    }
+
+    newskinModalKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (modal.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideNewskinYoutubePanel();
+    };
+    window.addEventListener('keydown', newskinModalKeydownHandler, { capture: true });
+
+    document.getElementById('newskin-modal-close')?.focus();
+    setNewskinTerminalMenuActive(true);
+    return null;
+}
+
+function setNewskinTerminalMenuActive(active) {
+    const bannerHint = document.getElementById('term-newskin-banner-hint');
+    if (bannerHint) bannerHint.classList.toggle('newskin-active', active);
+}
+
 // MYSEN remix mode state (separate voxel cache from VAJBUJ)
 let mysenState = {
     active: false,
@@ -849,9 +1262,12 @@ let mysenState = {
     _wordAnimationLoadPromise: null,
     /** Shallow merge: MYSEN_CONFIG + JSON `defaults` (tylko dozwolone klucze), ustawiane przy starcie MYSEN. */
     mergedMysenConfig: null,
-    /** Validated `showcase-animation` v1 document (voxelLyricsMysen), or null. */
+    /** Validated showcase animation document (v1/v2, voxelLyricsMysen), or null. */
     showcaseAnimationDoc: null,
     _showcaseAnimationLoadPromise: null,
+    /** Interpolated volumetric multipliers from showcase JSON (e.g. mysenBgCubes). */
+    _showcaseVolBoost: {},
+    _showcaseCustomScalars: {},
     pendingSpotifyWidgetAfterFinalize: false
 };
 
@@ -1032,15 +1448,20 @@ async function ensureMysenWordAnimationLoaded() {
 function queueMysenVoxelPregenForPreparedWords(state, lyricsConfig) {
     if (!loadedFontRegular || !state.words?.length) return;
     const seen = new Set();
-    const styleSlice = {
-        wordSize: lyricsConfig.wordSize,
-        wordHeight: lyricsConfig.wordHeight,
-        wordThickness: lyricsConfig.wordThickness
-    };
     state.words.forEach((w) => {
         if (!w.text) return;
         const sc = w.scale || 1;
-        const key = `${w.text}§${sc}`;
+        const styleSlice = {
+            wordSize: Number.isFinite(w.wordSize) && w.wordSize > 0 ? w.wordSize : lyricsConfig.wordSize,
+            wordHeight: Number.isFinite(w.wordHeight) && w.wordHeight > 0 ? w.wordHeight : lyricsConfig.wordHeight,
+            wordThickness:
+                Number.isFinite(w.wordThickness) && w.wordThickness > 0
+                    ? w.wordThickness
+                    : lyricsConfig.wordThickness
+        };
+        const preset = typeof w.materialPresetId === 'string' && w.materialPresetId.length ? w.materialPresetId : 'std';
+        const sr = Number.isFinite(w.scatterRadius) && w.scatterRadius > 0 ? w.scatterRadius : lyricsConfig.scatterRadius;
+        const key = `${w.text}§${sc}§${styleSlice.wordSize}§${styleSlice.wordHeight}§${styleSlice.wordThickness}§${sr}§${preset}`;
         if (seen.has(key)) return;
         seen.add(key);
         state.generationQueue.push(
@@ -1049,113 +1470,9 @@ function queueMysenVoxelPregenForPreparedWords(state, lyricsConfig) {
     });
 }
 
-/** Highest lineIndex that would be assigned to a word in this lyric list (no trailing lineBreak after last word). */
-function lastFilledLineIndexInLyrics(lyrics) {
-    let currentLineIdx = 0;
-    let maxL = -1;
-    if (!Array.isArray(lyrics)) return -1;
-    for (let i = 0; i < lyrics.length; i++) {
-        const item = lyrics[i];
-        if (item.lineBreak) currentLineIdx++;
-        else maxL = Math.max(maxL, currentLineIdx);
-    }
-    return maxL;
-}
-
 /** Merge intro + timestamp words; opcjonalnie grupy w jednym wierszu (`mysenTimestampLineGroups`). */
 function buildMergedMysenLyrics() {
-    const intro = MYSEN_CONFIG.introLyrics || MYSEN_CONFIG.lyrics;
-    const merged = intro.slice();
-    const ts = mysenState.timestampLyricsParsed;
-    const startT = MYSEN_CONFIG.audioStartTime || 0;
-    const grpCfg = MYSEN_CONFIG.mysenTimestampLineGroups;
-    const groups =
-        grpCfg && grpCfg.enabled !== false && Array.isArray(grpCfg.groups) ? grpCfg.groups : null;
-
-    if (MYSEN_CONFIG.timestampLyricsEnabled && Array.isArray(ts) && ts.length) {
-        merged.push({ lineBreak: true });
-        let i = 0;
-        while (i < ts.length) {
-            const row = ts[i];
-            const gr = findMysenTsLineGroup(row.at, groups);
-
-            if (!gr) {
-                merged.push({
-                    text: row.text,
-                    color: row.color ?? MYSEN_CONFIG.timestampWordColor,
-                    at: row.at - startT,
-                    atSourceSec: row.at
-                });
-                merged.push({ lineBreak: true });
-                i++;
-                continue;
-            }
-
-            const buf = [];
-            while (i < ts.length && findMysenTsLineGroup(ts[i].at, groups) === gr) {
-                buf.push(ts[i]);
-                i++;
-            }
-
-            const splitSpec = gr.splitLines;
-            if (Array.isArray(splitSpec) && splitSpec.length > 0) {
-                let t = 0;
-                for (let si = 0; si < splitSpec.length; si++) {
-                    const sl = splitSpec[si];
-                    const n = Math.max(0, Math.floor(sl.wordCount ?? 0));
-                    for (let k = 0; k < n && t < buf.length; k++, t++) {
-                        const r = buf[t];
-                        merged.push({
-                            text: r.text,
-                            color: r.color ?? MYSEN_CONFIG.timestampWordColor,
-                            at: r.at - startT,
-                            atSourceSec: r.at,
-                            lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
-                            mysenGroupedLine: true,
-                            offsetX: sl.offsetX ?? 0,
-                            offsetY: sl.offsetY ?? 0,
-                            mysenSplitRow: si
-                        });
-                    }
-                }
-                if (t < buf.length) {
-                    console.warn(
-                        '[MYSEN] splitLines wordCount sum < tokens in group; appending remainder on last row'
-                    );
-                    const lastSi = splitSpec.length - 1;
-                    const sl = splitSpec[lastSi];
-                    while (t < buf.length) {
-                        const r = buf[t++];
-                        merged.push({
-                            text: r.text,
-                            color: r.color ?? MYSEN_CONFIG.timestampWordColor,
-                            at: r.at - startT,
-                            atSourceSec: r.at,
-                            lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
-                            mysenGroupedLine: true,
-                            offsetX: sl.offsetX ?? 0,
-                            offsetY: sl.offsetY ?? 0,
-                            mysenSplitRow: lastSi
-                        });
-                    }
-                }
-            } else {
-                for (let bi = 0; bi < buf.length; bi++) {
-                    const r = buf[bi];
-                    merged.push({
-                        text: r.text,
-                        color: r.color ?? MYSEN_CONFIG.timestampWordColor,
-                        at: r.at - startT,
-                        atSourceSec: r.at,
-                        lineVanishAtSourceSec: gr.lineVanishAtMediaSec,
-                        mysenGroupedLine: true
-                    });
-                }
-            }
-            merged.push({ lineBreak: true });
-        }
-    }
-    return merged;
+    return buildMergedMysenLyricsArray(MYSEN_CONFIG, mysenState.timestampLyricsParsed || []);
 }
 
 function queueMysenTimestampVoxelPregen() {
@@ -1205,24 +1522,6 @@ function sampleMysenSeededRandomFlySpawn(d0, d1, ndcMargin, seedU32) {
     _mysenFrustumTmp.unproject(camera);
     _mysenFrustumDir.subVectors(_mysenFrustumTmp, camera.position).normalize().multiplyScalar(dist);
     return camera.position.clone().add(_mysenFrustumDir);
-}
-
-/**
- * @param {number} atMediaSec
- * @param {object[]|undefined} groups
- * @returns {object|null}
- */
-function findMysenTsLineGroup(atMediaSec, groups) {
-    if (!groups || !groups.length) return null;
-    for (let i = 0; i < groups.length; i++) {
-        const gr = groups[i];
-        const lo = gr.tMin;
-        const hi = gr.tMax;
-        if (Number.isFinite(lo) && Number.isFinite(hi) && atMediaSec >= lo && atMediaSec <= hi) {
-            return gr;
-        }
-    }
-    return null;
 }
 
 async function ensureMysenTimestampsLoaded() {
@@ -1885,7 +2184,7 @@ function initSceneAndLoad() {
     createUI();
 }
 
-function makeSectionCollapsible(sectionEl, label) {
+function makeSectionCollapsible(sectionEl, label, initiallyCollapsed = false) {
     if (!sectionEl || sectionEl.dataset.sectionToggleBound === '1') return;
 
     const content = document.createElement('div');
@@ -1915,7 +2214,252 @@ function makeSectionCollapsible(sectionEl, label) {
     sectionEl.appendChild(btn);
     sectionEl.appendChild(content);
     sectionEl.dataset.sectionToggleBound = '1';
-    applyCollapsedState(false);
+    applyCollapsedState(initiallyCollapsed);
+}
+
+/** VAJBUJ banner: `#vajbuj-menu-banner-video`; hover/focus = whole `.term-menu-banner-block` (strip + text drawer). */
+function initVajbujMenuBannerVideo() {
+    const video = document.getElementById('vajbuj-menu-banner-video');
+    const src = CONFIG.vajbujMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--vajbuj')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initNewskinMenuBannerVideo() {
+    const video = document.getElementById('newskin-menu-banner-video');
+    const src = CONFIG.newskinMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--newskin')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initPushkaMenuBannerVideo() {
+    const video = document.getElementById('pushka-menu-banner-video');
+    const src = CONFIG.pushkaMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--pushka')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initMysenMenuBannerVideo() {
+    const video = document.getElementById('term-menu-banner-mysen-video');
+    const src = CONFIG.mysenMenuBannerVideo;
+    if (!video || !src) return;
+
+    const posterPath = CONFIG.mysenMenuBannerPoster;
+    const posterImg = video.parentElement?.querySelector('.term-menu-banner-poster');
+    if (posterImg && posterPath) posterImg.src = posterPath;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-mysen-wrap')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+/**
+ * VAJBUJ / MYSEN / NEWSKIN menu strips: hover shows EN CTA; first click logs cmd + arms; second runs same line as terminal Enter.
+ * @param {{ submitLine?: (line: string) => Promise<void> } | null | undefined} shellApi
+ */
+function initTermMenuBannerTwoStepLaunch(shellApi) {
+    const submitLine = shellApi && typeof shellApi.submitLine === 'function' ? shellApi.submitLine : null;
+    const wraps = document.querySelectorAll('#terminal-menu [data-term-banner-cmd]');
+    if (!wraps.length) return;
+
+    const armedLabel =
+        TERMINAL_CONFIG.menuBannerStartAnimationLabelEn ||
+        TERMINAL_CONFIG.menuBannerArmedLabel ||
+        'START ANIMATION';
+    wraps.forEach((wrap) => {
+        const textEl = wrap.querySelector('.term-menu-banner-armed-text');
+        if (textEl) {
+            const customArmed = wrap.getAttribute('data-term-banner-armed-label');
+            textEl.textContent = (customArmed && customArmed.trim()) || armedLabel;
+        }
+        if (wrap.dataset.termBannerBaseAria == null) {
+            wrap.dataset.termBannerBaseAria = wrap.getAttribute('aria-label') || '';
+        }
+    });
+
+    let armedWrap = null;
+
+    function disarmAll() {
+        wraps.forEach((w) => {
+            const block = w.closest('.term-menu-banner-block');
+            if (block) block.classList.remove('term-menu-banner-block--armed');
+            w.setAttribute('aria-label', w.dataset.termBannerBaseAria || '');
+        });
+        armedWrap = null;
+    }
+
+    function arm(wrap) {
+        disarmAll();
+        armedWrap = wrap;
+        const cmd = wrap.getAttribute('data-term-banner-cmd') || '';
+        const block = wrap.closest('.term-menu-banner-block');
+        if (block) block.classList.add('term-menu-banner-block--armed');
+        const base = wrap.dataset.termBannerBaseAria || '';
+        const secondHint = wrap.getAttribute('data-term-banner-arm-second-hint');
+        wrap.setAttribute(
+            'aria-label',
+            secondHint && secondHint.trim() ? `${base} — ${secondHint.trim()}` : `${base} — click or Enter again to run ${cmd}`
+        );
+    }
+
+    async function runArmed(wrap) {
+        const cmd = wrap.getAttribute('data-term-banner-cmd') || '';
+        const block = wrap.closest('.term-menu-banner-block');
+        if (block) block.classList.remove('term-menu-banner-block--armed');
+        wrap.setAttribute('aria-label', wrap.dataset.termBannerBaseAria || '');
+        armedWrap = null;
+
+        if (submitLine) {
+            try {
+                await submitLine(cmd);
+            } catch (err) {
+                console.warn('[topkek] Banner submitLine failed:', err);
+            }
+        } else {
+            console.warn('[topkek] Terminal shell submitLine missing; banner command not run:', cmd);
+        }
+    }
+
+    function onWrapActivate(wrap) {
+        if (armedWrap !== wrap) {
+            arm(wrap);
+            return;
+        }
+        void runArmed(wrap);
+    }
+
+    wraps.forEach((wrap) => {
+        wrap.addEventListener('click', (e) => {
+            if (e.button !== 0) return;
+            onWrapActivate(wrap);
+        });
+        wrap.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            onWrapActivate(wrap);
+        });
+    });
 }
 
 function initSectionMenuToggles() {
@@ -1923,7 +2467,7 @@ function initSectionMenuToggles() {
     if (cameraHud) {
         const cameraHudSections = Array.from(cameraHud.querySelectorAll('.controls-section'));
         cameraHudSections.forEach((section, index) => {
-            makeSectionCollapsible(section, `left section ${index + 1}`);
+            makeSectionCollapsible(section, `left section ${index + 1}`, false);
         });
     }
 
@@ -1936,7 +2480,7 @@ function initSectionMenuToggles() {
     const terminalMenu = document.getElementById('terminal-menu');
     if (terminalMenu) makeSectionCollapsible(terminalMenu, 'terminal menu');
 
-    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see terminal-shell.js */
+    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see src/ui/terminal-shell.js */
 }
 
 // --- Portfolio Vimeo helpers ---
@@ -1945,22 +2489,8 @@ function openPortfolioModal(rawUrl) {
     const iframe = document.getElementById('portfolio-vimeo-iframe');
     if (!modal || !iframe) return;
 
-    let url = rawUrl || '';
+    const url = normalizeVimeoEmbedUrl(rawUrl);
     if (!url) return;
-
-    // Normalize regular Vimeo URL to player.vimeo.com/video/ID
-    if (!url.includes('player.vimeo.com')) {
-        const match = url.match(/vimeo\.com\/(\d+)/);
-        if (match && match[1]) {
-            url = `https://player.vimeo.com/video/${match[1]}`;
-        }
-    }
-
-    // Add autoplay if missing
-    if (!url.includes('autoplay=')) {
-        const sep = url.includes('?') ? '&' : '?';
-        url += `${sep}autoplay=1`;
-    }
 
     iframe.src = url;
     modal.classList.remove('hidden');
@@ -2570,6 +3100,31 @@ function runTopkekTerminalCommand(line) {
         return ['MYSEN started.'];
     }
 
+    if (cmd === 'agents') {
+        if (parts.length > 1) return ['Usage: /agents'];
+        setTimeout(() => {
+            window.location.assign('ASSETS/agents/');
+        }, 350);
+        return ['AGENTS: opening intro…'];
+    }
+
+    if (cmd === 'pushka') {
+        if (parts.length > 1) return ['Usage: /pushka'];
+        const err = openPushkaStudioModal();
+        if (err) return [err];
+        return ['pushka: Vimeo panel opened. Esc / scrim / × closes.'];
+    }
+
+    if (cmd === 'newskin') {
+        if (parts.length > 1) return ['Usage: /newskin'];
+        return openNewskinModalAsync().then((err) => {
+            if (err) return [err];
+            return [
+                'newskin: panel jak sekcja menu (środek), ▾ minimalizuje; napis → helvetiker regular. Esc / scrim / × chowa tylko YouTube; scena NEWSKIN zostaje — pełny powrót: zmiana tła w HUD.'
+            ];
+        });
+    }
+
     if (cmd === 'bloom') {
         const sub = (parts[1] || '').toLowerCase();
         if (!bloomPass) return ['Bloom pass not active in this profile.'];
@@ -2940,7 +3495,9 @@ function createUI() {
         const activeSrc = activeBackgroundVideoSource?.src ?? bgCfg.sources[0]?.src;
         bgSelect.value = normalizeBackgroundVideoSrc(activeSrc);
         bgSelect.title = 'Wybierz wideo tła';
-        bgSelect.addEventListener('change', () => setBackgroundVideoBySrc(bgSelect.value));
+        bgSelect.addEventListener('change', () => {
+            void setBackgroundVideoBySrc(bgSelect.value);
+        });
 
         const bgSelectRow = document.createElement('div');
         bgSelectRow.className = 'camera-hud-bg-select-row';
@@ -3034,6 +3591,10 @@ function createUI() {
     }
     document.body.appendChild(cameraHud);
     initSectionMenuToggles();
+    initPushkaMenuBannerVideo();
+    initVajbujMenuBannerVideo();
+    initMysenMenuBannerVideo();
+    initNewskinMenuBannerVideo();
 
     // --- Glitch volumetryczne ---
     const btnGlitchTrigger = document.getElementById('btn-glitch-trigger');
@@ -3124,6 +3685,7 @@ function createUI() {
     const termAppstain = document.getElementById('term-appstain');
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
+    const termAgents = document.getElementById('term-agents');
     const termPortfolio = document.getElementById('term-portfolio');
     const termScndbrejn = document.getElementById('term-scndbrejn');
     const termAnimPortfolio = document.getElementById('term-anim-portfolio');
@@ -3183,6 +3745,12 @@ function createUI() {
     if (termGenimg) {
         termGenimg.onclick = () => {
             document.getElementById('genimg-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termAgents) {
+        termAgents.onclick = () => {
+            window.location.assign('ASSETS/agents/');
         };
     }
 
@@ -3412,12 +3980,142 @@ function createUI() {
     };
     initPortfolioVimeoModal();
 
+    const initNewskinModal = () => {
+        const modal = document.getElementById('newskin-modal');
+        const closeBtn = document.getElementById('newskin-modal-close');
+        const minBtn = document.getElementById('newskin-modal-minimize');
+        const scrim = document.getElementById('newskin-modal-scrim');
+        const caption = document.getElementById('newskin-modal-caption');
+        const titleEl = document.getElementById('newskin-modal-title');
+        if (titleEl && NEWSKIN_CONFIG?.panelTitle) {
+            titleEl.textContent = NEWSKIN_CONFIG.panelTitle;
+        }
+        if (caption && NEWSKIN_CONFIG?.caption) {
+            caption.textContent = NEWSKIN_CONFIG.caption;
+        }
+        if (!modal || !closeBtn || !scrim) return;
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hideNewskinYoutubePanel();
+        });
+        if (minBtn) {
+            minBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                modal.classList.toggle('newskin-modal--minimized');
+                const collapsed = modal.classList.contains('newskin-modal--minimized');
+                minBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                minBtn.setAttribute('aria-label', collapsed ? 'Rozwiń panel' : 'Minimalizuj panel');
+                minBtn.title = collapsed ? 'Rozwiń' : 'Minimalizuj';
+                syncNewskinModalBodyOverflow();
+            });
+        }
+        scrim.addEventListener('click', () => {
+            if (modal.classList.contains('newskin-modal--minimized')) return;
+            hideNewskinYoutubePanel();
+        });
+    };
+    initNewskinModal();
+
+    const initPushkaModal = () => {
+        const modal = document.getElementById('pushka-modal');
+        const closeBtn = document.getElementById('pushka-modal-close');
+        const minBtn = document.getElementById('pushka-modal-minimize');
+        const scrim = document.getElementById('pushka-modal-scrim');
+        const caption = document.getElementById('pushka-modal-caption');
+        const titleEl = document.getElementById('pushka-modal-title');
+        if (titleEl && PUSHKA_CONFIG?.modalTitle != null) {
+            titleEl.textContent = PUSHKA_CONFIG.modalTitle;
+        }
+        if (caption && PUSHKA_CONFIG?.modalCaption != null) {
+            caption.textContent = PUSHKA_CONFIG.modalCaption;
+        }
+        if (!modal || !closeBtn || !scrim) return;
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closePushkaStudioModal();
+        });
+        if (minBtn) {
+            minBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                modal.classList.toggle('newskin-modal--minimized');
+                const collapsed = modal.classList.contains('newskin-modal--minimized');
+                minBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                minBtn.setAttribute('aria-label', collapsed ? 'Rozwiń panel' : 'Minimalizuj panel');
+                minBtn.title = collapsed ? 'Rozwiń' : 'Minimalizuj';
+                syncPushkaModalBodyOverflow();
+            });
+        }
+        scrim.addEventListener('click', () => {
+            if (modal.classList.contains('newskin-modal--minimized')) return;
+            closePushkaStudioModal();
+        });
+    };
+    initPushkaModal();
+
+    const initTerminalMenuHoverDrawerCopy = () => {
+        const vajTitle = document.getElementById('term-vajbuj-drawer-display-title');
+        if (vajTitle && VAJBUJ_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            vajTitle.textContent = VAJBUJ_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const nsDrawerTitle = document.getElementById('term-newskin-drawer-display-title');
+        if (nsDrawerTitle && NEWSKIN_CONFIG?.panelTitle != null) {
+            nsDrawerTitle.textContent = NEWSKIN_CONFIG.panelTitle;
+        }
+        const mysenDrawerTitle = document.getElementById('term-mysen-drawer-display-title');
+        if (mysenDrawerTitle && MYSEN_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            mysenDrawerTitle.textContent = MYSEN_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const pushkaTitle = document.getElementById('term-pushka-drawer-display-title');
+        if (pushkaTitle && PUSHKA_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            pushkaTitle.textContent = PUSHKA_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const pushkaHint = document.getElementById('term-pushka-banner-hint');
+        if (pushkaHint && PUSHKA_CONFIG?.menuBannerHint != null) {
+            pushkaHint.textContent = PUSHKA_CONFIG.menuBannerHint;
+        }
+        const pushWrap = document.querySelector('.term-menu-banner-wrap--pushka');
+        if (pushWrap) {
+            if (PUSHKA_CONFIG?.menuBannerArmedLabel) {
+                pushWrap.setAttribute('data-term-banner-armed-label', PUSHKA_CONFIG.menuBannerArmedLabel);
+            }
+            if (PUSHKA_CONFIG?.menuBannerArmSecondHint) {
+                pushWrap.setAttribute('data-term-banner-arm-second-hint', PUSHKA_CONFIG.menuBannerArmSecondHint);
+            }
+        }
+        const drawers = TERMINAL_CONFIG?.menuSectionHoverDrawers;
+        if (!drawers) return;
+        const pairs = [
+            ['games', 'term-menu-section-games-display-title', 'term-menu-section-games-hint'],
+            ['software', 'term-menu-section-software-display-title', 'term-menu-section-software-hint']
+        ];
+        for (const [key, titleId, hintId] of pairs) {
+            const block = drawers[key];
+            if (!block) continue;
+            const titleEl = document.getElementById(titleId);
+            const hintEl = document.getElementById(hintId);
+            if (titleEl && block.displayTitle != null) titleEl.textContent = block.displayTitle;
+            if (hintEl && block.hint != null) hintEl.textContent = block.hint;
+        }
+    };
+    initTerminalMenuHoverDrawerCopy();
+
     const initMusicShowcaseSpotifyWidget = () => {
         const closeBtn = document.getElementById('music-showcase-spotify-close');
         if (!closeBtn) return;
         closeBtn.addEventListener('click', () => hideMusicShowcaseSpotifyWidget());
     };
     initMusicShowcaseSpotifyWidget();
+
+    const initMusicShowcaseYoutubeModal = () => {
+        const modal = document.getElementById('music-showcase-youtube-modal');
+        const closeBtn = document.getElementById('music-showcase-youtube-close');
+        const backdrop = document.getElementById('music-showcase-youtube-backdrop');
+        if (!modal || !closeBtn || !backdrop) return;
+        const close = () => hideMusicShowcaseYoutubeModal();
+        closeBtn.addEventListener('click', close);
+        backdrop.addEventListener('click', close);
+    };
+    initMusicShowcaseYoutubeModal();
 
     const initPortfolioDetailModal = () => {
         const modal = document.getElementById('portfolio-detail-modal');
@@ -3432,7 +4130,8 @@ function createUI() {
 
     // --- END NEW UI ELEMENTS ---
 
-    initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+    const topkekShell = initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+    initTermMenuBannerTwoStepLaunch(topkekShell);
 
     if (document.body) {
         fxDevPanelControl = initFxDevPanel({
@@ -3709,6 +4408,34 @@ async function updateText(newText) {
     setTimeout(() => {
         loaderContainer.style.display = 'none';
     }, 500);
+}
+
+/** Rebuild main TOPKEK voxel text from current `CONFIG.text` (no loader UI). */
+async function regenerateMainTextParticles(mainLetterFont) {
+    if (!mainLetterFont || !loadedFontRegular || !scene) return;
+
+    Object.values(meshRegistry).forEach((entry) => {
+        if (entry.top) {
+            scene.remove(entry.top);
+            entry.top.geometry.dispose();
+        }
+        if (entry.kek) {
+            scene.remove(entry.kek);
+            entry.kek.geometry.dispose();
+        }
+    });
+    meshRegistry = {};
+
+    if (innerCubeInstancedMesh) {
+        scene.remove(innerCubeInstancedMesh);
+        innerCubeInstancedMesh.geometry.dispose();
+        innerCubeInstancedMesh.material.dispose();
+    }
+
+    cubeGroups = [];
+    innerCubeParticles = [];
+
+    await generateParticles(mainLetterFont, loadedFontRegular);
 }
 
 function setMode(mode, activeBtn, inactiveBtns) {
@@ -5920,16 +6647,20 @@ function onWheel(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN)
+    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN, newskin)
     const appstainModal = document.getElementById('appstain-modal');
     const glitchModal = document.getElementById('glitch-modal');
     const genimgModal = document.getElementById('genimg-modal');
     const scndbrejnModalWheel = document.getElementById('scndbrejn-modal');
+    const newskinModalWheel = document.getElementById('newskin-modal');
+    const pushkaModalWheel = document.getElementById('pushka-modal');
     if (
         (appstainModal && !appstainModal.classList.contains('hidden')) ||
         (glitchModal && !glitchModal.classList.contains('hidden')) ||
         (genimgModal && !genimgModal.classList.contains('hidden')) ||
-        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden'))
+        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden')) ||
+        (newskinModalWheel && !newskinModalWheel.classList.contains('hidden')) ||
+        (pushkaModalWheel && !pushkaModalWheel.classList.contains('hidden'))
     ) {
         return;
     }
@@ -6440,6 +7171,17 @@ function stepLyricWordsShared(state, config, elapsed, tempoMultiplier, options =
         const wordScaleMul = (wordData.assembledScale > 0 ? wordData.assembledScale : 1) * showKfMul;
 
         if (wordData.state === 'spreading' && wordData.mesh && wordData.cubes) {
+            const vf0 = wordData.visibleFromFragSec;
+            const vt0 = wordData.visibleToFragSec;
+            if (Number.isFinite(vf0) || Number.isFinite(vt0)) {
+                const inWin0 =
+                    (!Number.isFinite(vf0) || elapsed >= vf0) && (!Number.isFinite(vt0) || elapsed <= vt0);
+                if (!inWin0) {
+                    wordData.mesh.visible = false;
+                    return;
+                }
+                wordData.mesh.visible = true;
+            }
             const introDur = config.introOutroSpread?.spreadDurationSec;
             const dur = wordData._introOutroSpread && Number.isFinite(introDur) && introDur > 0
                 ? introDur
@@ -6746,6 +7488,20 @@ function stepLyricWordsShared(state, config, elapsed, tempoMultiplier, options =
                 wordData.mesh.instanceMatrix.needsUpdate = true;
             }
         }
+
+        if (wordData.mesh && wordData.state !== 'done') {
+            const vf = wordData.visibleFromFragSec;
+            const vt = wordData.visibleToFragSec;
+            if (Number.isFinite(vf) || Number.isFinite(vt)) {
+                const inWin =
+                    (!Number.isFinite(vf) || elapsed >= vf) && (!Number.isFinite(vt) || elapsed <= vt);
+                if (!inWin) {
+                    wordData.mesh.visible = false;
+                } else if (wordData.state !== 'waiting') {
+                    wordData.mesh.visible = true;
+                }
+            }
+        }
     });
 
     if (state.bgCubesMesh && state.bgCubesMesh.visible) {
@@ -6871,6 +7627,32 @@ function updateMysenMode(delta) {
 
     if (mysenState.showcaseAnimationDoc) {
         applyShowcaseTransformKeyframes(mysenState, mysenState.showcaseAnimationDoc, elapsed);
+        applyShowcasePostprocessKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            getPostprocessingPassBundle()
+        );
+        applyShowcaseVolumetricKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            mysenState._showcaseVolBoost
+        );
+        applyShowcaseCustomKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            mysenState._showcaseCustomScalars
+        );
+    } else {
+        for (const k of Object.keys(mysenState._showcaseVolBoost)) {
+            delete mysenState._showcaseVolBoost[k];
+        }
+        for (const k of Object.keys(mysenState._showcaseCustomScalars)) {
+            delete mysenState._showcaseCustomScalars[k];
+        }
+    }
+
+    if (mysenState.active && CONFIG.backgroundVideo?.videoIbl?.enabled) {
+        applyVideoIblMaterialBoost();
     }
 
     stepMysenLyricWords(mysenState, eff, elapsed, tempoMultiplier, {
@@ -6938,10 +7720,19 @@ function finalizeVajbujCleanup() {
     setMusicShowcaseMenuUiHidden(false);
     tryReleaseMusicShowcasePostprocessingBaseline();
 
-    const showSpotify = vajbujState.pendingSpotifyWidgetAfterFinalize;
+    const showAttribution = vajbujState.pendingSpotifyWidgetAfterFinalize;
     vajbujState.pendingSpotifyWidgetAfterFinalize = false;
+    const ytSrc = VAJBUJ_CONFIG.originalTrackYoutubeEmbedSrc;
     const spSrc = VAJBUJ_CONFIG.originalTrackSpotifyEmbedSrc;
-    if (showSpotify && spSrc) {
+    if (showAttribution && ytSrc && typeof ytSrc === 'string') {
+        requestAnimationFrame(() => {
+            showMusicShowcaseYoutubeModal({
+                embedSrc: ytSrc,
+                title: VAJBUJ_CONFIG.originalTrackYoutubeModalTitle,
+                bodyText: VAJBUJ_CONFIG.originalTrackYoutubeAttributionEn
+            });
+        });
+    } else if (showAttribution && spSrc) {
         requestAnimationFrame(() => {
             showMusicShowcaseSpotifyWidget(spSrc, VAJBUJ_CONFIG.originalTrackSpotifyWidgetTitle);
         });
@@ -6968,6 +7759,7 @@ function forceStopVajbujSilent() {
     vajbujState.isStopping = false;
     vajbujState.pendingSpotifyWidgetAfterFinalize = false;
     if (window.vajbujButton) window.vajbujButton.classList.remove('vajbuj-active');
+    hideMusicShowcaseSpotifyWidget();
     tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
@@ -7035,7 +7827,7 @@ function finalizeMysenCleanup() {
     mysenState.lastActivityTime = Date.now();
 
     if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
-        setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        void setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
         mysenState.savedBgSrcForMysen = null;
     }
     if (backgroundVideoEl) {
@@ -7043,20 +7835,35 @@ function finalizeMysenCleanup() {
     }
     restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
     setMusicShowcaseMenuUiHidden(false);
     tryReleaseMusicShowcasePostprocessingBaseline();
 
-    const showSpotifyM = mysenState.pendingSpotifyWidgetAfterFinalize;
+    const showAttributionM = mysenState.pendingSpotifyWidgetAfterFinalize;
     mysenState.pendingSpotifyWidgetAfterFinalize = false;
+    const ytSrcM = MYSEN_CONFIG.originalTrackYoutubeEmbedSrc;
     const spSrcM = MYSEN_CONFIG.originalTrackSpotifyEmbedSrc;
-    if (showSpotifyM && spSrcM) {
+    if (showAttributionM && ytSrcM && typeof ytSrcM === 'string') {
+        requestAnimationFrame(() => {
+            showMusicShowcaseYoutubeModal({
+                embedSrc: ytSrcM,
+                title: MYSEN_CONFIG.originalTrackYoutubeModalTitle,
+                bodyText: MYSEN_CONFIG.originalTrackYoutubeAttributionEn
+            });
+        });
+    } else if (showAttributionM && spSrcM) {
         requestAnimationFrame(() => {
             showMusicShowcaseSpotifyWidget(spSrcM, MYSEN_CONFIG.originalTrackSpotifyWidgetTitle);
         });
     }
+}
+
+function setMysenTerminalMenuActive(active) {
+    if (window.mysenButton) window.mysenButton.classList.toggle('mysen-active', active);
+    const bannerHint = document.getElementById('term-mysen-banner-hint');
+    if (bannerHint) bannerHint.classList.toggle('mysen-active', active);
 }
 
 function forceStopMysenSilent() {
@@ -7079,7 +7886,7 @@ function forceStopMysenSilent() {
     mysenState.isStopping = false;
     mysenState.pendingSpotifyWidgetAfterFinalize = false;
     if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
-        setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        void setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
         mysenState.savedBgSrcForMysen = null;
     }
     if (backgroundVideoEl) {
@@ -7087,9 +7894,10 @@ function forceStopMysenSilent() {
     }
     restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
+    hideMusicShowcaseSpotifyWidget();
     tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
@@ -7185,7 +7993,12 @@ function initMysenMode() {
                     mysenState.showcaseAnimationDoc = null;
                     return;
                 }
-                mysenState.showcaseAnimationDoc = v.doc;
+                if (v.doc.adapter !== 'voxelLyricsMysen') {
+                    console.warn('[MYSEN] Showcase adapter must be voxelLyricsMysen, got:', v.doc.adapter);
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                mysenState.showcaseAnimationDoc = normalizeShowcaseAnimationDocForRuntime(v.doc);
                 console.log('[MYSEN] Showcase animation document loaded:', url);
                 if (loadedFontRegular) {
                     const lyr = lyricsArrayFromShowcaseDoc(v.doc);
@@ -7246,7 +8059,7 @@ async function startMysenMode() {
 
     if (MYSEN_CONFIG.mysenBackgroundVideoSrc) {
         mysenState.savedBgSrcForMysen = activeBackgroundVideoSource?.src ?? null;
-        setBackgroundVideoBySrc(MYSEN_CONFIG.mysenBackgroundVideoSrc);
+        await setBackgroundVideoBySrc(MYSEN_CONFIG.mysenBackgroundVideoSrc);
     }
 
     restoreBackgroundVideoMeshMaterialAfterMysen();
@@ -7297,7 +8110,7 @@ async function startMysenMode() {
         if (seekFallbackMysen) clearTimeout(seekFallbackMysen);
     }
 
-    if (window.mysenButton) window.mysenButton.classList.add('mysen-active');
+    setMysenTerminalMenuActive(true);
 }
 
 function stopMysenMode(opts = {}) {
@@ -7330,7 +8143,7 @@ function stopMysenMode(opts = {}) {
     targetCameraRadius = CONFIG.initialZoom;
     cameraFocusPoint.set(0, 0, 0);
 
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
 
     if (mysenFinalizeTimerId) clearTimeout(mysenFinalizeTimerId);
     mysenFinalizeTimerId = setTimeout(() => {

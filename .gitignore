@@ -8,6 +8,9 @@
 # Cursor — logi debugowania agenta (nie commitować).
 .cursor/debug-*.log
 
+# Logi debug w katalogu głównym repozytorium (agent / lokalne).
+/debug-*.log
+
 # Cursor — lokalne skille użytkownika (nie część repozytorium).
 .cursor/skills/
 
