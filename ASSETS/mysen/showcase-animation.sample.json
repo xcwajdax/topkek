@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "adapter": "voxelLyricsMysen",
+  "audio": {
+    "durationSec": 30,
+    "suggestedFileName": "demo.mp3",
+    "exportHintPath": "ASSETS/mysen/demo.mp3"
+  },
+  "timing": {
+    "audioStartTime": 0,
+    "audioEndTime": null,
+    "firstTimestampLineIndex": 0
+  },
+  "words": [
+    {
+      "id": "w_fly",
+      "text": "FLY",
+      "at": 0,
+      "color": 16777215,
+      "scale": 1
+    },
+    {
+      "id": "w_rail",
+      "text": "RAIL",
+      "at": 2,
+      "groupedLine": true,
+      "color": 16777215,
+      "scale": 1
+    },
+    {
+      "id": "w_spawn",
+      "text": "SPAWN",
+      "at": 4,
+      "spawn": { "x": 25, "y": 8, "z": 0 },
+      "color": 16777215,
+      "scale": 1
+    },
+    {
+      "id": "w_vanish",
+      "text": "BYE",
+      "at": 6,
+      "vanishAtMediaSec": 12,
+      "color": 16777215,
+      "scale": 1
+    },
+    {
+      "id": "w_slow",
+      "text": "SLOW",
+      "at": 8,
+      "assemblyDurationSec": 3.5,
+      "color": 16777215,
+      "scale": 1
+    }
+  ],
+  "transformKeyframes": {},
+  "style": {
+    "wordSize": 1,
+    "wordAssemblyDuration": 1.8,
+    "spread": { "durationSec": 1.2 },
+    "randomFly": { "enabled": true }
+  }
+}

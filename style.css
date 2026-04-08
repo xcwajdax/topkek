@@ -12,11 +12,21 @@ body {
     --menu-surface-shadow: 0 0 10px rgba(76, 175, 80, 0.12);
     --menu-label-color: rgba(200, 255, 200, 0.82);
     --menu-text-color: rgba(210, 255, 210, 0.9);
+    /* VAJBUJ / MYSEN: hide non-console UI */
+    --music-ui-reveal-dur: 0.48s;
+    --music-ui-reveal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --music-ui-collapse-dur: 0.52s;
+    --music-ui-collapse-ease: cubic-bezier(0.32, 0, 0.18, 1);
 }
 
 #canvas-container {
     width: 100vw;
     height: 100vh;
+}
+
+#canvas-container canvas:focus-visible {
+    outline: 1px dashed rgba(76, 175, 80, 0.55);
+    outline-offset: -1px;
 }
 
 #loader-container {
@@ -128,7 +138,13 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    transition: transform 0.26s ease, opacity 0.26s ease;
+    visibility: visible;
+    filter: blur(0);
+    transition:
+        transform var(--music-ui-reveal-dur, 0.45s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        opacity var(--music-ui-reveal-dur, 0.45s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        visibility 0s linear;
 }
 
 .menu-collapsible-section {
@@ -655,6 +671,88 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     will-change: transform, opacity, filter;
 }
 
+/* VAJBUJ / MYSEN: fade + slide + collapse; console stays visible (and eases up slightly) */
+body.music-showcase-ui-minimal #right-panel #terminal-menu,
+body.music-showcase-ui-minimal #ui-container {
+    max-height: 0 !important;
+    opacity: 0;
+    transform: translate3d(18px, -4px, 0) scale(0.985);
+    filter: blur(2px);
+    pointer-events: none !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    visibility: hidden;
+    transition:
+        max-height var(--music-ui-collapse-dur) var(--music-ui-collapse-ease),
+        opacity calc(var(--music-ui-reveal-dur) * 0.85) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        margin 0.42s var(--music-ui-reveal-ease),
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal #camera-hud {
+    opacity: 0;
+    transform: translate3d(-40px, -6px, 0) scale(0.98);
+    filter: blur(2px);
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal .prod-label {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.98);
+    filter: blur(1px);
+    visibility: hidden;
+    transition:
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal .topkek-fx-dev-shell {
+    opacity: 0;
+    transform: translate3d(-50%, -18px, 0) scale(0.96);
+    filter: blur(2px);
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+        opacity var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        transform var(--music-ui-reveal-dur) var(--music-ui-reveal-ease),
+        filter 0.28s ease,
+        visibility 0s linear var(--music-ui-reveal-dur);
+}
+
+body.music-showcase-ui-minimal #topkek-terminal-shell {
+    transform: translate3d(0, -12px, 0);
+    box-shadow:
+        0 0 0 1px rgba(129, 199, 132, 0.22),
+        0 10px 28px rgba(0, 0, 0, 0.45),
+        0 0 22px rgba(76, 175, 80, 0.14);
+    transition:
+        transform var(--music-ui-collapse-dur) var(--music-ui-collapse-ease),
+        box-shadow var(--music-ui-collapse-dur) var(--music-ui-reveal-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.music-showcase-ui-minimal #right-panel #terminal-menu,
+    body.music-showcase-ui-minimal #ui-container,
+    body.music-showcase-ui-minimal #camera-hud,
+    body.music-showcase-ui-minimal .prod-label,
+    body.music-showcase-ui-minimal .topkek-fx-dev-shell,
+    body.music-showcase-ui-minimal #topkek-terminal-shell {
+        filter: none !important;
+        transition-duration: 0.01ms !important;
+        transition-delay: 0s !important;
+    }
+}
+
 #ui-container {
     width: 100%;
     box-sizing: border-box;
@@ -667,6 +765,18 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     padding: 0;
     border-radius: 0;
     font-family: 'Courier New', monospace;
+    max-height: 800px;
+    overflow: hidden;
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        max-height var(--music-ui-collapse-dur, 0.52s) var(--music-ui-collapse-ease, cubic-bezier(0.32, 0, 0.18, 1)),
+        opacity calc(var(--music-ui-reveal-dur, 0.48s) * 0.92) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        margin 0.4s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        visibility 0s linear;
 }
 
 .controls-category-items {
@@ -762,6 +872,13 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     background: rgba(0, 0, 0, 0.3);
     padding: 5px 10px;
     border-radius: 4px;
+    visibility: visible;
+    filter: blur(0);
+    transition:
+        opacity var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.3s ease,
+        visibility 0s linear;
 }
 
 /* APPSTAIN Modal – tło tlo.jpg */
@@ -1289,6 +1406,18 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     box-shadow: none;
     padding: 0;
     border-radius: 0;
+    max-height: min(78vh, 1200px);
+    overflow: hidden;
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        max-height var(--music-ui-collapse-dur, 0.52s) var(--music-ui-collapse-ease, cubic-bezier(0.32, 0, 0.18, 1)),
+        opacity calc(var(--music-ui-reveal-dur, 0.48s) * 0.92) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        margin 0.4s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        visibility 0s linear;
 }
 
 .term-line {
@@ -1296,7 +1425,414 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     pointer-events: auto;
 }
 
+#right-panel #terminal-menu .term-menu-category-heading {
+    pointer-events: none;
+    margin: 0 0 6px 0;
+    font-size: 11px;
+    color: var(--menu-label-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+#right-panel #terminal-menu .term-menu-category-spacer {
+    pointer-events: none;
+    min-height: 1em;
+    margin-bottom: 2px;
+}
+
+/* Terminal menu: isolate stacking so later .menu-section never paints over the banner video */
+#right-panel #terminal-menu.menu-collapsible-section > .menu-section-content {
+    position: relative;
+    isolation: isolate;
+}
+
+/* Terminal menu banners: video strip + drawer (text slides out below, pushes menu down) */
+#right-panel #terminal-menu .term-menu-banner-block {
+    pointer-events: auto;
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-rows: auto 0fr;
+    margin-bottom: 8px;
+    border-radius: var(--menu-surface-radius);
+    border: var(--menu-surface-border);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    overflow: hidden;
+    transition: grid-template-rows 0.32s ease;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:hover,
+#right-panel #terminal-menu .term-menu-banner-block:focus-within {
+    z-index: 4;
+    grid-template-rows: auto 1fr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-banner-block {
+        transition: none;
+    }
+}
+
+/* Both menu banners: 3/4 height of VAJBUJ source frame (926×324 → effective 926×243) */
+#right-panel #terminal-menu .term-menu-banner-wrap {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 926 / 243;
+    line-height: 0;
+    overflow: hidden;
+    cursor: pointer;
+    outline: none;
+}
+
+#right-panel #terminal-menu .term-menu-banner-wrap:focus-visible {
+    box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.85);
+}
+
+/* Two-step banner launch: English CTA on hover/focus; stays visible when armed until second click */
+#right-panel #terminal-menu .term-menu-banner-armed-overlay {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.5rem 0.45rem;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(0, 14, 8, 0.94) 0%, rgba(0, 28, 14, 0.72) 55%, transparent 100%);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.22s ease, visibility 0s linear 0.22s;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-armed-overlay,
+#right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-armed-overlay,
+#right-panel #terminal-menu .term-menu-banner-block--armed .term-menu-banner-armed-overlay {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.22s ease, visibility 0s linear 0s;
+}
+
+#right-panel #terminal-menu .term-menu-banner-armed-text {
+    margin: 0;
+    font-family: 'Courier New', monospace;
+    font-size: clamp(0.62rem, 2.4vw, 0.78rem);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #b8ffc8;
+    text-shadow:
+        0 0 6px rgba(76, 255, 120, 0.85),
+        0 1px 3px rgba(0, 0, 0, 0.95);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block--armed {
+    box-shadow: var(--menu-surface-shadow), 0 0 0 1px rgba(129, 199, 132, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-armed-overlay,
+    #right-panel #terminal-menu .term-menu-banner-block--armed .term-menu-banner-armed-overlay {
+        transition-duration: 0.01ms;
+    }
+}
+
+#right-panel #terminal-menu .term-menu-banner-drawer {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#right-panel #terminal-menu .term-menu-banner-drawer-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 3px;
+    padding: 8px 10px 10px;
+    line-height: normal;
+    pointer-events: none;
+    border-top: 1px solid rgba(76, 175, 80, 0.22);
+    background: linear-gradient(to bottom, rgba(0, 24, 12, 0.92) 0%, rgba(0, 10, 6, 0.96) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-banner-drawer-title {
+    margin: 0;
+    color: rgba(230, 245, 230, 0.96);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+
+#right-panel #terminal-menu .term-menu-banner-hint {
+    margin: 0;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    color: rgba(200, 230, 200, 0.96);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.92);
+    white-space: normal;
+    word-break: break-word;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-vajbuj.vajbuj-active) .term-menu-banner-drawer-inner {
+    border-top-color: rgba(129, 199, 132, 0.45);
+    background: linear-gradient(to bottom, rgba(20, 60, 28, 0.95) 0%, rgba(8, 32, 14, 0.98) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-vajbuj.vajbuj-active) .term-menu-banner-hint {
+    color: #e8f5e9;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-vajbuj.vajbuj-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-banner-drawer-inner {
+    border-top-color: rgba(129, 199, 132, 0.45);
+    background: linear-gradient(to bottom, rgba(20, 60, 28, 0.95) 0%, rgba(8, 32, 14, 0.98) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-banner-hint {
+    color: #e8f5e9;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-mysen-banner-hint.mysen-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-banner-drawer-inner {
+    border-top-color: rgba(129, 199, 132, 0.45);
+    background: linear-gradient(to bottom, rgba(20, 60, 28, 0.95) 0%, rgba(8, 32, 14, 0.98) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-banner-hint {
+    color: #e8f5e9;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-drawer-display-title {
+    color: #d8ffc8;
+    filter: saturate(1.85) brightness(1.18);
+}
+
+/* Shared neon Orbitron headline: banner drawers + section hover drawers */
+#right-panel #terminal-menu .term-menu-drawer-display-title {
+    display: block;
+    margin: 0;
+    padding: 0 0.08em 2px 0;
+    font-family: 'Orbitron', system-ui, sans-serif;
+    font-weight: 800;
+    font-size: clamp(0.73rem, 3.6vw, 1.25rem);
+    line-height: 1.05;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #c8ff9a;
+    filter: saturate(1.65) brightness(1.12);
+    text-shadow:
+        0 0 4px rgba(120, 255, 140, 1),
+        0 0 11px rgba(57, 255, 90, 0.9),
+        0 0 22px rgba(0, 255, 100, 0.55),
+        0 0 36px rgba(76, 255, 120, 0.35),
+        0 1px 3px rgba(0, 0, 0, 0.92);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    @keyframes term-menu-drawer-display-title-pulse {
+        0%,
+        100% {
+            filter: saturate(1.65) brightness(1.12);
+        }
+        50% {
+            filter: saturate(1.85) brightness(1.2);
+        }
+    }
+
+    #right-panel #terminal-menu .term-menu-drawer-display-title {
+        animation: term-menu-drawer-display-title-pulse 2.8s ease-in-out infinite;
+    }
+
+    #right-panel #terminal-menu .term-menu-banner-block:has(#term-newskin-banner-hint.newskin-active) .term-menu-drawer-display-title {
+        animation-duration: 2.2s;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-drawer-display-title {
+        animation: none;
+    }
+}
+
+#right-panel #terminal-menu .term-menu-banner-drawer-inner.newskin-menu-banner-drawer-hint {
+    justify-content: flex-start;
+}
+
+/* MYSEN menu banner: poster covers video until hover/focus; overlay copy only on hover */
+#right-panel #terminal-menu .term-menu-banner-media {
+    position: absolute;
+    inset: 0;
+    line-height: 0;
+    overflow: hidden;
+}
+
+#right-panel #terminal-menu .term-menu-banner-poster {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    pointer-events: none;
+    /* Match VAJBUJ banner idle: poster sits on top of video, so dim poster (not only the hidden clip) */
+    filter: brightness(calc(1 / 3));
+    transition: opacity 0.26s ease, filter 0.28s ease;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-mysen-wrap):hover .term-menu-banner-poster,
+#right-panel #terminal-menu .term-menu-banner-block:has(.term-menu-banner-mysen-wrap):focus-within .term-menu-banner-poster {
+    opacity: 0;
+}
+
+#right-panel #terminal-menu .term-menu-banner-hint--deco {
+    line-height: 1;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-banner-poster {
+        transition: none;
+    }
+}
+
+#right-panel #terminal-menu .term-menu-banner-video {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    filter: brightness(calc(1 / 3));
+    transition: filter 0.28s ease;
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-video,
+#right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-video {
+    filter: brightness(1);
+}
+
+/* NEWSKIN menu strip: center first frame; much brighter idle + punchy color */
+#right-panel #terminal-menu video#newskin-menu-banner-video {
+    object-position: 50% 50%;
+    filter: brightness(1.22) contrast(1.08) saturate(1.38);
+}
+
+#right-panel #terminal-menu .term-menu-banner-block:hover #newskin-menu-banner-video,
+#right-panel #terminal-menu .term-menu-banner-block:focus-within #newskin-menu-banner-video {
+    filter: brightness(1.28) contrast(1.06) saturate(1.48);
+}
+
+@keyframes term-menu-banner-twitch {
+    0%,
+    100% {
+        transform: translate(0, 0) skewX(0deg);
+    }
+    20% {
+        transform: translate(0.6px, -0.5px) skewX(-0.35deg);
+    }
+    40% {
+        transform: translate(-0.55px, 0.45px) skewX(0.3deg);
+    }
+    60% {
+        transform: translate(0.45px, 0.5px) skewX(-0.2deg);
+    }
+    80% {
+        transform: translate(-0.4px, -0.35px) skewX(0.25deg);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    #right-panel #terminal-menu .term-menu-banner-block:hover .term-menu-banner-video,
+    #right-panel #terminal-menu .term-menu-banner-block:focus-within .term-menu-banner-video {
+        animation: term-menu-banner-twitch 0.26s steps(1, end) infinite;
+    }
+}
+
+/* Lower terminal blocks: same hover drawer pattern as video banners */
+#right-panel #terminal-menu .term-menu-section-hover-block {
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-rows: auto 0fr;
+    margin-bottom: 8px;
+    border-radius: var(--menu-surface-radius);
+    border: var(--menu-surface-border);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    overflow: hidden;
+    outline: none;
+    transition: grid-template-rows 0.32s ease;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:hover,
+#right-panel #terminal-menu .term-menu-section-hover-block:focus-within {
+    z-index: 3;
+    grid-template-rows: auto 1fr;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:focus-visible {
+    box-shadow: var(--menu-surface-shadow), inset 0 0 0 1px rgba(76, 175, 80, 0.85);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #right-panel #terminal-menu .term-menu-section-hover-block {
+        transition: none;
+    }
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block:last-child {
+    margin-bottom: 0;
+}
+
+#right-panel #terminal-menu .term-menu-section-hover-block .menu-section {
+    margin-bottom: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 3px;
+    padding: 8px 10px 10px;
+    line-height: normal;
+    pointer-events: none;
+    border-top: 1px solid rgba(76, 175, 80, 0.22);
+    background: linear-gradient(to bottom, rgba(0, 24, 12, 0.92) 0%, rgba(0, 10, 6, 0.96) 100%);
+}
+
+#right-panel #terminal-menu .term-menu-section-drawer-hint {
+    white-space: pre-line;
+}
+
 #right-panel #terminal-menu .menu-section {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -1326,10 +1862,9 @@ body.post-intro-ui-ready #terminal-menu .term-line {
 }
 
 #term-anim-portfolio.portfolio-active,
-#term-vajbuj.vajbuj-active,
-#term-mysen.mysen-active {
-    background: rgba(76, 175, 80, 0.25);
-    border-radius: 4px;
+#term-mysen.term-menu-banner-mysen-wrap.mysen-active {
+    box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.5);
+    border-radius: var(--menu-surface-radius);
 }
 
 /* Shared: Glitch Lab & GENIMG modals */
@@ -1491,6 +2026,165 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     max-width: 95%;
     max-height: 95%;
     box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+}
+
+/* Floating Spotify player after natural end of VAJBUJ / MYSEN */
+.music-showcase-spotify-widget {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 2850;
+    font-family: 'Courier New', monospace;
+    max-width: calc(100vw - 24px);
+    pointer-events: auto;
+}
+
+.music-showcase-spotify-widget.hidden {
+    display: none;
+}
+
+.music-showcase-spotify-widget-panel {
+    position: relative;
+    width: min(360px, calc(100vw - 24px));
+    padding: 10px 12px 12px;
+    background: rgba(10, 14, 10, 0.94);
+    border: var(--menu-surface-border);
+    border-radius: 8px;
+    box-shadow: var(--menu-surface-shadow), 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.music-showcase-spotify-widget-title {
+    margin: 0 32px 8px 0;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #81c784;
+    line-height: 1.25;
+}
+
+.music-showcase-spotify-widget-panel .close-btn {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 1;
+}
+
+.music-showcase-spotify-iframe-wrap {
+    border-radius: 8px;
+    overflow: hidden;
+    line-height: 0;
+}
+
+.music-showcase-spotify-iframe-wrap iframe {
+    display: block;
+    width: 100%;
+    height: 152px;
+    border: 0;
+}
+
+@media (max-width: 480px) {
+    .music-showcase-spotify-widget {
+        right: 8px;
+        bottom: 8px;
+        left: 8px;
+        max-width: none;
+    }
+
+    .music-showcase-spotify-widget-panel {
+        width: auto;
+    }
+}
+
+/* Fullscreen YouTube modal after natural end of VAJBUJ / MYSEN */
+.music-showcase-youtube-modal {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2860;
+    font-family: 'Courier New', monospace;
+    pointer-events: auto;
+}
+
+.music-showcase-youtube-modal.hidden {
+    display: none;
+}
+
+.music-showcase-youtube-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.88);
+    cursor: pointer;
+}
+
+.music-showcase-youtube-content {
+    position: relative;
+    z-index: 1;
+    width: min(92vw, 880px);
+    max-height: 92vh;
+    overflow: auto;
+    padding: 18px 18px 22px;
+    background: rgba(10, 14, 10, 0.96);
+    border: var(--menu-surface-border);
+    border-radius: 8px;
+    box-shadow: var(--menu-surface-shadow), 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.music-showcase-youtube-content .close-btn {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    z-index: 2;
+}
+
+.music-showcase-youtube-modal-title {
+    margin: 0 40px 10px 0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #81c784;
+    line-height: 1.3;
+}
+
+.music-showcase-youtube-attribution {
+    margin: 0 0 14px;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: rgba(220, 230, 220, 0.92);
+    max-width: 62ch;
+}
+
+.music-showcase-youtube-aspect {
+    position: relative;
+    width: 100%;
+    padding-top: 56.25%;
+    overflow: hidden;
+    border-radius: 6px;
+    border: 1px solid rgba(76, 175, 80, 0.25);
+}
+
+.music-showcase-youtube-aspect iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+@media (max-width: 480px) {
+    .music-showcase-youtube-content {
+        width: calc(100vw - 16px);
+        padding: 14px 12px 16px;
+    }
+
+    .music-showcase-youtube-attribution {
+        font-size: 0.75rem;
+    }
 }
 
 #glitch-footer {
@@ -1694,6 +2388,168 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     width: 100%;
     height: 100%;
     border: 0;
+}
+
+/* /newskin + Pushka Studio — jak sekcja terminal menu (#right-panel .menu-section), wyśrodkowana; WebGL widać przez scrim */
+#newskin-modal,
+#pushka-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2250;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: var(--menu-text-color);
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 25px;
+}
+
+#newskin-modal.hidden,
+#pushka-modal.hidden {
+    display: none;
+}
+
+#newskin-modal.newskin-modal--minimized,
+#pushka-modal.newskin-modal--minimized {
+    align-items: flex-start;
+}
+
+.newskin-modal-scrim {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.28) 0%, rgba(0, 0, 0, 0.62) 100%);
+    pointer-events: auto;
+    cursor: pointer;
+}
+
+#newskin-modal.newskin-modal--minimized .newskin-modal-scrim,
+#pushka-modal.newskin-modal--minimized .newskin-modal-scrim {
+    opacity: 0;
+    pointer-events: none;
+    cursor: default;
+}
+
+/* Ta sama skórka co #right-panel #terminal-menu .menu-section */
+.newskin-modal-menu-section {
+    position: relative;
+    z-index: 2;
+    width: 280px;
+    max-width: calc(100vw - 40px);
+    max-height: min(78vh, 1200px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    margin: 0;
+    border-radius: var(--menu-surface-radius);
+    border: var(--menu-surface-border);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    pointer-events: auto;
+}
+
+/* Pushka Studio: wide panel so Vimeo’s default player chrome fits (16∶9 scales with width). */
+#pushka-modal .newskin-modal-menu-section {
+    width: min(960px, calc(100vw - 48px));
+    max-width: min(960px, calc(100vw - 48px));
+}
+
+.newskin-modal-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 22px;
+}
+
+.newskin-modal-title-text {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+    letter-spacing: 0.04em;
+}
+
+.newskin-modal-header-actions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.newskin-modal-icon-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid rgba(76, 175, 80, 0.35);
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.4);
+    color: rgba(129, 199, 132, 0.9);
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.newskin-modal-icon-btn:hover {
+    color: #9CCC65;
+    border-color: rgba(129, 199, 132, 0.75);
+    background: rgba(0, 0, 0, 0.62);
+}
+
+.newskin-modal-icon {
+    display: block;
+    transition: transform 0.2s ease;
+}
+
+#newskin-modal.newskin-modal--minimized #newskin-modal-minimize .newskin-modal-icon,
+#pushka-modal.newskin-modal--minimized #pushka-modal-minimize .newskin-modal-icon {
+    transform: rotate(180deg);
+}
+
+.newskin-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: auto;
+    min-height: 0;
+}
+
+#newskin-modal.newskin-modal--minimized .newskin-modal-body,
+#pushka-modal.newskin-modal--minimized .newskin-modal-body {
+    display: none;
+}
+
+.newskin-modal-caption {
+    margin: 0;
+    text-align: center;
+    line-height: 1.45;
+    white-space: pre-line;
+}
+
+body.newskin-modal-open,
+body.pushka-modal-open {
+    overflow: hidden;
+}
+
+@media (max-width: 400px) {
+    .newskin-modal-menu-section {
+        width: min(280px, calc(100vw - 24px));
+    }
+
+    #pushka-modal .newskin-modal-menu-section {
+        width: calc(100vw - 24px);
+        max-width: calc(100vw - 24px);
+    }
 }
 
 /* Portfolio Detail Modal (per-animation) */
@@ -1905,7 +2761,14 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     box-shadow: var(--menu-surface-shadow);
     z-index: 110;
     pointer-events: auto;
-    transition: width 0.25s ease, max-height 0.25s ease, transform 0.25s ease, right 0.25s ease, bottom 0.25s ease;
+    transform: translate3d(0, 0, 0);
+    transition:
+        width 0.25s ease,
+        max-height 0.25s ease,
+        transform 0.25s ease,
+        right 0.25s ease,
+        bottom 0.25s ease,
+        box-shadow 0.45s var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .topkek-terminal-shell-title {
@@ -1993,6 +2856,14 @@ body.post-intro-ui-ready #terminal-menu .term-line {
     font-size: 10px;
     line-height: 1.3;
     color: var(--menu-text-color);
+    visibility: visible;
+    transform-origin: 50% 0%;
+    filter: blur(0);
+    transition:
+        opacity var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform var(--music-ui-reveal-dur, 0.48s) var(--music-ui-reveal-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.32s ease,
+        visibility 0s linear;
 }
 
 .topkek-fx-dev-shell--minimized {

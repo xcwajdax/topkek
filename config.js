@@ -38,6 +38,14 @@ export const CONFIG = {
     particleSize: 0.1,
     // loadParticles(JSON): symmetric ±Z nudge. Use 0 for baked particles_*.json (non-zero pushes z≥0 toward +Z → wystaje „z przodu”).
     innerCubeZBias: 0,
+    /** Inner cubes: HSL instance tint (instanceColor + emissive patch). X = hue along letter span; Y adds variation. */
+    innerCubeHueGradient: {
+        enabled: true,
+        xWeight: 0.78,
+        yWeight: 0.22,
+        saturation: 1.0,
+        lightness: 0.52
+    },
     particleCount: 0, // Will be determined by sampler
     targetCubeCount: IS_MOBILE ? 15000 : 50000, // Reduced particle count for mobile
     particlesFile: IS_MOBILE ? 'particles_mobile.json' : 'particles_pc.json', // File to load particles from
@@ -69,55 +77,69 @@ export const CONFIG = {
     portfolio: {
         sampleVimeoUrl: "https://player.vimeo.com/video/1170695269"
     },
+    /** Terminal menu: muted loop above Vajbuj; idle = first frame, hover/focus plays */
+    vajbujMenuBannerVideo: 'ASSETS/UI/Vajbuj_baner.mp4',
+    /** Terminal menu: MYSEN banner — trimmed loop + static poster when idle */
+    mysenMenuBannerVideo: 'ASSETS/UI/mysen_menu_banner_last3s.mp4',
+    mysenMenuBannerPoster: 'ASSETS/UI/mysen_menu_banner_poster.png',
+    /** Terminal menu: NEWSKIN banner — same hover behavior as VAJBUJ strip */
+    newskinMenuBannerVideo: 'ASSETS/UI/newskin_baner.mp4',
+    /** Terminal menu: PUSHKA banner strip (muted loop on hover) */
+    pushkaMenuBannerVideo: 'ASSETS/UI/pushka_baner.mp4',
     // Ogromne wideo za napisem TOPKEK jako tło 3D – przy ładowaniu strony wybierane losowo
     backgroundVideo: {
+        /** Mnożnik RGB na teksturze wideo (płaszczyzna + bake PMREM) — jaśniejsze tło i mocniejsze odbicia */
+        mapColorGain: 1.85,
         sources: [
             {
                 src: 'ASSETS/BGs/01_torus.mp4',
+                mapColorGain: 1.95,
                 envMapIntensityBoost: {
-                    defaultBox: 25.0,
-                    glass: 6.0,
-                    gold: 6.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,   
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 48.0,
+                    glass: 11.0,
+                    gold: 11.5,
+                    innerCubes: 1.1,
+                    heart: 4.2,
+                    vajbujBgCubes: 6.0,
+                    mysenBgCubes: 6.0
                 },
                 hemisphereFromVideo: {
-                    intensity: 2.0,
-                    ambientIntensity: 1
+                    intensity: 4.2,
+                    ambientIntensity: 1.65
                 }
             },
             {
                 src: 'ASSETS/BGs/02_bag_1.mp4',
+                mapColorGain: 1.75,
                 envMapIntensityBoost: {
-                    defaultBox: 5.0,
-                    glass: 2.0,
-                    gold: 2.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 16.0,
+                    glass: 6.5,
+                    gold: 7.0,
+                    innerCubes: 1.0,
+                    heart: 3.8,
+                    vajbujBgCubes: 5.5,
+                    mysenBgCubes: 5.5
                 },
                 hemisphereFromVideo: {
-                    intensity: 1.2,
-                    ambientIntensity: 1
+                    intensity: 3.0,
+                    ambientIntensity: 1.55
                 }
             },
             {
                 src: 'ASSETS/BGs/06_kostki_02.mp4',
+                mapColorGain: 1.9,
                 envMapIntensityBoost: {
-                    defaultBox: 5.0,
-                    glass: 2.0,
-                    gold: 2.2,
-                    innerCubes: 0.5,
-                    heart: 1.35,
-                    vajbujBgCubes: 2.0,
-                    mysenBgCubes: 2.0
+                    defaultBox: 15.0,
+                    glass: 6.2,
+                    gold: 6.8,
+                    innerCubes: 1.0,
+                    heart: 3.8,
+                    vajbujBgCubes: 5.5,
+                    mysenBgCubes: 5.5
                 },
                 hemisphereFromVideo: {
-                    intensity: 3,
-                    ambientIntensity: 0.5
+                    intensity: 5.5,
+                    ambientIntensity: 1.25
                 }
             }
         ],
@@ -140,8 +162,8 @@ export const CONFIG = {
             enabled: true,
             /** true na desktopie = zapasowy fill z kolorem wideo, gdy PMREM/ACES psuje jasność */
             always: !IS_MOBILE,
-            intensity: 0.85,
-            ambientIntensity: 0.6,
+            intensity: 2.15,
+            ambientIntensity: 1.35,
             // Szybsza reakcja kolorów (bez zbyt częstych próbek)
             intervalMs: 40,
             canvasWidth: 32,
@@ -149,13 +171,13 @@ export const CONFIG = {
         },
         /** Mnożniki envMapIntensity względem MATERIALS.* (żeby widać dynamiczne IBL) */
         envMapIntensityBoost: {
-            defaultBox: 5.0,
-            glass: 2.0,
-            gold: 2.2,
-            innerCubes: 0.1,
-            heart: 1.35,
-            vajbujBgCubes: 2.0,
-            mysenBgCubes: 2.0
+            defaultBox: 7.0,
+            glass: 5.5,
+            gold: 6.0,
+            innerCubes: 0.38,
+            heart: 3.2,
+            vajbujBgCubes: 5.5,
+            mysenBgCubes: 5.5
         },
         bpmControl: {
             baseBpm: 120,
@@ -439,6 +461,8 @@ export const FX_SAMPLE_PRESETS = {
 // VAJBUJ SZMATO Mode Configuration
 export const VAJBUJ_CONFIG = {
     enabled: true,
+    /** Neon strip title in terminal menu banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'VAJBUJ',
     autoTrigger: false, // Disabled - use button instead
     inactivityTimeout: 15000, // ms before Vajbuj activates (not used when autoTrigger=false)
 
@@ -448,6 +472,23 @@ export const VAJBUJ_CONFIG = {
     audioEndTime: 29, // seconds - fragment end
     fadeInDuration: 1.5, // seconds
     fadeOutDuration: 1.5, // seconds
+
+    /**
+     * Po naturalnym końcu fragmentu (nie po `vajbuj stop`): pływający embed Spotify z oryginałem.
+     * Pełny adres iframe, np. https://open.spotify.com/embed/track/TRACK_ID?utm_source=generator — `null` wyłącza.
+     */
+    originalTrackSpotifyEmbedSrc: null,
+    /** Nagłówek panelu (widoczny nad playerem). */
+    originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
+
+    /**
+     * Po naturalnym końcu fragmentu: modal z YouTube (embed URL). Ma pierwszeństwo przed Spotify.
+     * `null` wyłącza; pełny src iframe, np. https://www.youtube.com/embed/VIDEO_ID
+     */
+    originalTrackYoutubeEmbedSrc: 'https://www.youtube.com/embed/5nuFcR65q0M',
+    originalTrackYoutubeModalTitle: 'Original',
+    originalTrackYoutubeAttributionEn:
+        "This is a fan-made excerpt from a track by an artist whose work really hits home for me. It's also a wink at 'vibe coding,' which I can't stand — call it agentic design, just shuffling cognitive load across a few extra Brave tabs.",
 
     // Lyrics - each object can have custom properties
     lyrics: [
@@ -566,38 +607,187 @@ export const VAJBUJ_CONFIG = {
 /** MYSEN remix mode — console `/mysen start|stop`. Lyrics use `at` (seconds from fragment start) or `wordTimesSec`; voxel style like VAJBUJ but main TOPKEK mesh is hidden. */
 export const MYSEN_CONFIG = {
     enabled: true,
+    /** Neon strip title in terminal menu banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'MYSEN',
     /** When true, skip init on mobile (lighter scene). */
     disableOnMobile: false,
 
     /** Must exist on the static server (same origin). 404 → see audioFileFallback. */
     audioFile: 'ASSETS/mysen/mysen-remix.mp3',
     /** Used when audioFile fails (missing file / 404). Set null to disable. Often VAJBUJ clip until remix is in ASSETS/mysen/. */
-    audioFileFallback: 'VAJBUJ_TRIMMED.mp3',
+    audioFileFallback: null,
     audioStartTime: 0,
     /** Absolute end time on the media timeline (seconds). Use `null` to play from audioStartTime to the natural end of the file (`audio.duration`). A finite number trims like a short clip. */
     audioEndTime: null,
     fadeInDuration: 1.5,
     fadeOutDuration: 1.5,
 
-    /** Hide the background video plane while MYSEN plays (reduces visual clash). */
+    /**
+     * Po naturalnym końcu odtwarzanego fragmentu (nie po `/mysen stop`): embed Spotify z oryginałem utworu.
+     * Pełny `src` iframe (jak w VAJBUJ_CONFIG); `null` wyłącza widget.
+     */
+    originalTrackSpotifyEmbedSrc: null,
+    originalTrackSpotifyWidgetTitle: 'Oryginał na Spotify',
+
+    /** Po naturalnym końcu: modal YouTube (pierwszeństwo przed Spotify). `null` wyłącza. */
+    originalTrackYoutubeEmbedSrc: 'https://www.youtube.com/embed/O8ZFLG7x4_o',
+    originalTrackYoutubeModalTitle: 'Original',
+    originalTrackYoutubeAttributionEn: "A three-piece band who, sadly, don't play live very often.",
+
+    /**
+     * When true, keep the background video plane visible during MYSEN (e.g. torus). When false, uses hideBackgroundVideo.
+     * If true, `hideBackgroundVideo` is ignored while MYSEN is active.
+     */
+    showBackgroundVideoDuringMysen: true,
+    /** Hide the background video plane while MYSEN plays (only if showBackgroundVideoDuringMysen is false). */
     hideBackgroundVideo: true,
+
+    /** Switch to this clip during MYSEN (must match an entry in CONFIG.backgroundVideo.sources). */
+    mysenBackgroundVideoSrc: 'ASSETS/BGs/01_torus.mp4',
+    /** Slow background video over the remix (playbackRate). */
+    mysenVideoPlaybackRate: {
+        enabled: true,
+        start: 1.0,
+        end: 0.35
+    },
+
+    /**
+     * Gdy `showBackgroundVideoDuringMysen`: od `fadeStartSec` (sekundy od startu trybu, ta sama oś co `elapsed`)
+     * płaszczyzna wideo tła płynnie przechodzi z `startOpacity` do `endOpacity` aż do końca odtwarzanego fragmentu.
+     */
+    mysenBackgroundVideoFadeOut: {
+        enabled: true,
+        fadeStartSec: 60,
+        startOpacity: 1,
+        endOpacity: 0
+    },
+
+    /** Fetch and append word timings (skips lines labeled Muzyka). */
+    timestampLyricsEnabled: true,
+    timestampLyricsUrl: 'ASSETS/mysen/mysen_timestamps.txt',
+    timestampWordColor: 0xffffff,
+
+    /** Optional JSON: defaults (subset of animation keys) + per-word overrides (match by `at`+`text` or `globalIndex`). See ASSETS/mysen/README.md. */
+    wordAnimationEnabled: true,
+    wordAnimationUrl: 'ASSETS/mysen/mysen-word-animation.json',
+
+    /**
+     * Gdy `showcaseAnimationEnabled` i ustawiony `showcaseAnimationUrl`: fetch JSON v1 (`schemaVersion` + `adapter: voxelLyricsMysen`)
+     * zastępuje merge intro + timestamp — słowa i klucze z dokumentu. Zob. `tools/README.md`.
+     */
+    showcaseAnimationEnabled: false,
+    showcaseAnimationUrl: null,
+
+    /**
+     * Grupowanie słów z `mysen_timestamps.txt` w jeden wiersz (bez lotu z frustum), znikanie całej linii przy `lineVanishAtMediaSec` (sekundy na osi pliku audio).
+     * Słowa spoza przedziałów `tMin`–`tMax`: jedno słowo = jeden wiersz; przy `seededRandomFly` spawn jest deterministyczny per słowo (powtarzalny).
+     */
+    mysenTimestampLineGroups: {
+        enabled: true,
+        seededRandomFly: true,
+        groups: [
+            {
+                tMin: 23.7,
+                tMax: 30.36,
+                lineVanishAtMediaSec: 31.5,
+                /**
+                 * Dwa podwiersze w jednym logicznym wierszu (wspólne znikanie): najpierw N słów z pliku
+                 * timestampów na „szynę” z offsetem, potem kolejne M — bez lineBreak między nimi (jeden lineIndex).
+                 */
+                splitLines: [
+                    { wordCount: 4, offsetX: -1.45, offsetY: 0.62 },
+                    { wordCount: 4, offsetX: 1.35, offsetY: -0.28 }
+                ]
+            },
+            {
+                tMin: 31.84,
+                tMax: 38.7,
+                lineVanishAtMediaSec: 41.0,
+                splitLines: [
+                    { wordCount: 4, offsetX: -1.05, offsetY: 0.22 },
+                    { wordCount: 4, offsetX: 1.55, offsetY: -0.58 }
+                ]
+            }
+        ]
+    },
+
+    /** Intro: wiersze z `introLyrics` przed timestampami; timestampy zaczynają się po `introLyrics` (auto: firstTimestampLineIndex). */
+
+    /** Opóźnienie startu składania kolejnych wierszy intro (sek). */
+    introAssembly: {
+        lineStaggerSec: 0.55
+    },
+
+    /** Opcjonalnie: dodatkowe opóźnienie kolejnych linii tekstu z timestampów (sek); 0 = wyłączone (tylko `at`). */
+    lyricAssembly: {
+        lineStaggerSec: 0
+    },
+
+    /** Po `delaySec` — znikanie intro przez rozłożenie wokseli, wiersz po wierszu z `lineStaggerSec`. */
+    introOutroSpread: {
+        enabled: true,
+        delaySec: 4.2,
+        lineStaggerSec: 0.4,
+        /** Jeśli ustawione > 0, inna długość animacji rozłożenia niż `spread.durationSec`. */
+        spreadDurationSec: 1.45
+    },
+
+    /** Opóźnienie startu rozłożenia kolejnych linii tekstu piosenki (sek, ujemne `_spreadT`). */
+    lyricSpread: {
+        lineStaggerSec: 0.07
+    },
+
+    /** Intro only (merged at runtime with timestamp words). Pierwsza linia: tytuł; TOPKEK mniejszy niż domyślny rozmiar słów. */
+    introLyrics: [
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22, mysenPersistentOnScreen: true },
+        { lineBreak: true },
+        {
+            text: 'TOPKEK',
+            color: 0xffffff,
+            at: 0.52,
+            scale: 0.72,
+            /** Nie bierze udziału w introOutroSpread — zostaje na scenie podczas zwrotek. */
+            mysenPersistentOnScreen: true
+        },
+        { lineBreak: true },
+        { text: 'reimagined', color: 0xaaccff, at: 0.78, mysenPersistentOnScreen: true }
+    ],
 
     /**
      * Lyrics: same shape as VAJBUJ plus optional `at` (seconds from audioStartTime) for variable tempo.
-     * Optional per-word pulse after assemble: `pulseScale`, `pulseMs`.
+     * Runtime prepare uses introLyrics + timestamp file; this fallback lists intro for pregen queue before fetch completes.
      */
     lyrics: [
-        { text: 'oko', color: 0xffffff, at: 0.5, pulseScale: 1.14, pulseMs: 380 },
-        { text: 'MYSEN', color: 0x66ccff, at: 2.0 },
+        { text: 'MYSEN - BEZSEN', color: 0x66ccff, at: 0.22, mysenPersistentOnScreen: true },
         { lineBreak: true },
-        { text: 'remix', color: 0xffffff, at: 4.5 }
+        {
+            text: 'TOPKEK',
+            color: 0xffffff,
+            at: 0.52,
+            scale: 0.72,
+            mysenPersistentOnScreen: true
+        },
+        { lineBreak: true },
+        { text: 'reimagined', color: 0xaaccff, at: 0.78, mysenPersistentOnScreen: true }
     ],
 
     /** If length matches word count (no lineBreak entries counted), overrides missing `at`. */
     wordTimesSec: [],
 
     /** Global matchers: pulse when a word finishes assembling (in addition to per-line pulseScale). */
-    wordPulses: [{ matchText: 'oko', scale: 1.15, ms: 400 }],
+    wordPulses: [],
+
+    /** Timestamp words: spawn in random FOV, fly into lyric rail while assembling, then symmetric XY spread. */
+    randomFly: {
+        enabled: true,
+        ndcMargin: 0.12,
+        spawnDistanceMin: 28,
+        spawnDistanceMax: 42
+    },
+    spread: {
+        durationSec: 1.35,
+        amplitude: 5.5
+    },
 
     wordAssemblyDuration: 1.8,
     lyricsStartDelay: 0,
@@ -627,8 +817,8 @@ export const MYSEN_CONFIG = {
     },
 
     /** 0 = no slow phase; else fraction of fragment duration with slowPhaseSpeed multiplier on bg cubes. */
-    slowPhaseEnd: 0,
-    slowPhaseSpeed: 0.2
+    slowPhaseEnd: 0.35,
+    slowPhaseSpeed: 0.22
 };
 
 // Shader Configuration
@@ -646,8 +836,8 @@ export const SHADER_CONFIG = {
     bloom: {
         // RenderPass zapisuje obraz już po tone mappingu (ACES na rendererze); wysoki próg (np. 0.48) odcina prawie cały bloom.
         // Oficjalny przykład three r160 używa threshold 0. Umiarkowany próg + siła utrzymują poświatę bez przepalenia.
-        threshold: 0.12,
-        strength: 0.82,
+        threshold: 0.15,
+        strength: 0.62,
         alternateStrength: 0.32, // Siła bloom po naciśnięciu spacji
         radius: 0.85
     },
@@ -663,6 +853,19 @@ export const SHADER_CONFIG = {
         saoBlurDepthCutoff: 0.05    // Odcięcie głębi (chroni krawędzie przed rozmyciem na tło)
     }
 
+};
+
+/** Stroboskop: naprzemienna inwersja kolorów (postprocess) i biały quad przed kamerą (scena). */
+export const STROBE_CONFIG = {
+    /** Liczba pełnych cykli (faza inwersji + faza białego) na sekundę. */
+    hz: IS_MOBILE ? 4 : 6,
+    enabledByDefault: false,
+    /** Gdy true — brak UI i brak włączenia efektu (np. mobile / photosensitivity). */
+    disabled: IS_MOBILE,
+    /** Odległość płaszczyzny od kamery w przestrzeni kamery (oś -Z). */
+    flashDistance: 0.35,
+    /** Spacja w trybie „piano”: efekt tylko przy trzymanym klawiszu (desktop). */
+    pianoSpaceKey: !IS_MOBILE
 };
 
 /** Terminal shell UI (bottom of #right-panel): prompt, log limits, welcome text — no logic. */
@@ -693,6 +896,80 @@ export const TERMINAL_CONFIG = {
     shellUi: {
         maximizedClass: 'topkek-terminal-shell--maximized',
         collapsedClass: 'topkek-terminal-shell--collapsed'
+    },
+    /** Terminal menu video banners (EN): shown on strip hover/focus; same text while armed until second click. */
+    menuBannerStartAnimationLabelEn: 'START ANIMATION',
+    /** @deprecated Use menuBannerStartAnimationLabelEn */
+    menuBannerArmedLabel: 'START ANIMATION',
+    /**
+     * Lower menu blocks (MYSEN / Games / Software): hover drawer copy.
+     * `hint` may use `\n` for line breaks (see `.term-menu-section-drawer-hint` in `style.css`).
+     */
+    menuSectionHoverDrawers: {
+        games: {
+            displayTitle: 'GAMES',
+            hint: 'In-development games — APPSTAIN and side experiments.\nClick green lines or use console commands where listed.'
+        },
+        software: {
+            displayTitle: 'SOFTWARE',
+            hint: 'Tools, generators, demos, portfolio tests, agents.\nMost entries are wired to the terminal; try /help for commands.'
+        }
+    }
+};
+
+/** Terminal menu: PUSHKA banner + Vimeo showreel modal (`/pushka` / baner). */
+export const PUSHKA_CONFIG = {
+    enabled: true,
+    /** Neon title in banner drawer (Orbitron). */
+    menuBannerDrawerDisplayTitle: 'PUSHKA STUDIO',
+    /** Vimeo page or player URL (ID extracted if needed). */
+    vimeoUrl: 'https://vimeo.com/1151936108',
+    /** Two-step banner overlay (replaces default START ANIMATION). */
+    menuBannerArmedLabel: 'OPEN VIDEO',
+    /** Armed state `aria-label` second phrase (after em dash). */
+    menuBannerArmSecondHint: 'click or Enter again to open video',
+    /** Modal header (matches drawer title). */
+    modalTitle: 'PUSHKA STUDIO',
+    /** Body copy under the player (newlines OK). */
+    modalCaption:
+        'Pushka Studio is one of Leading production house from Poland. We work together probably forever. My custom pushka showreel is coming soon',
+    /** Banner drawer hint (shown under neon title). */
+    menuBannerHint:
+        'Pushka Studio is one of Leading production house from Poland. We work together probably forever. My custom pushka showreel is coming soon'
+};
+
+/**
+ * `/newskin` — YouTube modal; tło = to samo wideo co `backgroundVideo` (płaszczyzna 3D + VideoTexture),
+ * więc przechodzi przez EffectComposer (bloom / CRT / SAO / …) i fake GI jak zwykłe BG.
+ */
+export const NEWSKIN_CONFIG = {
+    enabled: true,
+    videoSrc: 'ASSETS/newskin/assets/logo_02.mp4',
+    youtubeVideoId: '3EPtw8e9NNc',
+    /** Text under the YouTube frame. */
+    caption: 'Z chłopakami współpracuję obecnie',
+    /** Main voxel headline while modal is open (spaces = separate letters; helvetiker regular = thin). */
+    displayText: 'N E W S K I N',
+    /** Panel header (terminal-menu style). */
+    panelTitle: 'NEWSKIN',
+    /** Uniform scale of `backgroundVideoMesh` while modal is open (>1 = „przybliżenie” kadru). */
+    bgVideoScale: 2,
+    /** Optional RGB gain on plane + PMREM sphere; falls back to CONFIG.backgroundVideo.mapColorGain. */
+    mapColorGain: 1.9,
+    /** Optional per-material env boost while newskin clip plays (merged over global defaults). */
+    envMapIntensityBoost: {
+        defaultBox: 20.0,
+        glass: 8.0,
+        gold: 8.5,
+        innerCubes: 1.0,
+        heart: 4.0,
+        vajbujBgCubes: 5.5,
+        mysenBgCubes: 5.5
+    },
+    /** Optional hemisphere/ambient snapshot tuning (merged over CONFIG.backgroundVideo.hemisphereFromVideo). */
+    hemisphereFromVideo: {
+        intensity: 4.0,
+        ambientIntensity: 1.5
     }
 };
 
@@ -701,8 +978,11 @@ export const TERMINAL_HELP_LINES_COMPACT = [
     '/help // Short list. ex: /help',
     '/help full // Every command line + FX aliases. ex: /help full',
     '/clear // Clears console log. ex: /clear',
-    '/vajbuj [start|stop] // VAJBUJ mode. ex: /vajbuj start',
-    '/mysen [start|stop] // MYSEN remix mode. ex: /mysen start',
+    '/vajbuj [start|stop] // VAJBUJ mode. Esc = stop. ex: /vajbuj start',
+    '/mysen [start|stop] // MYSEN remix mode. Esc = stop. ex: /mysen start',
+    '/pushka // Opens Pushka Studio Vimeo showreel panel. ex: /pushka',
+    '/agents // AGENTS intro (stream text + link to simulacja-www). ex: /agents',
+    '/newskin // Promo: clip BG 3D + YouTube; ×/Esc/scrim zamyka tylko embed (scena zostaje); wyjście: zmiana tła w HUD. ex: /newskin',
     '/bloom <on|off|strength> [value] | /sao <on|off> | /crt <on|off> // Postprocess toggles.',
     '/postproc <status> // Bloom / SAO / CRT + fake GI (video IBL). ex: /postproc status',
     '/fakegi <on|off|status> // Wideo jako fake GI (PMREM + hemisphere). ex: /fakegi status',
@@ -720,8 +1000,11 @@ export const TERMINAL_HELP_LINES_FULL = [
     '/help // Short list. ex: /help',
     '/help full // This full list. ex: /help full',
     '/clear // Clears console log. ex: /clear',
-    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode. ex: /vajbuj start',
-    '/mysen [start|stop] // Starts/stops MYSEN remix mode (hides TOPKEK letters). ex: /mysen start',
+    '/vajbuj [start|stop] // Starts/stops VAJBUJ mode; Esc interrupts like stop. ex: /vajbuj start',
+    '/mysen [start|stop] // Starts/stops MYSEN remix mode; Esc interrupts like stop. ex: /mysen start',
+    '/pushka // Opens Pushka Studio Vimeo showreel in a panel (like /newskin). ex: /pushka',
+    '/agents // Opens AGENTS intro (ASSETS/agents/): streamed copy + CTA to session replay (simulacja-www). ex: /agents',
+    '/newskin // Newskin clip on main BG + YouTube modal; close hides embed only (BG/text stay); full exit: change BG in HUD. ex: /newskin',
     '/bloom <on|off|strength> [value] // Controls bloom pass. ex: /bloom strength 0.9',
     '/sao <on|off> // Toggles SAO pass (full perf). ex: /sao on',
     '/crt <on|off> // Toggles CRT pass. ex: /crt off',
@@ -784,13 +1067,13 @@ export const MATERIALS = {
         envMapIntensity: 0.5
     },
     innerCubes: {
-        // Jaśniejsze albedo + silniejszy emissive niż 2.4: czytelna siatka w środku bez „białej plamy” (łagodny lift w shaderze).
-        color: 0x5a5a5a,
+        // Jaśniejsze albedo żeby mnożenie przez instanceColor (gradient HSL) nie gasiło barwy; emissive + patch w script.js.
+        color: 0xe4e4e4,
         envMapIntensity: 0.52,
         roughness: 0.88,
         metalness: 0.06,
         emissive: 0xffffff,
-        emissiveIntensity: 4.2,
+        emissiveIntensity: 3.65,
         toneMapped: false
     }
 };

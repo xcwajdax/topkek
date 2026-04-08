@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOPKEK — Showcase animation editor</title>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
+    <link rel="stylesheet" href="./showcase-animation-editor.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <header class="editor-toolbar">
+        <strong>Showcase</strong>
+        <label class="editor-inline-label">Źródło
+            <select id="project-source" class="editor-hud-input editor-select-narrow" title="Preset lub nowy projekt">
+                <option value="empty">Nowy (pusty v2)</option>
+                <option value="audio">Nowy + wgraj audio…</option>
+                <option value="mysen">Preset MYSEN (sample JSON)</option>
+                <option value="mysen-prod">MYSEN jak /mysen (intro + TS z repo)</option>
+                <option value="vajbuj">Preset VAJBUJ (sample JSON)</option>
+                <option value="config">Z MYSEN_CONFIG (gdy showcase URL)</option>
+            </select>
+        </label>
+        <div class="editor-file-slot">
+            <input type="file" id="audio-file" class="editor-file-input" accept="audio/*" />
+            <label for="audio-file" class="editor-choose-file">Audio</label>
+            <span class="editor-file-name" id="audio-file-name" aria-live="polite"></span>
+        </div>
+        <div class="editor-file-slot">
+            <input type="file" id="import-project" class="editor-file-input" accept="application/json,.json" />
+            <label for="import-project" class="editor-choose-file">JSON</label>
+        </div>
+        <div class="editor-file-slot">
+            <input type="file" id="whisper-ts-file" class="editor-file-input" accept=".txt,text/plain" />
+            <label for="whisper-ts-file" class="editor-choose-file" title="Czasy w pliku to sekundy od początku pliku audio; odejmowany jest audioStart z paska.">Whisper / TS</label>
+            <span class="editor-file-name" id="whisper-ts-file-name" aria-live="polite"></span>
+        </div>
+        <button type="button" class="editor-chrome-btn" id="btn-import-pack" title="File System Access API">Import folderu</button>
+        <button type="button" class="editor-chrome-btn" id="btn-export-pack" title="Zapis showcase-pack.json + animation + audio">Eksport folderu</button>
+        <button type="button" class="editor-chrome-btn" id="btn-export">Pobierz JSON</button>
+        <button type="button" class="editor-chrome-btn" id="btn-copy">Kopiuj JSON</button>
+        <span class="status-line editor-hint" title="Serwuj z katalogu topkek/">URL: <code>?doc=</code> · <code>?noautoload=1</code></span>
+    </header>
+
+    <header class="editor-toolbar editor-toolbar-secondary">
+        <label>audioStart <input type="number" id="inp-audio-start" value="0" step="0.01" /></label>
+        <label>firstTsIdx <input type="number" id="inp-first-ts" value="99999" step="1" /></label>
+        <label class="editor-inline-label">Doświadczenie (eksport)
+            <select id="pack-experience" class="editor-hud-input editor-select-narrow">
+                <option value="mysen">mysen</option>
+                <option value="vajbuj">vajbuj</option>
+            </select>
+        </label>
+        <div class="editor-file-slot">
+            <input type="file" id="bg-video-file" class="editor-file-input" accept="video/*" />
+            <label for="bg-video-file" class="editor-choose-file">Wideo tła</label>
+            <span class="editor-file-name" id="bg-video-file-name" aria-live="polite"></span>
+        </div>
+        <label><input type="checkbox" id="chk-snap-frame" checked /> Snap 1/60s</label>
+        <label><input type="checkbox" id="chk-show-grid" checked /> Siatka XZ</label>
+        <span class="status-line" id="fsa-hint"></span>
+    </header>
+
+    <div class="editor-main">
+        <aside class="editor-panel editor-scroll">
+            <div class="editor-tab-row" role="tablist">
+                <button type="button" class="editor-tab active" data-tab="words" role="tab">Słowa</button>
+                <button type="button" class="editor-tab" data-tab="post" role="tab">Postproc</button>
+                <button type="button" class="editor-tab" data-tab="vol" role="tab">Volumetryka</button>
+                <button type="button" class="editor-tab" data-tab="custom" role="tab">Custom</button>
+            </div>
+            <div id="tab-words" class="editor-tab-panel">
+                <button type="button" id="btn-add-word">+ Słowo</button>
+                <button type="button" id="btn-add-break">+ Linia</button>
+                <button type="button" id="btn-del-item">Usuń</button>
+                <ul class="word-list editor-scroll" id="word-list"></ul>
+            </div>
+            <div id="tab-post" class="editor-tab-panel hidden">
+                <label>Tor
+                    <select id="post-track-id" class="editor-hud-input"></select>
+                </label>
+                <ul class="scalar-kf-list editor-scroll" id="post-kf-list"></ul>
+                <button type="button" id="btn-post-add-kf">+ Klucz przy t</button>
+            </div>
+            <div id="tab-vol" class="editor-tab-panel hidden">
+                <label>Tor
+                    <select id="vol-track-id" class="editor-hud-input"></select>
+                </label>
+                <ul class="scalar-kf-list editor-scroll" id="vol-kf-list"></ul>
+                <button type="button" id="btn-vol-add-kf">+ Klucz przy t</button>
+            </div>
+            <div id="tab-custom" class="editor-tab-panel hidden">
+                <label>Tor
+                    <select id="custom-track-id" class="editor-hud-input"></select>
+                </label>
+                <ul class="scalar-kf-list editor-scroll" id="custom-kf-list"></ul>
+                <button type="button" id="btn-custom-add-kf">+ Klucz przy t</button>
+            </div>
+        </aside>
+
+        <div class="editor-center">
+            <div id="preview-canvas-container">
+                <video id="preview-bg-video" class="preview-bg-video" muted playsinline loop></video>
+            </div>
+            <div class="timeline-stack">
+                <div class="timeline-transport">
+                    <button type="button" class="editor-chrome-btn" id="btn-play">Play</button>
+                    <button type="button" class="editor-chrome-btn" id="btn-pause">Pause</button>
+                    <label class="editor-inline-label">Vol
+                        <input type="range" id="rng-volume" min="0" max="1" step="0.05" value="1" />
+                    </label>
+                    <span id="time-display" class="timeline-time">t=0.00s · 0f</span>
+                    <label class="editor-inline-label">Zoom ×
+                        <input type="range" id="rng-timeline-zoom" min="100" max="800" step="10" value="100" title="1× = pełna szerokość okna" />
+                    </label>
+                </div>
+                <div class="timeline-viewport editor-scroll" id="timeline-viewport">
+                    <div class="timeline-inner" id="timeline-inner">
+                        <div class="timeline-ruler" id="timeline-ruler"></div>
+                        <div class="timeline-track-layer">
+                            <div class="timeline-kf-band" id="timeline-kf-band" title="Zakres keyframe transform"></div>
+                            <div class="timeline-vis-range" id="timeline-vis-range" title="Zakres widoczności słowa"></div>
+                            <div class="timeline-track-kf" id="timeline-track-kf"></div>
+                        </div>
+                        <div class="timeline-playhead" id="timeline-playhead"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <aside class="editor-panel editor-scroll" id="prop-aside">
+            <h2>Właściwości</h2>
+            <div id="panel-word-props">
+                <div class="prop-grid" id="prop-panel">
+                    <label>id</label>
+                    <input type="text" id="prop-id" class="editor-hud-input" />
+                    <label>text</label>
+                    <input type="text" id="prop-text" class="editor-hud-input" />
+                    <label>at (s)</label>
+                    <input type="number" id="prop-at" class="editor-hud-input" step="0.01" />
+                    <label>color (#hex)</label>
+                    <input type="text" id="prop-color" class="editor-hud-input" placeholder="ffffff" />
+                    <label>scale</label>
+                    <input type="number" id="prop-scale" class="editor-hud-input" step="0.05" min="0.1" />
+                    <h3 class="prop-subheading">Woksele (statyczne)</h3>
+                    <label>wordSize</label>
+                    <input type="number" id="prop-word-size" class="editor-hud-input" step="0.05" min="0.01" placeholder="global" />
+                    <label>wordHeight</label>
+                    <input type="number" id="prop-word-height" class="editor-hud-input" step="0.01" min="0.01" placeholder="global" />
+                    <label>wordThickness</label>
+                    <input type="number" id="prop-word-thickness" class="editor-hud-input" step="1" min="1" placeholder="global" />
+                    <label>scatterRadius</label>
+                    <input type="number" id="prop-scatter" class="editor-hud-input" step="0.1" min="0.01" placeholder="global" />
+                    <label>Materiał</label>
+                    <select id="prop-material" class="editor-hud-input"></select>
+                    <label>FX słowa</label>
+                    <select id="prop-word-fx" class="editor-hud-input"></select>
+                    <label>visibleFrom (frag s)</label>
+                    <input type="number" id="prop-vis-from" class="editor-hud-input" step="0.01" placeholder="brak" />
+                    <label>visibleTo (frag s)</label>
+                    <input type="number" id="prop-vis-to" class="editor-hud-input" step="0.01" placeholder="brak" />
+                    <button type="button" id="btn-vis-from-now" class="editor-chrome-btn">From = t</button>
+                    <button type="button" id="btn-vis-to-now" class="editor-chrome-btn">To = t</button>
+                    <h3 class="prop-subheading">Lot / znikanie</h3>
+                    <label>lot</label>
+                    <select id="prop-fly-mode" class="editor-hud-input">
+                        <option value="default">domyślny</option>
+                        <option value="rail">szyna</option>
+                        <option value="fixed">spawn</option>
+                    </select>
+                    <label>spawn x,y,z</label>
+                    <input type="text" id="prop-spawn" class="editor-hud-input" placeholder="20, 6, 0" />
+                    <label>znikanie (media s)</label>
+                    <input type="number" id="prop-vanish-media" class="editor-hud-input" step="0.01" placeholder="pusty" />
+                    <button type="button" id="btn-vanish-now" class="editor-chrome-btn">Vanish = teraz</button>
+                    <label>składanie (s)</label>
+                    <input type="number" id="prop-assembly-dur" class="editor-hud-input" step="0.05" min="0.05" placeholder="global" />
+                    <label>persistent</label>
+                    <input type="checkbox" id="prop-persistent" />
+                    <h3 class="prop-subheading">Transform — klucz</h3>
+                    <label class="prop-inline-label">Gizmo</label>
+                    <div class="prop-kf-mode-row">
+                        <select id="gizmo-mode" class="editor-hud-input" title="Tryb uchwytów">
+                            <option value="translate">Przesuń</option>
+                            <option value="rotate">Obrót</option>
+                        </select>
+                        <select id="gizmo-space" class="editor-hud-input" title="World / local">
+                            <option value="world">World</option>
+                            <option value="local">Local</option>
+                        </select>
+                    </div>
+                    <div class="prop-kf-xyz-grid">
+                        <span class="prop-kf-axis">Px</span>
+                        <input type="number" id="kf-px" class="editor-hud-input" step="0.05" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-px" title="Klucz przy t (Px)">K</button>
+                        <span class="prop-kf-axis">Py</span>
+                        <input type="number" id="kf-py" class="editor-hud-input" step="0.05" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-py" title="Klucz przy t (Py)">K</button>
+                        <span class="prop-kf-axis">Pz</span>
+                        <input type="number" id="kf-pz" class="editor-hud-input" step="0.05" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-pz" title="Klucz przy t (Pz)">K</button>
+                        <span class="prop-kf-axis">Rx</span>
+                        <input type="number" id="kf-rx" class="editor-hud-input" step="0.02" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-rx" title="Klucz przy t (Rx)">K</button>
+                        <span class="prop-kf-axis">Ry</span>
+                        <input type="number" id="kf-ry" class="editor-hud-input" step="0.02" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-ry" title="Klucz przy t (Ry)">K</button>
+                        <span class="prop-kf-axis">Rz</span>
+                        <input type="number" id="kf-rz" class="editor-hud-input" step="0.02" value="0" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-rz" title="Klucz przy t (Rz)">K</button>
+                    </div>
+                    <label>scale (klucz)</label>
+                    <div class="prop-kf-scale-row">
+                        <input type="number" id="kf-scale" class="editor-hud-input" step="0.05" min="0.1" value="1" />
+                        <button type="button" class="editor-kf-chip" id="btn-kf-scale" title="Klucz przy t (scale)">K</button>
+                    </div>
+                    <button type="button" id="btn-add-kf">Dodaj pełny klucz przy t</button>
+                    <button type="button" id="btn-del-kf" class="editor-chrome-btn">Usuń zazn. klucz</button>
+                </div>
+                <div class="prop-bg-video-block">
+                    <h3 class="prop-subheading">Wideo tła (podgląd)</h3>
+                    <p class="editor-mini-hint">Ścieżka w JSON: <code>style.backgroundVideo.relativePath</code>. Klucze: czas fragmentu (s).</p>
+                    <label>Ścieżka (repo / pakiet)</label>
+                    <input type="text" id="bg-video-path" class="editor-hud-input" placeholder="ASSETS/BGs/clip.mp4" />
+                    <label>opacity t</label>
+                    <input type="number" id="bg-op-t" class="editor-hud-input" step="0.01" />
+                    <label>opacity v (0–1)</label>
+                    <input type="number" id="bg-op-v" class="editor-hud-input" step="0.05" min="0" max="1" />
+                    <button type="button" id="btn-bg-op-add">+ Opacity @ t</button>
+                    <button type="button" id="btn-bg-op-apply" class="editor-chrome-btn">Zapisz op.</button>
+                    <button type="button" id="btn-bg-op-del" class="editor-chrome-btn">Usuń op.</button>
+                    <ul class="scalar-kf-list editor-scroll" id="bg-op-kf-list"></ul>
+                    <label>playback t</label>
+                    <input type="number" id="bg-pr-t" class="editor-hud-input" step="0.01" />
+                    <label>playback v (×)</label>
+                    <input type="number" id="bg-pr-v" class="editor-hud-input" step="0.05" min="0.05" max="4" value="1" />
+                    <button type="button" id="btn-bg-pr-add">+ Rate @ t</button>
+                    <button type="button" id="btn-bg-pr-apply" class="editor-chrome-btn">Zapisz rate</button>
+                    <button type="button" id="btn-bg-pr-del" class="editor-chrome-btn">Usuń rate</button>
+                    <ul class="scalar-kf-list editor-scroll" id="bg-pr-kf-list"></ul>
+                </div>
+                <h2>Klucze (lista)</h2>
+                <ul class="keyframe-list editor-scroll" id="kf-list"></ul>
+            </div>
+            <div id="panel-scalar-props" class="hidden">
+                <p class="editor-mini-hint">Wybierz tor po lewej. Wartość <code>v</code> — bloom/CRT/SAO lub mnożnik env sześcianów.</p>
+                <label>t (s)</label>
+                <input type="number" id="scalar-kf-t" class="editor-hud-input" step="0.01" />
+                <label>v</label>
+                <input type="number" id="scalar-kf-v" class="editor-hud-input" step="0.01" />
+                <button type="button" id="btn-scalar-apply">Zapisz / dodaj</button>
+                <button type="button" id="btn-scalar-del" class="editor-chrome-btn">Usuń punkt</button>
+            </div>
+        </aside>
+    </div>
+
+    <p class="status-line" id="validation-msg"></p>
+
+    <script type="module" src="./showcase-animation-editor.js"></script>
+</body>
+
+</html>

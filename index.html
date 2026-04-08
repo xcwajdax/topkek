@@ -8,6 +8,9 @@
     <link rel="icon"
         href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
     <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="ASSETS/APPSTAIN/topkek_trump_head/trump-head.css">
     <script type="importmap">
         {
@@ -41,28 +44,149 @@
         <div class="term-line">Animation portfolio</div><br>
         <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
         </div>
-        <div class="menu-section">
-            <div class="menu-section-title">Vajbuj</div>
-            <div class="term-line" id="term-vajbuj">Type in terminal: vajbuj / vajbuj stop</div>
+        <div class="term-menu-category-heading" role="presentation">ANIMATIONS</div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--pushka"
+                tabindex="0"
+                role="group"
+                aria-label="PUSHKA STUDIO — hover to play preview video"
+                aria-describedby="term-pushka-banner-hint"
+                data-term-banner-cmd="/pushka">
+                <video id="pushka-menu-banner-video" class="term-menu-banner-video" muted playsinline loop preload="auto" aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-pushka-drawer-display-title" aria-hidden="true">PUSHKA STUDIO</span>
+                    <div class="term-menu-banner-hint" id="term-pushka-banner-hint"></div>
+                </div>
+            </div>
         </div>
-        <div class="menu-section">
-            <div class="menu-section-title">MYSEN</div>
-            <div class="term-line" id="term-mysen">Type in terminal: /mysen start / /mysen stop</div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--newskin"
+                tabindex="0"
+                role="group"
+                aria-label="NEWSKIN — hover to play preview video"
+                aria-describedby="term-newskin-banner-hint"
+                data-term-banner-cmd="/newskin">
+                <video
+                    id="newskin-menu-banner-video"
+                    class="term-menu-banner-video"
+                    muted
+                    playsinline
+                    loop
+                    preload="auto"
+                    aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner newskin-menu-banner-drawer-hint">
+                    <span class="term-menu-drawer-display-title" id="term-newskin-drawer-display-title" aria-hidden="true">NEWSKIN</span>
+                    <div class="term-menu-banner-hint" id="term-newskin-banner-hint">
+                        A band I work with currently.<br>/newskin opens the promo panel.
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="menu-section">
-            <div class="menu-section-title">Games</div>
-            <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
-            <div class="term-line">> floppy driver v_0.05.20</div>
+        <div class="term-menu-banner-block">
+            <div
+                id="term-mysen"
+                class="term-menu-banner-wrap term-menu-banner-mysen-wrap"
+                tabindex="0"
+                role="group"
+                aria-label="MYSEN — najechanie odtwarza podgląd wideo"
+                aria-describedby="term-mysen-banner-hint"
+                data-term-banner-cmd="/mysen">
+                <div class="term-menu-banner-media">
+                    <img
+                        class="term-menu-banner-poster"
+                        src="ASSETS/UI/mysen_menu_banner_poster.png"
+                        alt=""
+                        width="926"
+                        height="243"
+                        decoding="async"
+                        aria-hidden="true" />
+                    <video
+                        id="term-menu-banner-mysen-video"
+                        class="term-menu-banner-video"
+                        muted
+                        playsinline
+                        loop
+                        preload="auto"
+                        aria-hidden="true"></video>
+                </div>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-mysen-drawer-display-title" aria-hidden="true">MYSEN</span>
+                    <div class="term-menu-banner-hint" id="term-mysen-banner-hint">
+                        Remix mode — a band I worked with; maybe live again someday.<br>Terminal: /mysen start · /mysen stop — Esc stops while playing.
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="menu-section">
-            <div class="menu-section-title">Software</div>
-            <div class="term-line interactive-term-line" id="term-scndbrejn">> SCNDBREJN</div>
-            <div class="term-line">> Bonehandler</div>
-            <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
-            <div class="term-line">> pixelgen v 0.2</div>
-            <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
-            <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
-            <div class="term-line">> Frame Gen v_1.0</div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--vajbuj"
+                tabindex="0"
+                role="group"
+                aria-label="VAJBUJ — hover to play preview video"
+                aria-describedby="term-vajbuj"
+                data-term-banner-cmd="/vajbuj">
+                <video id="vajbuj-menu-banner-video" class="term-menu-banner-video" muted playsinline loop preload="auto" aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-vajbuj-drawer-display-title" aria-hidden="true">VAJBUJ</span>
+                    <div class="term-menu-banner-hint" id="term-vajbuj">YANN x GABRIEL HERMES — VAJBUJ SZMATO<br>Just a track I like — big fan, not affiliated.</div>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-category-spacer" aria-hidden="true"></div>
+        <div class="term-menu-category-heading" role="presentation">GAMES</div>
+        <div class="term-menu-section-hover-block" tabindex="0" role="group" aria-label="Games — hover or focus to expand details">
+            <div class="menu-section">
+                <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
+                <div class="term-line">> floppy driver v_0.05.20</div>
+            </div>
+            <div class="term-menu-section-drawer">
+                <div class="term-menu-section-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-menu-section-games-display-title" aria-hidden="true">GAMES</span>
+                    <p class="term-menu-banner-hint term-menu-section-drawer-hint" id="term-menu-section-games-hint"></p>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-category-heading" role="presentation">SOFTWARE</div>
+        <div class="term-menu-section-hover-block" tabindex="0" role="group" aria-label="Software — hover or focus to expand details">
+            <div class="menu-section">
+                <div class="term-line interactive-term-line" id="term-scndbrejn">> SCNDBREJN</div>
+                <div class="term-line">> Bonehandler</div>
+                <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
+                <div class="term-line">> pixelgen v 0.2</div>
+                <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
+                <div class="term-line interactive-term-line" id="term-agents">> A G E N T S</div>
+                <div class="term-line">Type in terminal: /agents</div>
+                <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
+                <div class="term-line">> Frame Gen v_1.0</div>
+            </div>
+            <div class="term-menu-section-drawer">
+                <div class="term-menu-section-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-menu-section-software-display-title" aria-hidden="true">SOFTWARE</span>
+                    <p class="term-menu-banner-hint term-menu-section-drawer-hint" id="term-menu-section-software-hint"></p>
+                </div>
+            </div>
         </div>
     </div>
     <div id="topkek-terminal-shell" class="topkek-terminal-shell" aria-label="TOPKEK command console">
@@ -261,6 +385,72 @@
         </div>
     </div>
 
+    <!-- NEWSKIN: /newskin — panel jak sekcja menu (280px), wyśrodkowany; minimalizacja -->
+    <div id="newskin-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="newskin-modal-title"
+        aria-hidden="true">
+        <div class="newskin-modal-scrim" id="newskin-modal-scrim" aria-hidden="true"></div>
+        <div class="newskin-modal-panel menu-section newskin-modal-menu-section">
+            <div class="newskin-modal-header">
+                <span id="newskin-modal-title" class="menu-section-title newskin-modal-title-text">NEWSKIN</span>
+                <div class="newskin-modal-header-actions">
+                    <button type="button" id="newskin-modal-minimize" class="newskin-modal-icon-btn"
+                        aria-label="Minimalizuj panel" title="Minimalizuj" aria-expanded="true">
+                        <svg class="newskin-modal-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true">
+                            <path d="M18 15l-6-6-6 6" />
+                        </svg>
+                    </button>
+                    <button type="button" id="newskin-modal-close" class="newskin-modal-icon-btn"
+                        aria-label="Zamknij newskin" title="Zamknij">
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+            </div>
+            <div class="newskin-modal-body" id="newskin-modal-body">
+                <div class="newskin-modal-youtube portfolio-vimeo-aspect">
+                    <iframe id="newskin-modal-youtube-iframe" src="" title="YouTube — newskin" frameborder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                </div>
+                <p id="newskin-modal-caption" class="term-line newskin-modal-caption"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PUSHKA STUDIO: /pushka — panel jak newskin, Vimeo zamiast YouTube -->
+    <div id="pushka-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="pushka-modal-title"
+        aria-hidden="true">
+        <div class="newskin-modal-scrim" id="pushka-modal-scrim" aria-hidden="true"></div>
+        <div class="newskin-modal-panel menu-section newskin-modal-menu-section">
+            <div class="newskin-modal-header">
+                <span id="pushka-modal-title" class="menu-section-title newskin-modal-title-text">PUSHKA STUDIO</span>
+                <div class="newskin-modal-header-actions">
+                    <button type="button" id="pushka-modal-minimize" class="newskin-modal-icon-btn"
+                        aria-label="Minimalizuj panel" title="Minimalizuj" aria-expanded="true">
+                        <svg class="newskin-modal-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true">
+                            <path d="M18 15l-6-6-6 6" />
+                        </svg>
+                    </button>
+                    <button type="button" id="pushka-modal-close" class="newskin-modal-icon-btn"
+                        aria-label="Zamknij Pushka Studio" title="Zamknij">
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+            </div>
+            <div class="newskin-modal-body" id="pushka-modal-body">
+                <div class="newskin-modal-youtube portfolio-vimeo-aspect">
+                    <iframe id="pushka-modal-vimeo-iframe" src="" title="Vimeo — Pushka Studio" frameborder="0"
+                        allow="autoplay; fullscreen; picture-in-picture"
+                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                </div>
+                <p id="pushka-modal-caption" class="term-line newskin-modal-caption"></p>
+            </div>
+        </div>
+    </div>
+
     <!-- PORTFOLIO VIMEO MODAL -->
     <div id="portfolio-vimeo-modal" class="hidden">
         <div id="portfolio-vimeo-backdrop"></div>
@@ -280,6 +470,38 @@
     <!-- IMAGE VIEWER -->
     <div id="image-viewer" class="hidden">
         <img id="full-image" src="" alt="Full Screen Preview">
+    </div>
+
+    <!-- Spotify widget after natural end of VAJBUJ / MYSEN (see config.js originalTrackSpotifyEmbedSrc) -->
+    <div id="music-showcase-spotify-widget" class="music-showcase-spotify-widget hidden" role="dialog"
+        aria-modal="false" aria-labelledby="music-showcase-spotify-widget-title" aria-hidden="true">
+        <div class="music-showcase-spotify-widget-panel">
+            <button type="button" id="music-showcase-spotify-close" class="close-btn"
+                aria-label="Zamknij panel Spotify">×</button>
+            <div id="music-showcase-spotify-widget-title" class="music-showcase-spotify-widget-title">Spotify</div>
+            <div class="music-showcase-spotify-iframe-wrap">
+                <iframe id="music-showcase-spotify-iframe" title="Spotify — odtwarzacz" loading="lazy" src=""
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube modal after natural end of VAJBUJ / MYSEN (see config.js originalTrackYoutube*) -->
+    <div id="music-showcase-youtube-modal" class="music-showcase-youtube-modal hidden" role="dialog"
+        aria-modal="true" aria-labelledby="music-showcase-youtube-modal-title" aria-hidden="true">
+        <div id="music-showcase-youtube-backdrop" class="music-showcase-youtube-backdrop" aria-hidden="true"></div>
+        <div class="music-showcase-youtube-content">
+            <button type="button" id="music-showcase-youtube-close" class="close-btn"
+                aria-label="Close original track dialog">×</button>
+            <h2 id="music-showcase-youtube-modal-title" class="music-showcase-youtube-modal-title">Original</h2>
+            <p id="music-showcase-youtube-attribution" class="music-showcase-youtube-attribution"></p>
+            <div class="music-showcase-youtube-aspect">
+                <iframe id="music-showcase-youtube-iframe" title="YouTube — original track" loading="lazy" src=""
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+        </div>
     </div>
 
     <script src="ASSETS/APPSTAIN/topkek_trump_head/trump-quotes.js"></script>

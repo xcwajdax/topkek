@@ -1,21 +1,22 @@
 /**
  * Terminal-style log + command input + local history. Scene commands live in script.js.
  */
-import { TERMINAL_CONFIG } from './config.js';
+import { TERMINAL_CONFIG } from '../../config.js';
 import { initBuuchChat, isCommand, buuchReply } from './buuch-chat.js';
 
 /**
  * @param {object} options
  * @param {string} [options.rootSelector]
- * @param {(line: string) => (string|string[]|void)} options.onCommand
+ * @param {(line: string) => (string|string[]|void|Promise<string|string[]|void>)} options.onCommand
+ * @returns {{ submitLine: (line: string) => Promise<void> } | undefined}
  */
 export function initTopkekTerminalShell(options) {
     const rootSelector = options.rootSelector || '#topkek-terminal-shell';
     const onCommand = options.onCommand;
-    if (typeof onCommand !== 'function') return;
+    if (typeof onCommand !== 'function') return undefined;
 
     const root = document.querySelector(rootSelector);
-    if (!root) return;
+    if (!root) return undefined;
 
     const maxLogLines = TERMINAL_CONFIG.maxLogLines ?? 200;
     const promptChar = TERMINAL_CONFIG.prompt ?? 'U >';
@@ -39,7 +40,7 @@ export function initTopkekTerminalShell(options) {
     const logEl = root.querySelector('[data-terminal-log]');
     const input = root.querySelector('[data-terminal-input]');
     const promptEl = root.querySelector('[data-terminal-prompt]');
-    if (!logEl || !input) return;
+    if (!logEl || !input) return undefined;
 
     const inputRow = root.querySelector('.topkek-terminal-input-row');
     if (inputRow && logEl.parentNode === root && inputRow.parentNode === root) {
@@ -263,40 +264,10 @@ export function initTopkekTerminalShell(options) {
         e.preventDefault();
     }, { passive: false });
 
-    input.addEventListener('keydown', async (e) => {
-        if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (history.length === 0) return;
-            if (historyIndex === -1) historyDraft = input.value;
-            historyIndex = Math.min(historyIndex + 1, history.length - 1);
-            input.value = history[history.length - 1 - historyIndex];
-            return;
-        }
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (history.length === 0) return;
-            if (historyIndex <= 0) {
-                historyIndex = -1;
-                input.value = historyDraft;
-                return;
-            }
-            historyIndex -= 1;
-            input.value = history[history.length - 1 - historyIndex];
-            return;
-        }
-        if (e.key !== 'Enter') return;
-        e.preventDefault();
-        const raw = input.value;
-        const line = raw.trim();
-        if (!line) return;
-
-        await appendLogLine(`${promptChar} ${raw}`, '', 'command', false, {});
-        history.push(raw);
-        if (history.length > 100) history.shift();
-        historyIndex = -1;
-        historyDraft = '';
-        input.value = '';
-
+    /**
+     * @param {string} line trimmed non-empty
+     */
+    async function processSubmittedLine(line) {
         const low = line.toLowerCase();
         if (low === '/clear') {
             clearLog();
@@ -307,6 +278,9 @@ export function initTopkekTerminalShell(options) {
             let out;
             try {
                 out = onCommand(line);
+                if (out != null && typeof out.then === 'function') {
+                    out = await out;
+                }
             } catch (err) {
                 await appendLogLine(`Error: ${err?.message || err}`, 'topkek-terminal-err', 'error', streamEnabled ? 'slow' : false, {});
                 return;
@@ -339,5 +313,60 @@ export function initTopkekTerminalShell(options) {
                 await appendLogLine(buuchText, 'topkek-terminal-line-buuch', 'response', streamEnabled ? 'slow' : false, {});
             }
         }
+    }
+
+    async function pushEchoAndDispatch(raw) {
+        const line = raw.trim();
+        if (!line) return;
+        await appendLogLine(`${promptChar} ${raw}`, '', 'command', false, {});
+        history.push(raw);
+        if (history.length > 100) history.shift();
+        historyIndex = -1;
+        historyDraft = '';
+        await processSubmittedLine(line);
+    }
+
+    /**
+     * Same as submitting from the input (log + history + command handling), without changing the input field.
+     * @param {string} text
+     */
+    async function submitLine(text) {
+        const raw = String(text ?? '');
+        const line = raw.trim();
+        if (!line) return;
+        await pushEchoAndDispatch(raw);
+    }
+
+    input.addEventListener('keydown', async (e) => {
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (history.length === 0) return;
+            if (historyIndex === -1) historyDraft = input.value;
+            historyIndex = Math.min(historyIndex + 1, history.length - 1);
+            input.value = history[history.length - 1 - historyIndex];
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (history.length === 0) return;
+            if (historyIndex <= 0) {
+                historyIndex = -1;
+                input.value = historyDraft;
+                return;
+            }
+            historyIndex -= 1;
+            input.value = history[history.length - 1 - historyIndex];
+            return;
+        }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const raw = input.value;
+        const line = raw.trim();
+        if (!line) return;
+
+        input.value = '';
+        await pushEchoAndDispatch(raw);
     });
+
+    return { submitLine };
 }

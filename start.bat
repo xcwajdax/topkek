@@ -1,6 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Always run from this batch file's folder (so Python finds server.py / project root).
+cd /d "%~dp0"
+
 echo ==========================================
 echo    TOPKEK Productions - Quick Start
 echo ==========================================
@@ -14,17 +17,26 @@ if %errorlevel% neq 0 (
         echo [!] Python is NOT detected in PATH.
         echo [!] Please make sure "Add Python to PATH" was checked during install.
         pause
-        exit
+        exit /b 1
     )
 )
 
 echo [V] Python detected.
-echo [!] Starting local server on http://localhost:8002...
+echo [!] Server will listen on port 8002 — open http://127.0.0.1:8002/ in the browser (IPv4 loopback).
+echo     On Windows, "localhost" may use IPv6 first while Python serves IPv4 — that causes Chrome errors.
 echo.
 
-:: Use 'start' with the URL directly - this triggers the system default browser.
-:: Wrapping in quotes is safer, and the empty title "" is necessary for 'start' with paths/URLs.
-start "" "http://localhost:8002"
+:: Server in a separate window with correct working directory (avoids race with browser).
+start "TOPKEK server :8002" /D "%~dp0" cmd /k python server.py 8002
 
-:: Start Python HTTP Server (server.py suppresses client disconnect errors)
-python server.py 8002
+:: Brief pause so the socket is listening before the browser loads the page.
+echo [!] Waiting for server to start...
+timeout /t 3 /nobreak >nul
+
+start "" "http://127.0.0.1:8002/"
+
+echo.
+echo Site should open in your browser at http://127.0.0.1:8002/
+echo Keep the ^"TOPKEK server^" console open while testing. You can close this window.
+echo.
+pause

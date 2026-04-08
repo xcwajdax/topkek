@@ -12,9 +12,31 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { initTopkekTerminalShell } from './terminal-shell.js';
-import { initFxDevPanel } from './fx-dev-panel.js';
-import { IS_MOBILE, CONFIG, SHADER_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL } from './config.js';
+import { initTopkekTerminalShell } from './src/ui/terminal-shell.js';
+import { initFxDevPanel } from './src/ui/fx-dev-panel.js';
+import { IS_MOBILE, CONFIG, SHADER_CONFIG, STROBE_CONFIG, MATERIALS, SHAPE_DEFINITIONS, CINEMATIC_CONFIG as cinematicConfig, INTRO_CAMERA_CONFIG, POST_INTRO_UI_CONFIG, CAMERA_HUD_CONFIG, PERF_HUD_CONFIG, LOADER_CONFIG, VAJBUJ_CONFIG, MYSEN_CONFIG, NEWSKIN_CONFIG, PUSHKA_CONFIG, PORTFOLIO_CONFIG, PORTFOLIO_SCENE_CONFIG, GLITCH_VOLUME_CONFIG, GLITCH_VOLUME_PRESETS, GLITCH_VOLUME_STATE, FX_CONFIG, PERFORMANCE_CONFIG, DEBUG_FLAGS, TERMINAL_HELP_LINES_COMPACT, TERMINAL_HELP_LINES_FULL, TERMINAL_CONFIG } from './config.js';
+import { registerVajbujAutoBlocker, registerParticleMouseSimBlocker, isVajbujAutoStartBlocked, isParticleMouseSimSuppressed } from './src/showcase/showcase-registry.js';
+import {
+    createVoxelWord,
+    voxelStyleFromMusicConfig,
+    queueLyricVoxelPregeneration,
+    createVoxelGenerationTask
+} from './src/showcase/music-lyric-voxels.js';
+import { computeMusicShowcaseCameraResetValues } from './src/showcase/showcase-camera.js';
+import { capturePostprocessingSnapshot, restorePostprocessingSnapshot } from './src/showcase/postprocessing-snapshot.js';
+import { parseMysenTimestampLyricsFile } from './src/showcase/mysen-timestamp-parse.js';
+import { buildMergedMysenLyricsArray, lastFilledLineIndexInLyrics } from './src/showcase/mysen-merge-lyrics-from-timestamps.js';
+import { lyricsArrayFromShowcaseDoc, mergeShowcaseStyleIntoConfig } from './src/showcase/showcase-animation-adapters.js';
+import {
+    normalizeShowcaseAnimationDocForRuntime,
+    validateShowcaseAnimationDoc
+} from './src/showcase/showcase-animation-schema.js';
+import {
+    applyShowcaseCustomKeyframes,
+    applyShowcasePostprocessKeyframes,
+    applyShowcaseVolumetricKeyframes
+} from './src/showcase/showcase-animation-pass-runtime.js';
+import { applyShowcaseTransformKeyframes } from './src/showcase/showcase-animation-runtime.js';
 
 const CUSTOM_TEXT_QUERY_PARAM = 'text';
 const MAX_CUSTOM_TEXT_LENGTH = 10;
@@ -178,11 +200,64 @@ const CRTShader = {
     `
 };
 
+const InvertShader = {
+    uniforms: {
+        'tDiffuse': { value: null },
+        'uInvert': { value: 0 }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float uInvert;
+        varying vec2 vUv;
+        void main() {
+            vec4 c = texture2D(tDiffuse, vUv);
+            c.rgb = mix(c.rgb, 1.0 - c.rgb, uInvert);
+            gl_FragColor = c;
+        }
+    `
+};
+
+function updateStrobeFlashTransform() {
+    if (!camera || !strobeFlashMesh) return;
+    const dist = STROBE_CONFIG.flashDistance;
+    const vFovRad = THREE.MathUtils.degToRad(camera.fov);
+    const halfH = Math.tan(vFovRad * 0.5) * dist;
+    const halfW = halfH * camera.aspect;
+    strobeFlashMesh.scale.set(halfW * 2, halfH * 2, 1);
+    strobeFlashMesh.position.set(0, 0, -dist);
+}
+
+function setStrobeActive(next) {
+    const want = !!next;
+    if (want && STROBE_CONFIG.disabled) return;
+    strobeActive = want;
+    const btn = document.getElementById('btn-strobe-toggle');
+    if (btn) {
+        btn.classList.toggle('active', strobeActive);
+        btn.setAttribute('aria-pressed', strobeActive ? 'true' : 'false');
+    }
+    if (!strobeActive) {
+        if (strobeFlashMesh) strobeFlashMesh.visible = false;
+        if (invertPass?.uniforms?.uInvert) invertPass.uniforms['uInvert'].value = 0;
+    }
+}
+
 // Configuration and State imported from config.js
 
 // State
-let scene, camera, renderer, composer, crtPass, bloomPass;
+let scene, camera, renderer, composer, crtPass, bloomPass, invertPass;
+let strobeFlashMesh = null;
+let strobeActive = STROBE_CONFIG.enabledByDefault && !STROBE_CONFIG.disabled;
 let saoPass = null;
+/** Baseline EffectComposer pass state before first VAJBUJ/MYSEN session in a row. */
+let _musicShowcasePostSnap = null;
 let keyDirectionalLight = null;
 let fillDirectionalLight = null;
 let meshRegistry = {}; // { shape: { top: Mesh, kek: Mesh } }
@@ -229,6 +304,8 @@ let videoIblSamplingCanvas = null;
 let videoIblSamplingCtx = null;
 let videoHemisphereLight = null;
 let videoAmbientLight = null;
+/** PMREM env sphere material — same mapColorGain as background plane for brighter video → IBL bake */
+let videoIblEnvSphereMaterial = null;
 
 // Active profile for currently playing background video (used for per-BG intensity "emission" tuning).
 let activeBackgroundVideoSource = null;
@@ -246,6 +323,24 @@ function getActiveEnvMapIntensityBoost() {
     const base = CONFIG.backgroundVideo?.envMapIntensityBoost ?? {};
     const override = activeBackgroundVideoSource?.envMapIntensityBoost ?? {};
     return { ...base, ...override };
+}
+
+function getActiveMapColorGain() {
+    const override = activeBackgroundVideoSource?.mapColorGain;
+    const base = CONFIG.backgroundVideo?.mapColorGain;
+    const raw = override != null && override !== '' ? Number(override) : Number(base);
+    if (!Number.isFinite(raw) || raw <= 0) return 1;
+    return Math.min(3, Math.max(0.25, raw));
+}
+
+function applyBackgroundVideoMapColorGain() {
+    const g = getActiveMapColorGain();
+    if (backgroundVideoMesh?.material?.color) {
+        backgroundVideoMesh.material.color.setScalar(g);
+    }
+    if (videoIblEnvSphereMaterial?.color) {
+        videoIblEnvSphereMaterial.color.setScalar(g);
+    }
 }
 
 function normalizeBackgroundVideoSrc(src) {
@@ -301,10 +396,14 @@ function updateBackgroundBeatIndicator(elapsedSeconds) {
     });
 }
 
-function setBackgroundVideoBySrc(nextSrc) {
+async function setBackgroundVideoBySrc(nextSrc) {
     const bgCfg = CONFIG.backgroundVideo;
     const sources = bgCfg?.sources;
     if (!backgroundVideoEl || !Array.isArray(sources) || sources.length === 0 || !nextSrc) return;
+
+    if (newskinBackgroundRestore != null) {
+        await closeNewskinModalAsync();
+    }
 
     const normalizedTarget = normalizeBackgroundVideoSrc(nextSrc);
     const next = sources.find(s => normalizeBackgroundVideoSrc(s?.src) === normalizedTarget);
@@ -324,6 +423,7 @@ function setBackgroundVideoBySrc(nextSrc) {
 
     // Apply tuning immediately (without waiting for the next sampling tick).
     applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
     const hemiCfg = getActiveHemisphereCfg();
     if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
         videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
@@ -495,7 +595,10 @@ function initBackgroundVideoIbl() {
             side: THREE.BackSide,
             toneMapped: false
         });
+        videoIblEnvSphereMaterial = envSphereMat;
         videoIblEnvScene.add(new THREE.Mesh(sphereGeo, envSphereMat));
+    } else {
+        videoIblEnvSphereMaterial = null;
     }
 
     const hemiCfg = getActiveHemisphereCfg();
@@ -548,6 +651,7 @@ function setFakeGiEnabled(wantOn) {
             videoAmbientLight.intensity = h.ambientIntensity ?? 0.32;
         }
         applyVideoIblMaterialBoost();
+        applyBackgroundVideoMapColorGain();
         return ['Fake GI ON (video PMREM + hemisphere / ambient z klatki wideo, boost envMapIntensity).'];
     }
 
@@ -558,6 +662,7 @@ function setFakeGiEnabled(wantOn) {
     if (videoHemisphereLight) videoHemisphereLight.intensity = 0;
     if (videoAmbientLight) videoAmbientLight.intensity = 0;
     resetLetterMaterialsEnvMapIntensityToDefaults();
+    applyBackgroundVideoMapColorGain();
     return ['Fake GI OFF (scene.environment → HDRI; światła wideo wyłączone; envMapIntensity jak w MATERIALS).'];
 }
 
@@ -569,10 +674,10 @@ function getFakeGiStatusLines() {
         `  PMREM: usePmrem=${vi?.usePmrem !== false} replaceSceneEnvironment=${vi?.replaceSceneEnvironment !== false} mobile=${IS_MOBILE}`
     ];
     if (videoHemisphereLight) {
-        lines.push(`  videoHemisphere: intensity=${videoHemisphereLight.intensity.toFixed(2)}`);
+        lines.push(`  videoHemisphere: intensity=${videoHemisphereLight.intensity.toFixed(1.2)}`);
     }
     if (videoAmbientLight) {
-        lines.push(`  videoAmbient: intensity=${videoAmbientLight.intensity.toFixed(2)}`);
+        lines.push(`  videoAmbient: intensity=${videoAmbientLight.intensity.toFixed(1.22)}`);
     }
     lines.push(`  scene.environment: ${scene?.environment ? 'yes' : 'no'}`);
     if (defaultBoxMaterial) {
@@ -599,13 +704,21 @@ function applyVideoIblMaterialBoost() {
     applyStd(goldMaterial, 'gold');
     if (innerCubeInstancedMesh?.material) applyStd(innerCubeInstancedMesh.material, 'innerCubes');
 
-    const hv = boost.vajbujBgCubes;
+    let hv = boost.vajbujBgCubes;
+    if (vajbujState.active && vajbujState._showcaseVolBoost?.vajbujBgCubes != null) {
+        const k = vajbujState._showcaseVolBoost.vajbujBgCubes;
+        hv = (hv ?? 1) * k;
+    }
     if (hv != null && vajbujState.bgCubesMesh?.material) {
         const base = VAJBUJ_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
         vajbujState.bgCubesMesh.material.envMapIntensity = base * hv;
     }
 
-    const hm = boost.mysenBgCubes;
+    let hm = boost.mysenBgCubes;
+    if (mysenState.active && mysenState._showcaseVolBoost?.mysenBgCubes != null) {
+        const k = mysenState._showcaseVolBoost.mysenBgCubes;
+        hm = (hm ?? 1) * k;
+    }
     if (hm != null && mysenState.bgCubesMesh?.material) {
         const baseM = MYSEN_CONFIG.bgCubeMaterial?.envMapIntensity ?? 1;
         mysenState.bgCubesMesh.material.envMapIntensity = baseM * hm;
@@ -669,11 +782,453 @@ let vajbujState = {
     lastActivityTime: Date.now(),
     isStopping: false,
     voxelCache: {}, // Cache for pre-calculated voxel data
-    generationQueue: [] // Queue for background processing
+    generationQueue: [], // Queue for background processing
+    /** After natural playback end only — show Spotify widget in finalize if embed URL set. */
+    pendingSpotifyWidgetAfterFinalize: false,
+    _showcaseVolBoost: {}
 };
 
 let vajbujFinalizeTimerId = null;
 let mysenFinalizeTimerId = null;
+
+/** Hide right-panel menu + left HUD during VAJBUJ/MYSEN; keep #topkek-terminal-shell visible. */
+function setMusicShowcaseMenuUiHidden(hidden) {
+    document.body.classList.toggle('music-showcase-ui-minimal', !!hidden);
+}
+
+let musicShowcaseSpotifyKeydownHandler = null;
+
+function hideMusicShowcaseSpotifyWidget() {
+    if (musicShowcaseSpotifyKeydownHandler) {
+        window.removeEventListener('keydown', musicShowcaseSpotifyKeydownHandler, true);
+        musicShowcaseSpotifyKeydownHandler = null;
+    }
+    hideMusicShowcaseYoutubeModal();
+    const iframe = document.getElementById('music-showcase-spotify-iframe');
+    if (iframe) iframe.src = '';
+    const root = document.getElementById('music-showcase-spotify-widget');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+}
+
+/** @param {string} embedSrc Full Spotify embed URL (iframe src). */
+function showMusicShowcaseSpotifyWidget(embedSrc, titleText) {
+    if (!embedSrc || typeof embedSrc !== 'string') return;
+    const root = document.getElementById('music-showcase-spotify-widget');
+    const iframe = document.getElementById('music-showcase-spotify-iframe');
+    const titleEl = document.getElementById('music-showcase-spotify-widget-title');
+    if (!root || !iframe) return;
+
+    hideMusicShowcaseSpotifyWidget();
+
+    if (titleEl) titleEl.textContent = titleText || 'Spotify';
+    iframe.src = embedSrc;
+    root.classList.remove('hidden');
+    root.setAttribute('aria-hidden', 'false');
+
+    musicShowcaseSpotifyKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (root.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideMusicShowcaseSpotifyWidget();
+    };
+    window.addEventListener('keydown', musicShowcaseSpotifyKeydownHandler, { capture: true });
+
+    document.getElementById('music-showcase-spotify-close')?.focus();
+}
+
+let musicShowcaseYoutubeKeydownHandler = null;
+
+function hideMusicShowcaseYoutubeModal() {
+    if (musicShowcaseYoutubeKeydownHandler) {
+        window.removeEventListener('keydown', musicShowcaseYoutubeKeydownHandler, true);
+        musicShowcaseYoutubeKeydownHandler = null;
+    }
+    const iframe = document.getElementById('music-showcase-youtube-iframe');
+    if (iframe) iframe.src = '';
+    const root = document.getElementById('music-showcase-youtube-modal');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+}
+
+/**
+ * @param {{ embedSrc: string, title?: string, bodyText?: string }} opts
+ */
+function showMusicShowcaseYoutubeModal(opts) {
+    const embedSrc = opts?.embedSrc;
+    if (!embedSrc || typeof embedSrc !== 'string') return;
+
+    hideMusicShowcaseSpotifyWidget();
+
+    const root = document.getElementById('music-showcase-youtube-modal');
+    const iframe = document.getElementById('music-showcase-youtube-iframe');
+    const titleEl = document.getElementById('music-showcase-youtube-modal-title');
+    const bodyEl = document.getElementById('music-showcase-youtube-attribution');
+    if (!root || !iframe) return;
+
+    if (titleEl) titleEl.textContent = opts.title || 'Original';
+    if (bodyEl) {
+        const t = opts.bodyText;
+        bodyEl.textContent = typeof t === 'string' ? t : '';
+    }
+
+    iframe.src = embedSrc;
+    root.classList.remove('hidden');
+    root.setAttribute('aria-hidden', 'false');
+
+    musicShowcaseYoutubeKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (root.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideMusicShowcaseYoutubeModal();
+    };
+    window.addEventListener('keydown', musicShowcaseYoutubeKeydownHandler, { capture: true });
+
+    document.getElementById('music-showcase-youtube-close')?.focus();
+}
+
+/** Snapshot of main BG plane while `/newskin` modal is open (restored on close). */
+let newskinBackgroundRestore = null;
+/** `CONFIG.text` before opening newskin (restored after particle regen on close). */
+let newskinSavedConfigText = null;
+let newskinModalKeydownHandler = null;
+let pushkaModalKeydownHandler = null;
+
+function syncNewskinModalBodyOverflow() {
+    const m = document.getElementById('newskin-modal');
+    if (!m || m.classList.contains('hidden')) {
+        document.body.classList.remove('newskin-modal-open');
+        return;
+    }
+    if (m.classList.contains('newskin-modal--minimized')) {
+        document.body.classList.remove('newskin-modal-open');
+    } else {
+        document.body.classList.add('newskin-modal-open');
+    }
+}
+
+function syncPushkaModalBodyOverflow() {
+    const m = document.getElementById('pushka-modal');
+    if (!m || m.classList.contains('hidden')) {
+        document.body.classList.remove('pushka-modal-open');
+        return;
+    }
+    if (m.classList.contains('newskin-modal--minimized')) {
+        document.body.classList.remove('pushka-modal-open');
+    } else {
+        document.body.classList.add('pushka-modal-open');
+    }
+}
+
+/** Vimeo page or player URL → `player.vimeo.com` embed with autoplay. */
+function normalizeVimeoEmbedUrl(rawUrl) {
+    let url = String(rawUrl || '').trim();
+    if (!url) return '';
+    if (!url.includes('player.vimeo.com')) {
+        const match = url.match(/vimeo\.com\/(\d+)/);
+        if (match && match[1]) {
+            url = `https://player.vimeo.com/video/${match[1]}`;
+        }
+    }
+    if (!url.includes('autoplay=')) {
+        const sep = url.includes('?') ? '&' : '?';
+        url += `${sep}autoplay=1`;
+    }
+    return url;
+}
+
+function buildNewskinActiveVideoSource() {
+    const c = NEWSKIN_CONFIG;
+    const profile = { src: c.videoSrc };
+    if (c.mapColorGain != null && c.mapColorGain !== '') {
+        const g = Number(c.mapColorGain);
+        if (Number.isFinite(g)) profile.mapColorGain = g;
+    }
+    if (c.envMapIntensityBoost && typeof c.envMapIntensityBoost === 'object') {
+        profile.envMapIntensityBoost = { ...c.envMapIntensityBoost };
+    }
+    if (c.hemisphereFromVideo && typeof c.hemisphereFromVideo === 'object') {
+        profile.hemisphereFromVideo = { ...c.hemisphereFromVideo };
+    }
+    return profile;
+}
+
+function applyNewskinSceneBackground() {
+    if (!backgroundVideoEl || !backgroundVideoMesh || !NEWSKIN_CONFIG?.videoSrc) return false;
+
+    newskinBackgroundRestore = {
+        activeSource: activeBackgroundVideoSource,
+        meshScale: backgroundVideoMesh.scale.clone(),
+        meshPosition: backgroundVideoMesh.position.clone(),
+        userPaused: backgroundVideoUserPaused
+    };
+
+    activeBackgroundVideoSource = buildNewskinActiveVideoSource();
+    backgroundVideoUserPaused = false;
+
+    backgroundVideoEl.src = NEWSKIN_CONFIG.videoSrc;
+    backgroundVideoEl.load();
+    applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    backgroundVideoEl.play().catch(() => {});
+
+    const sc = Number(NEWSKIN_CONFIG.bgVideoScale);
+    const u = Number.isFinite(sc) && sc > 0 ? sc : 2;
+    backgroundVideoMesh.scale.set(u, u, 1);
+
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
+
+    if (backgroundVideoTexture) backgroundVideoTexture.needsUpdate = true;
+    if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
+    updateBackgroundVideoPlayToggleUi();
+    return true;
+}
+
+function restoreNewskinSceneBackground() {
+    if (!newskinBackgroundRestore) return;
+    const r = newskinBackgroundRestore;
+    newskinBackgroundRestore = null;
+
+    if (!backgroundVideoEl || !backgroundVideoMesh) return;
+
+    activeBackgroundVideoSource = r.activeSource;
+    backgroundVideoMesh.scale.copy(r.meshScale);
+    backgroundVideoMesh.position.copy(r.meshPosition);
+    backgroundVideoUserPaused = r.userPaused;
+
+    const bgCfg = CONFIG.backgroundVideo;
+    const sources = bgCfg?.sources;
+    const nextSrc =
+        r.activeSource?.src ||
+        (Array.isArray(sources) && sources.length ? sources[0].src : null) ||
+        bgCfg?.src;
+
+    if (nextSrc) {
+        backgroundVideoEl.src = nextSrc;
+        backgroundVideoEl.load();
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+        if (!r.userPaused) backgroundVideoEl.play().catch(() => {});
+    }
+
+    videoIblLastPmremTime = 0;
+    videoIblLastHemisphereSampleTime = 0;
+    lastHemiSampleFrameCounter = -1;
+    lastPmremSampleFrameCounter = -1;
+
+    applyVideoIblMaterialBoost();
+    applyBackgroundVideoMapColorGain();
+    const hemiCfg = getActiveHemisphereCfg();
+    if (hemiCfg?.enabled && (IS_MOBILE || hemiCfg.always === true) && videoHemisphereLight && videoAmbientLight) {
+        videoHemisphereLight.intensity = hemiCfg.intensity ?? 0.85;
+        videoAmbientLight.intensity = hemiCfg.ambientIntensity ?? 0.32;
+    }
+
+    if (backgroundVideoTexture) backgroundVideoTexture.needsUpdate = true;
+    if (backgroundVideoTextureEnv) backgroundVideoTextureEnv.needsUpdate = true;
+
+    const bgSelect = document.getElementById('bg-video-select');
+    if (bgSelect && nextSrc) {
+        const norm = normalizeBackgroundVideoSrc(nextSrc);
+        if (Array.from(bgSelect.options).some((o) => o.value === norm)) {
+            bgSelect.value = norm;
+        }
+    }
+    updateBackgroundVideoPlayToggleUi();
+}
+
+/**
+ * Hide the YouTube promo dialog only. Keeps NEWSKIN scene state (3D BG clip, voxel text, `newskinBackgroundRestore`).
+ * Full teardown: `closeNewskinModalAsync` (e.g. HUD background change).
+ */
+function hideNewskinYoutubePanel() {
+    if (newskinModalKeydownHandler) {
+        window.removeEventListener('keydown', newskinModalKeydownHandler, true);
+        newskinModalKeydownHandler = null;
+    }
+
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncNewskinModalBodyOverflow();
+
+    document.querySelector('.term-menu-banner-wrap--newskin')?.focus();
+}
+
+function closePushkaStudioModal() {
+    if (pushkaModalKeydownHandler) {
+        window.removeEventListener('keydown', pushkaModalKeydownHandler, true);
+        pushkaModalKeydownHandler = null;
+    }
+    const modal = document.getElementById('pushka-modal');
+    const iframe = document.getElementById('pushka-modal-vimeo-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncPushkaModalBodyOverflow();
+    document.querySelector('.term-menu-banner-wrap--pushka')?.focus();
+}
+
+/** @returns {string|null} Error message, or `null` if opened. */
+function openPushkaStudioModal() {
+    if (PUSHKA_CONFIG?.enabled === false) return 'Pushka: disabled in config.';
+    const modal = document.getElementById('pushka-modal');
+    const iframe = document.getElementById('pushka-modal-vimeo-iframe');
+    if (!modal || !iframe) return 'pushka: UI missing.';
+    if (!modal.classList.contains('hidden')) return 'pushka: panel already open.';
+
+    const embedUrl = normalizeVimeoEmbedUrl(PUSHKA_CONFIG?.vimeoUrl);
+    if (!embedUrl) return 'pushka: no Vimeo URL in config.';
+
+    iframe.src = embedUrl;
+    modal.classList.remove('hidden');
+    modal.classList.remove('newskin-modal--minimized');
+    modal.setAttribute('aria-hidden', 'false');
+    syncPushkaModalBodyOverflow();
+
+    const minBtn = document.getElementById('pushka-modal-minimize');
+    if (minBtn) {
+        minBtn.setAttribute('aria-expanded', 'true');
+        minBtn.setAttribute('aria-label', 'Minimalizuj panel');
+        minBtn.title = 'Minimalizuj';
+    }
+
+    pushkaModalKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (modal.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closePushkaStudioModal();
+    };
+    window.addEventListener('keydown', pushkaModalKeydownHandler, { capture: true });
+
+    document.getElementById('pushka-modal-close')?.focus();
+    return null;
+}
+
+async function closeNewskinModalAsync() {
+    setNewskinTerminalMenuActive(false);
+    if (newskinModalKeydownHandler) {
+        window.removeEventListener('keydown', newskinModalKeydownHandler, true);
+        newskinModalKeydownHandler = null;
+    }
+
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (iframe) iframe.src = '';
+    if (modal) {
+        modal.classList.remove('newskin-modal--minimized');
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    syncNewskinModalBodyOverflow();
+
+    if (newskinSavedConfigText != null && loadedFont && loadedFontRegular) {
+        CONFIG.text = newskinSavedConfigText;
+        newskinSavedConfigText = null;
+        try {
+            await regenerateMainTextParticles(loadedFont);
+        } catch (err) {
+            console.warn('[newskin] restore particles failed:', err);
+        }
+    }
+
+    restoreNewskinSceneBackground();
+}
+
+function closeNewskinModal() {
+    return closeNewskinModalAsync();
+}
+
+/** @returns {Promise<string|null>} Resolves `null` on success, or an error string. */
+async function openNewskinModalAsync() {
+    if (!NEWSKIN_CONFIG?.enabled) return 'newskin disabled in config.';
+    const modal = document.getElementById('newskin-modal');
+    const iframe = document.getElementById('newskin-modal-youtube-iframe');
+    if (!modal || !iframe) return 'newskin: UI missing.';
+
+    if (!modal.classList.contains('hidden')) return 'newskin: already open.';
+
+    if (!backgroundVideoEl || !backgroundVideoMesh) {
+        return 'newskin: no 3D background video (CONFIG.backgroundVideo).';
+    }
+    if (!loadedFont || !loadedFontRegular) return 'newskin: fonts not ready yet.';
+
+    const promoSceneAlreadyActive = newskinBackgroundRestore != null;
+
+    if (!promoSceneAlreadyActive) {
+        if (!applyNewskinSceneBackground()) return 'newskin: could not apply scene background.';
+
+        const savedText = CONFIG.text;
+        CONFIG.text = NEWSKIN_CONFIG.displayText || 'N E W S K I N';
+        newskinSavedConfigText = savedText;
+
+        try {
+            await regenerateMainTextParticles(loadedFontRegular);
+        } catch (err) {
+            console.warn('[newskin] particle regen failed:', err);
+            CONFIG.text = savedText;
+            newskinSavedConfigText = null;
+            restoreNewskinSceneBackground();
+            return 'newskin: particle rebuild failed.';
+        }
+    }
+
+    iframe.src = `https://www.youtube.com/embed/${NEWSKIN_CONFIG.youtubeVideoId}?rel=0`;
+
+    modal.classList.remove('hidden');
+    modal.classList.remove('newskin-modal--minimized');
+    modal.setAttribute('aria-hidden', 'false');
+    syncNewskinModalBodyOverflow();
+
+    const minBtn = document.getElementById('newskin-modal-minimize');
+    if (minBtn) {
+        minBtn.setAttribute('aria-expanded', 'true');
+        minBtn.setAttribute('aria-label', 'Minimalizuj panel');
+        minBtn.title = 'Minimalizuj';
+    }
+
+    newskinModalKeydownHandler = (e) => {
+        if (e.code !== 'Escape') return;
+        if (modal.classList.contains('hidden')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        hideNewskinYoutubePanel();
+    };
+    window.addEventListener('keydown', newskinModalKeydownHandler, { capture: true });
+
+    document.getElementById('newskin-modal-close')?.focus();
+    setNewskinTerminalMenuActive(true);
+    return null;
+}
+
+function setNewskinTerminalMenuActive(active) {
+    const bannerHint = document.getElementById('term-newskin-banner-hint');
+    if (bannerHint) bannerHint.classList.toggle('newskin-active', active);
+}
 
 // MYSEN remix mode state (separate voxel cache from VAJBUJ)
 let mysenState = {
@@ -694,8 +1249,55 @@ let mysenState = {
     generationQueue: [],
     playbackDurationSec: null,
     _fadeTimeoutId: null,
-    _stopTimeoutId: null
+    _stopTimeoutId: null,
+    /** Parsed lines from timestampLyricsUrl (fetch). */
+    timestampLyricsParsed: [],
+    /** First line index where timestamp / random-fly lyrics start. */
+    firstTimestampLineIndex: 99999,
+    savedBgSrcForMysen: null,
+    /** Promise — czekamy w startMysenMode, żeby prepareMysenWords miał timestampy. */
+    _timestampLoadPromise: null,
+    /** Parsed `wordAnimationUrl` (defaults + overrides). */
+    wordAnimationDoc: null,
+    _wordAnimationLoadPromise: null,
+    /** Shallow merge: MYSEN_CONFIG + JSON `defaults` (tylko dozwolone klucze), ustawiane przy starcie MYSEN. */
+    mergedMysenConfig: null,
+    /** Validated showcase animation document (v1/v2, voxelLyricsMysen), or null. */
+    showcaseAnimationDoc: null,
+    _showcaseAnimationLoadPromise: null,
+    /** Interpolated volumetric multipliers from showcase JSON (e.g. mysenBgCubes). */
+    _showcaseVolBoost: {},
+    _showcaseCustomScalars: {},
+    pendingSpotifyWidgetAfterFinalize: false
 };
+
+/** Space held = momentary strobe (piano); release = off. */
+let strobeSpaceHeld = false;
+
+function clearStrobeSpaceHeld() {
+    strobeSpaceHeld = false;
+}
+
+function canUseStrobePianoSpace() {
+    if (!STROBE_CONFIG.pianoSpaceKey || STROBE_CONFIG.disabled) return false;
+    if (vajbujState.active || mysenState.active) return false;
+    const active = document.activeElement;
+    if (active) {
+        const tag = active.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+        if (active.isContentEditable) return false;
+        if (tag === 'BUTTON' || tag === 'A') return false;
+    }
+    return true;
+}
+
+registerVajbujAutoBlocker(() => mysenState.active || mysenState.isStopping);
+registerVajbujAutoBlocker(() => portfolioSceneActive);
+registerParticleMouseSimBlocker(() => portfolioSceneActive);
+registerParticleMouseSimBlocker(() => mysenState.active);
+
+const _mysenFrustumTmp = new THREE.Vector3();
+const _mysenFrustumDir = new THREE.Vector3();
 
 function clearMysenPlaybackTimers() {
     if (mysenState._fadeTimeoutId) {
@@ -706,6 +1308,245 @@ function clearMysenPlaybackTimers() {
         clearTimeout(mysenState._stopTimeoutId);
         mysenState._stopTimeoutId = null;
     }
+}
+
+/** Keys from JSON `defaults` merged into effective MYSEN config (lyric animation tuning). */
+const MYSEN_WORD_ANIM_SCALAR_KEYS = [
+    'wordAssemblyDuration',
+    'lyricsStartDelay',
+    'scatterRadius',
+    'lyricsOffsetY',
+    'lineSpacing',
+    'wordSpacing',
+    'wordSize',
+    'wordHeight',
+    'wordThickness',
+    'slowPhaseEnd',
+    'slowPhaseSpeed'
+];
+
+const MYSEN_WORD_ANIM_NEST_KEYS = [
+    'randomFly',
+    'spread',
+    'introOutroSpread',
+    'lyricSpread',
+    'introAssembly',
+    'lyricAssembly'
+];
+
+const MYSEN_MATCH_AT_EPSILON = 0.02;
+
+/** @param {unknown} v */
+function parseMysenAnimColor(v) {
+    if (v == null) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string') {
+        let s = v.trim();
+        if (s.startsWith('#')) s = s.slice(1);
+        const n = parseInt(s, 16);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
+}
+
+function buildMysenEffectiveConfig() {
+    const doc = mysenState.wordAnimationDoc;
+    if (!doc || typeof doc !== 'object' || !doc.defaults || typeof doc.defaults !== 'object') {
+        return MYSEN_CONFIG;
+    }
+    const d = doc.defaults;
+    const out = { ...MYSEN_CONFIG };
+    for (let i = 0; i < MYSEN_WORD_ANIM_SCALAR_KEYS.length; i++) {
+        const k = MYSEN_WORD_ANIM_SCALAR_KEYS[i];
+        if (d[k] !== undefined) out[k] = d[k];
+    }
+    for (let i = 0; i < MYSEN_WORD_ANIM_NEST_KEYS.length; i++) {
+        const k = MYSEN_WORD_ANIM_NEST_KEYS[i];
+        const baseNest = MYSEN_CONFIG[k];
+        if (d[k] != null && typeof d[k] === 'object' && baseNest != null && typeof baseNest === 'object') {
+            out[k] = { ...baseNest, ...d[k] };
+        } else if (d[k] != null && typeof d[k] === 'object') {
+            out[k] = { ...d[k] };
+        }
+    }
+    return out;
+}
+
+/**
+ * Mutates merged lyric items before `prepareMysenLyricWords` (scale → poprawne width / voxele).
+ * @param {object[]} merged
+ * @param {unknown} overridesRaw
+ */
+function applyMysenWordAnimationToMergedLyrics(merged, overridesRaw) {
+    if (!Array.isArray(merged) || !Array.isArray(overridesRaw) || !overridesRaw.length) return;
+    const startT = MYSEN_CONFIG.audioStartTime || 0;
+    let globalIdx = 0;
+    for (let i = 0; i < merged.length; i++) {
+        const item = merged[i];
+        if (item.lineBreak) continue;
+
+        const atSrc = Number.isFinite(item.atSourceSec)
+            ? item.atSourceSec
+            : startT + (Number.isFinite(item.at) ? item.at : 0);
+
+        for (let oi = 0; oi < overridesRaw.length; oi++) {
+            const o = overridesRaw[oi];
+            if (!o || typeof o !== 'object') continue;
+            const m = o.match;
+            if (!m || typeof m !== 'object') continue;
+            let hit = false;
+            if (Number.isFinite(m.globalIndex) && m.globalIndex === globalIdx) {
+                hit = true;
+            } else if (typeof m.text === 'string' && Number.isFinite(m.at)) {
+                if (
+                    Number.isFinite(atSrc) &&
+                    Math.abs(atSrc - m.at) < MYSEN_MATCH_AT_EPSILON &&
+                    item.text === m.text
+                ) {
+                    hit = true;
+                }
+            }
+            if (!hit) continue;
+
+            const sp = o.spawn;
+            if (sp && typeof sp === 'object') {
+                if (Number.isFinite(sp.x) && Number.isFinite(sp.y) && Number.isFinite(sp.z)) {
+                    item.spawnX = sp.x;
+                    item.spawnY = sp.y;
+                    item.spawnZ = sp.z;
+                }
+            }
+            if (Number.isFinite(o.offsetX)) item.offsetX = (item.offsetX || 0) + o.offsetX;
+            if (Number.isFinite(o.offsetY)) item.offsetY = (item.offsetY || 0) + o.offsetY;
+            if (Number.isFinite(o.offsetZ)) item.offsetZ = (item.offsetZ || 0) + o.offsetZ;
+
+            const cs = parseMysenAnimColor(o.colorStart);
+            const ce = parseMysenAnimColor(o.colorEnd);
+            if (cs != null) item._assemblyColorStart = cs;
+            if (ce != null) {
+                item._assemblyColorEnd = ce;
+                item.color = ce;
+            }
+
+            if (Number.isFinite(o.assembledScale) && o.assembledScale > 0) item.assembledScale = o.assembledScale;
+            if (Number.isFinite(o.scale) && o.scale > 0) item.scale = o.scale;
+            break;
+        }
+        globalIdx++;
+    }
+}
+
+async function ensureMysenWordAnimationLoaded() {
+    if (!MYSEN_CONFIG.wordAnimationEnabled || !MYSEN_CONFIG.wordAnimationUrl) return;
+    try {
+        await mysenState._wordAnimationLoadPromise;
+    } catch (e) {
+        console.warn('[MYSEN] Word animation await failed:', e);
+    }
+}
+
+function queueMysenVoxelPregenForPreparedWords(state, lyricsConfig) {
+    if (!loadedFontRegular || !state.words?.length) return;
+    const seen = new Set();
+    state.words.forEach((w) => {
+        if (!w.text) return;
+        const sc = w.scale || 1;
+        const styleSlice = {
+            wordSize: Number.isFinite(w.wordSize) && w.wordSize > 0 ? w.wordSize : lyricsConfig.wordSize,
+            wordHeight: Number.isFinite(w.wordHeight) && w.wordHeight > 0 ? w.wordHeight : lyricsConfig.wordHeight,
+            wordThickness:
+                Number.isFinite(w.wordThickness) && w.wordThickness > 0
+                    ? w.wordThickness
+                    : lyricsConfig.wordThickness
+        };
+        const preset = typeof w.materialPresetId === 'string' && w.materialPresetId.length ? w.materialPresetId : 'std';
+        const sr = Number.isFinite(w.scatterRadius) && w.scatterRadius > 0 ? w.scatterRadius : lyricsConfig.scatterRadius;
+        const key = `${w.text}§${sc}§${styleSlice.wordSize}§${styleSlice.wordHeight}§${styleSlice.wordThickness}§${sr}§${preset}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        state.generationQueue.push(
+            createVoxelGenerationTask(w.text, sc, loadedFontRegular, state.voxelCache, styleSlice)
+        );
+    });
+}
+
+/** Merge intro + timestamp words; opcjonalnie grupy w jednym wierszu (`mysenTimestampLineGroups`). */
+function buildMergedMysenLyrics() {
+    return buildMergedMysenLyricsArray(MYSEN_CONFIG, mysenState.timestampLyricsParsed || []);
+}
+
+function queueMysenTimestampVoxelPregen() {
+    if (!loadedFontRegular || !mysenState.timestampLyricsParsed?.length) return;
+    const items = mysenState.timestampLyricsParsed.map((row) => ({ text: row.text, scale: 1 }));
+    queueLyricVoxelPregeneration(items, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN-ts');
+}
+
+function sampleMysenRandomFrustumPoint(distance) {
+    const m = MYSEN_CONFIG.randomFly?.ndcMargin ?? 0.1;
+    const ndcX = (Math.random() * 2 - 1) * (1 - m);
+    const ndcY = (Math.random() * 2 - 1) * (1 - m);
+    _mysenFrustumTmp.set(ndcX, ndcY, 0.5);
+    _mysenFrustumTmp.unproject(camera);
+    _mysenFrustumDir.subVectors(_mysenFrustumTmp, camera.position).normalize().multiplyScalar(distance);
+    return camera.position.clone().add(_mysenFrustumDir);
+}
+
+/** FNV-1a–style hash for stable spawn seeds (MYSEN timestamp words). */
+function mysenHashSeedU32(str) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+}
+
+/** Mulberry32 PRNG in [0, 1). */
+function mysenMulberry32Next(stateRef) {
+    let t = (stateRef.s += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/**
+ * Jak `sampleMysenRandomFrustumPoint`, ale odległość + NDC z jednego strumienia Mulberry32 (stabilny spawn per seed).
+ */
+function sampleMysenSeededRandomFlySpawn(d0, d1, ndcMargin, seedU32) {
+    const stateRef = { s: seedU32 >>> 0 };
+    const dist = d0 + mysenMulberry32Next(stateRef) * Math.max(0.01, d1 - d0);
+    const m = ndcMargin ?? 0.1;
+    const ndcX = (mysenMulberry32Next(stateRef) * 2 - 1) * (1 - m);
+    const ndcY = (mysenMulberry32Next(stateRef) * 2 - 1) * (1 - m);
+    _mysenFrustumTmp.set(ndcX, ndcY, 0.5);
+    _mysenFrustumTmp.unproject(camera);
+    _mysenFrustumDir.subVectors(_mysenFrustumTmp, camera.position).normalize().multiplyScalar(dist);
+    return camera.position.clone().add(_mysenFrustumDir);
+}
+
+async function ensureMysenTimestampsLoaded() {
+    if (!MYSEN_CONFIG.timestampLyricsEnabled || !MYSEN_CONFIG.timestampLyricsUrl) return;
+    try {
+        if (!mysenState._timestampLoadPromise) {
+            mysenState._timestampLoadPromise = fetch(MYSEN_CONFIG.timestampLyricsUrl)
+                .then((r) => (r.ok ? r.text() : ''))
+                .then((text) => {
+                    mysenState.timestampLyricsParsed = parseMysenTimestampLyricsFile(text);
+                    if (mysenState.timestampLyricsParsed.length) {
+                        console.log('[MYSEN] Loaded', mysenState.timestampLyricsParsed.length, 'timestamp lyric tokens');
+                    }
+                    queueMysenTimestampVoxelPregen();
+                });
+        }
+        await mysenState._timestampLoadPromise;
+    } catch (e) {
+        console.warn('[MYSEN] Timestamp lyrics fetch failed:', e);
+    }
+}
+
+function mysenHideBackgroundVideoWhileActive() {
+    if (MYSEN_CONFIG.showBackgroundVideoDuringMysen === true) return false;
+    return MYSEN_CONFIG.hideBackgroundVideo === true;
 }
 
 /** Length of the played window in seconds (from audioStartTime), or null if unknown. */
@@ -751,7 +1592,7 @@ function scheduleMysenPlaybackEnd(audio) {
         mysenState._stopTimeoutId = setTimeout(() => {
             mysenState._stopTimeoutId = null;
             if (!mysenState.active) return;
-            stopMysenMode();
+            stopMysenMode({ naturalEnd: true });
         }, stopMs);
     };
 
@@ -760,6 +1601,13 @@ function scheduleMysenPlaybackEnd(audio) {
     } else {
         audio.addEventListener('loadedmetadata', () => runSchedule(), { once: true });
     }
+}
+
+/** Reset plane material after MYSEN fade-out (opacity / transparent). */
+function restoreBackgroundVideoMeshMaterialAfterMysen() {
+    if (!backgroundVideoMesh?.material) return;
+    backgroundVideoMesh.material.opacity = 1;
+    backgroundVideoMesh.material.transparent = false;
 }
 
 /** Hide TOPKEK shell + inner instanced mesh (and optionally background video) for music-only modes. */
@@ -1043,6 +1891,7 @@ function initSceneAndLoad() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+    renderer.domElement.tabIndex = 0;
 
     // Orbit Controls (Free Cam)
     controls = new OrbitControls(camera, renderer.domElement);
@@ -1053,7 +1902,25 @@ function initSceneAndLoad() {
     controls.zoomSpeed = CONFIG.freeCamZoomSpeed;
     controls.enabled = false; // Start disabled
 
-    // Post-Processing (zależnie od performanceRuntime: SAO / bloom / CRT)
+    // Strobe: white plane in camera space — camera must be in scene for children to render.
+    strobeFlashMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            depthTest: false,
+            depthWrite: false,
+            toneMapped: false,
+            side: THREE.DoubleSide
+        })
+    );
+    strobeFlashMesh.renderOrder = 999;
+    strobeFlashMesh.visible = false;
+    strobeFlashMesh.name = 'strobeFlashPlane';
+    camera.add(strobeFlashMesh);
+    updateStrobeFlashTransform();
+    scene.add(camera);
+
+    // Post-Processing (SAO / bloom / invert przed CRT / opcjonalnie CRT / Output)
     const renderScene = new RenderPass(scene, camera);
     composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
@@ -1083,6 +1950,9 @@ function initSceneAndLoad() {
     } else {
         bloomPass = null;
     }
+
+    invertPass = new ShaderPass(InvertShader);
+    composer.addPass(invertPass);
 
     if (performanceRuntime.enableCrt) {
         crtPass = new ShaderPass(CRTShader);
@@ -1185,6 +2055,7 @@ function initSceneAndLoad() {
         scene.add(backgroundVideoMesh);
 
         initBackgroundVideoIbl();
+        applyBackgroundVideoMapColorGain();
     }
 
     // 5. Load Fonts and Generate Text
@@ -1269,12 +2140,35 @@ function initSceneAndLoad() {
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('keydown', (e) => {
         if (e.code === 'Escape') {
+            if (vajbujState.active && !vajbujState.isStopping) {
+                e.preventDefault();
+                stopVajbujMode();
+                lastInteractionTime = Date.now();
+                return;
+            }
+            if (mysenState.active && !mysenState.isStopping) {
+                e.preventDefault();
+                stopMysenMode();
+                lastInteractionTime = Date.now();
+                return;
+            }
             if (isCinematic || isFreeCam) {
                 setCameraMode('manual');
                 lastInteractionTime = Date.now();
             }
+            return;
+        }
+        if (e.code === 'Space' && canUseStrobePianoSpace()) {
+            e.preventDefault();
+            strobeSpaceHeld = true;
         }
     });
+
+    window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') clearStrobeSpaceHeld();
+    });
+
+    window.addEventListener('blur', clearStrobeSpaceHeld);
 
     // Touch Events
     window.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -1290,7 +2184,7 @@ function initSceneAndLoad() {
     createUI();
 }
 
-function makeSectionCollapsible(sectionEl, label) {
+function makeSectionCollapsible(sectionEl, label, initiallyCollapsed = false) {
     if (!sectionEl || sectionEl.dataset.sectionToggleBound === '1') return;
 
     const content = document.createElement('div');
@@ -1320,7 +2214,252 @@ function makeSectionCollapsible(sectionEl, label) {
     sectionEl.appendChild(btn);
     sectionEl.appendChild(content);
     sectionEl.dataset.sectionToggleBound = '1';
-    applyCollapsedState(false);
+    applyCollapsedState(initiallyCollapsed);
+}
+
+/** VAJBUJ banner: `#vajbuj-menu-banner-video`; hover/focus = whole `.term-menu-banner-block` (strip + text drawer). */
+function initVajbujMenuBannerVideo() {
+    const video = document.getElementById('vajbuj-menu-banner-video');
+    const src = CONFIG.vajbujMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--vajbuj')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initNewskinMenuBannerVideo() {
+    const video = document.getElementById('newskin-menu-banner-video');
+    const src = CONFIG.newskinMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--newskin')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initPushkaMenuBannerVideo() {
+    const video = document.getElementById('pushka-menu-banner-video');
+    const src = CONFIG.pushkaMenuBannerVideo;
+    if (!video || !src) return;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-wrap--pushka')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+function initMysenMenuBannerVideo() {
+    const video = document.getElementById('term-menu-banner-mysen-video');
+    const src = CONFIG.mysenMenuBannerVideo;
+    if (!video || !src) return;
+
+    const posterPath = CONFIG.mysenMenuBannerPoster;
+    const posterImg = video.parentElement?.querySelector('.term-menu-banner-poster');
+    if (posterImg && posterPath) posterImg.src = posterPath;
+
+    video.src = src;
+
+    const resetToFirstFrame = () => {
+        video.pause();
+        try {
+            video.currentTime = 0;
+        } catch {
+            /* ignore seek errors before metadata */
+        }
+    };
+
+    const onLoaded = () => resetToFirstFrame();
+    if (video.readyState >= 1) onLoaded();
+    else video.addEventListener('loadeddata', onLoaded, { once: true });
+
+    const block = video.closest('.term-menu-banner-block');
+    if (!block || !video.closest('.term-menu-banner-mysen-wrap')) return;
+
+    const playHover = () => {
+        video.play().catch(() => {});
+    };
+    const stopHover = () => {
+        resetToFirstFrame();
+    };
+
+    block.addEventListener('mouseenter', playHover);
+    block.addEventListener('mouseleave', stopHover);
+    block.addEventListener('focusin', playHover);
+    block.addEventListener('focusout', (e) => {
+        if (!block.contains(e.relatedTarget)) stopHover();
+    });
+}
+
+/**
+ * VAJBUJ / MYSEN / NEWSKIN menu strips: hover shows EN CTA; first click logs cmd + arms; second runs same line as terminal Enter.
+ * @param {{ submitLine?: (line: string) => Promise<void> } | null | undefined} shellApi
+ */
+function initTermMenuBannerTwoStepLaunch(shellApi) {
+    const submitLine = shellApi && typeof shellApi.submitLine === 'function' ? shellApi.submitLine : null;
+    const wraps = document.querySelectorAll('#terminal-menu [data-term-banner-cmd]');
+    if (!wraps.length) return;
+
+    const armedLabel =
+        TERMINAL_CONFIG.menuBannerStartAnimationLabelEn ||
+        TERMINAL_CONFIG.menuBannerArmedLabel ||
+        'START ANIMATION';
+    wraps.forEach((wrap) => {
+        const textEl = wrap.querySelector('.term-menu-banner-armed-text');
+        if (textEl) {
+            const customArmed = wrap.getAttribute('data-term-banner-armed-label');
+            textEl.textContent = (customArmed && customArmed.trim()) || armedLabel;
+        }
+        if (wrap.dataset.termBannerBaseAria == null) {
+            wrap.dataset.termBannerBaseAria = wrap.getAttribute('aria-label') || '';
+        }
+    });
+
+    let armedWrap = null;
+
+    function disarmAll() {
+        wraps.forEach((w) => {
+            const block = w.closest('.term-menu-banner-block');
+            if (block) block.classList.remove('term-menu-banner-block--armed');
+            w.setAttribute('aria-label', w.dataset.termBannerBaseAria || '');
+        });
+        armedWrap = null;
+    }
+
+    function arm(wrap) {
+        disarmAll();
+        armedWrap = wrap;
+        const cmd = wrap.getAttribute('data-term-banner-cmd') || '';
+        const block = wrap.closest('.term-menu-banner-block');
+        if (block) block.classList.add('term-menu-banner-block--armed');
+        const base = wrap.dataset.termBannerBaseAria || '';
+        const secondHint = wrap.getAttribute('data-term-banner-arm-second-hint');
+        wrap.setAttribute(
+            'aria-label',
+            secondHint && secondHint.trim() ? `${base} — ${secondHint.trim()}` : `${base} — click or Enter again to run ${cmd}`
+        );
+    }
+
+    async function runArmed(wrap) {
+        const cmd = wrap.getAttribute('data-term-banner-cmd') || '';
+        const block = wrap.closest('.term-menu-banner-block');
+        if (block) block.classList.remove('term-menu-banner-block--armed');
+        wrap.setAttribute('aria-label', wrap.dataset.termBannerBaseAria || '');
+        armedWrap = null;
+
+        if (submitLine) {
+            try {
+                await submitLine(cmd);
+            } catch (err) {
+                console.warn('[topkek] Banner submitLine failed:', err);
+            }
+        } else {
+            console.warn('[topkek] Terminal shell submitLine missing; banner command not run:', cmd);
+        }
+    }
+
+    function onWrapActivate(wrap) {
+        if (armedWrap !== wrap) {
+            arm(wrap);
+            return;
+        }
+        void runArmed(wrap);
+    }
+
+    wraps.forEach((wrap) => {
+        wrap.addEventListener('click', (e) => {
+            if (e.button !== 0) return;
+            onWrapActivate(wrap);
+        });
+        wrap.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            onWrapActivate(wrap);
+        });
+    });
 }
 
 function initSectionMenuToggles() {
@@ -1328,7 +2467,7 @@ function initSectionMenuToggles() {
     if (cameraHud) {
         const cameraHudSections = Array.from(cameraHud.querySelectorAll('.controls-section'));
         cameraHudSections.forEach((section, index) => {
-            makeSectionCollapsible(section, `left section ${index + 1}`);
+            makeSectionCollapsible(section, `left section ${index + 1}`, false);
         });
     }
 
@@ -1341,7 +2480,7 @@ function initSectionMenuToggles() {
     const terminalMenu = document.getElementById('terminal-menu');
     if (terminalMenu) makeSectionCollapsible(terminalMenu, 'terminal menu');
 
-    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see terminal-shell.js */
+    /* Console (#topkek-terminal-shell): collapse is an icon in the shell header — see src/ui/terminal-shell.js */
 }
 
 // --- Portfolio Vimeo helpers ---
@@ -1350,22 +2489,8 @@ function openPortfolioModal(rawUrl) {
     const iframe = document.getElementById('portfolio-vimeo-iframe');
     if (!modal || !iframe) return;
 
-    let url = rawUrl || '';
+    const url = normalizeVimeoEmbedUrl(rawUrl);
     if (!url) return;
-
-    // Normalize regular Vimeo URL to player.vimeo.com/video/ID
-    if (!url.includes('player.vimeo.com')) {
-        const match = url.match(/vimeo\.com\/(\d+)/);
-        if (match && match[1]) {
-            url = `https://player.vimeo.com/video/${match[1]}`;
-        }
-    }
-
-    // Add autoplay if missing
-    if (!url.includes('autoplay=')) {
-        const sep = url.includes('?') ? '&' : '?';
-        url += `${sep}autoplay=1`;
-    }
 
     iframe.src = url;
     modal.classList.remove('hidden');
@@ -1971,8 +3096,33 @@ function runTopkekTerminalCommand(line) {
             return ['MYSEN already active. Use: /mysen stop'];
         }
         if (mysenState.active) return ['MYSEN is stopping, wait…'];
-        startMysenMode();
+        startMysenMode().catch((e) => console.warn('[MYSEN] start failed:', e));
         return ['MYSEN started.'];
+    }
+
+    if (cmd === 'agents') {
+        if (parts.length > 1) return ['Usage: /agents'];
+        setTimeout(() => {
+            window.location.assign('ASSETS/agents/');
+        }, 350);
+        return ['AGENTS: opening intro…'];
+    }
+
+    if (cmd === 'pushka') {
+        if (parts.length > 1) return ['Usage: /pushka'];
+        const err = openPushkaStudioModal();
+        if (err) return [err];
+        return ['pushka: Vimeo panel opened. Esc / scrim / × closes.'];
+    }
+
+    if (cmd === 'newskin') {
+        if (parts.length > 1) return ['Usage: /newskin'];
+        return openNewskinModalAsync().then((err) => {
+            if (err) return [err];
+            return [
+                'newskin: panel jak sekcja menu (środek), ▾ minimalizuje; napis → helvetiker regular. Esc / scrim / × chowa tylko YouTube; scena NEWSKIN zostaje — pełny powrót: zmiana tła w HUD.'
+            ];
+        });
     }
 
     if (cmd === 'bloom') {
@@ -2193,7 +3343,29 @@ function createUI() {
     cameraSection.appendChild(hudItems);
     cameraHud.appendChild(cameraSection);
     cameraHud.appendChild(mouseModeWrap);
-    
+
+    if (!STROBE_CONFIG.disabled) {
+        const sectionStrobe = document.createElement('div');
+        sectionStrobe.className = 'controls-section';
+        const strobeTitle = document.createElement('div');
+        strobeTitle.className = 'controls-category-title';
+        strobeTitle.textContent = 'Stroboskop';
+        sectionStrobe.appendChild(strobeTitle);
+        const strobeItems = document.createElement('div');
+        strobeItems.className = 'controls-category-items';
+        const btnStrobe = document.createElement('button');
+        btnStrobe.id = 'btn-strobe-toggle';
+        btnStrobe.type = 'button';
+        btnStrobe.className = 'mode-btn' + (strobeActive ? ' active' : '');
+        btnStrobe.innerText = '> Stroboskop';
+        btnStrobe.title = 'Przycisk: ciągły stroboskop. Spacja (przytrzymanie, tryb piano): efekt tylko dopóki trzymasz klawisz — nie działa w polu tekstowym / na przycisku w fokusie. Ostrzeżenie: migające światło. Wyłącza się przy starcie VAJBUJ/MYSEN.';
+        btnStrobe.setAttribute('aria-pressed', strobeActive ? 'true' : 'false');
+        btnStrobe.onclick = () => setStrobeActive(!strobeActive);
+        strobeItems.appendChild(btnStrobe);
+        sectionStrobe.appendChild(strobeItems);
+        cameraHud.appendChild(sectionStrobe);
+    }
+
     // --- Glitch Volumetric ---
     const sectionGlitch = document.createElement('div');
     sectionGlitch.className = 'controls-section';
@@ -2323,7 +3495,9 @@ function createUI() {
         const activeSrc = activeBackgroundVideoSource?.src ?? bgCfg.sources[0]?.src;
         bgSelect.value = normalizeBackgroundVideoSrc(activeSrc);
         bgSelect.title = 'Wybierz wideo tła';
-        bgSelect.addEventListener('change', () => setBackgroundVideoBySrc(bgSelect.value));
+        bgSelect.addEventListener('change', () => {
+            void setBackgroundVideoBySrc(bgSelect.value);
+        });
 
         const bgSelectRow = document.createElement('div');
         bgSelectRow.className = 'camera-hud-bg-select-row';
@@ -2417,6 +3591,10 @@ function createUI() {
     }
     document.body.appendChild(cameraHud);
     initSectionMenuToggles();
+    initPushkaMenuBannerVideo();
+    initVajbujMenuBannerVideo();
+    initMysenMenuBannerVideo();
+    initNewskinMenuBannerVideo();
 
     // --- Glitch volumetryczne ---
     const btnGlitchTrigger = document.getElementById('btn-glitch-trigger');
@@ -2507,6 +3685,7 @@ function createUI() {
     const termAppstain = document.getElementById('term-appstain');
     const termGlitch = document.getElementById('term-glitch');
     const termGenimg = document.getElementById('term-genimg');
+    const termAgents = document.getElementById('term-agents');
     const termPortfolio = document.getElementById('term-portfolio');
     const termScndbrejn = document.getElementById('term-scndbrejn');
     const termAnimPortfolio = document.getElementById('term-anim-portfolio');
@@ -2566,6 +3745,12 @@ function createUI() {
     if (termGenimg) {
         termGenimg.onclick = () => {
             document.getElementById('genimg-modal').classList.remove('hidden');
+        };
+    }
+
+    if (termAgents) {
+        termAgents.onclick = () => {
+            window.location.assign('ASSETS/agents/');
         };
     }
 
@@ -2795,6 +3980,143 @@ function createUI() {
     };
     initPortfolioVimeoModal();
 
+    const initNewskinModal = () => {
+        const modal = document.getElementById('newskin-modal');
+        const closeBtn = document.getElementById('newskin-modal-close');
+        const minBtn = document.getElementById('newskin-modal-minimize');
+        const scrim = document.getElementById('newskin-modal-scrim');
+        const caption = document.getElementById('newskin-modal-caption');
+        const titleEl = document.getElementById('newskin-modal-title');
+        if (titleEl && NEWSKIN_CONFIG?.panelTitle) {
+            titleEl.textContent = NEWSKIN_CONFIG.panelTitle;
+        }
+        if (caption && NEWSKIN_CONFIG?.caption) {
+            caption.textContent = NEWSKIN_CONFIG.caption;
+        }
+        if (!modal || !closeBtn || !scrim) return;
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hideNewskinYoutubePanel();
+        });
+        if (minBtn) {
+            minBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                modal.classList.toggle('newskin-modal--minimized');
+                const collapsed = modal.classList.contains('newskin-modal--minimized');
+                minBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                minBtn.setAttribute('aria-label', collapsed ? 'Rozwiń panel' : 'Minimalizuj panel');
+                minBtn.title = collapsed ? 'Rozwiń' : 'Minimalizuj';
+                syncNewskinModalBodyOverflow();
+            });
+        }
+        scrim.addEventListener('click', () => {
+            if (modal.classList.contains('newskin-modal--minimized')) return;
+            hideNewskinYoutubePanel();
+        });
+    };
+    initNewskinModal();
+
+    const initPushkaModal = () => {
+        const modal = document.getElementById('pushka-modal');
+        const closeBtn = document.getElementById('pushka-modal-close');
+        const minBtn = document.getElementById('pushka-modal-minimize');
+        const scrim = document.getElementById('pushka-modal-scrim');
+        const caption = document.getElementById('pushka-modal-caption');
+        const titleEl = document.getElementById('pushka-modal-title');
+        if (titleEl && PUSHKA_CONFIG?.modalTitle != null) {
+            titleEl.textContent = PUSHKA_CONFIG.modalTitle;
+        }
+        if (caption && PUSHKA_CONFIG?.modalCaption != null) {
+            caption.textContent = PUSHKA_CONFIG.modalCaption;
+        }
+        if (!modal || !closeBtn || !scrim) return;
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closePushkaStudioModal();
+        });
+        if (minBtn) {
+            minBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                modal.classList.toggle('newskin-modal--minimized');
+                const collapsed = modal.classList.contains('newskin-modal--minimized');
+                minBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                minBtn.setAttribute('aria-label', collapsed ? 'Rozwiń panel' : 'Minimalizuj panel');
+                minBtn.title = collapsed ? 'Rozwiń' : 'Minimalizuj';
+                syncPushkaModalBodyOverflow();
+            });
+        }
+        scrim.addEventListener('click', () => {
+            if (modal.classList.contains('newskin-modal--minimized')) return;
+            closePushkaStudioModal();
+        });
+    };
+    initPushkaModal();
+
+    const initTerminalMenuHoverDrawerCopy = () => {
+        const vajTitle = document.getElementById('term-vajbuj-drawer-display-title');
+        if (vajTitle && VAJBUJ_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            vajTitle.textContent = VAJBUJ_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const nsDrawerTitle = document.getElementById('term-newskin-drawer-display-title');
+        if (nsDrawerTitle && NEWSKIN_CONFIG?.panelTitle != null) {
+            nsDrawerTitle.textContent = NEWSKIN_CONFIG.panelTitle;
+        }
+        const mysenDrawerTitle = document.getElementById('term-mysen-drawer-display-title');
+        if (mysenDrawerTitle && MYSEN_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            mysenDrawerTitle.textContent = MYSEN_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const pushkaTitle = document.getElementById('term-pushka-drawer-display-title');
+        if (pushkaTitle && PUSHKA_CONFIG?.menuBannerDrawerDisplayTitle != null) {
+            pushkaTitle.textContent = PUSHKA_CONFIG.menuBannerDrawerDisplayTitle;
+        }
+        const pushkaHint = document.getElementById('term-pushka-banner-hint');
+        if (pushkaHint && PUSHKA_CONFIG?.menuBannerHint != null) {
+            pushkaHint.textContent = PUSHKA_CONFIG.menuBannerHint;
+        }
+        const pushWrap = document.querySelector('.term-menu-banner-wrap--pushka');
+        if (pushWrap) {
+            if (PUSHKA_CONFIG?.menuBannerArmedLabel) {
+                pushWrap.setAttribute('data-term-banner-armed-label', PUSHKA_CONFIG.menuBannerArmedLabel);
+            }
+            if (PUSHKA_CONFIG?.menuBannerArmSecondHint) {
+                pushWrap.setAttribute('data-term-banner-arm-second-hint', PUSHKA_CONFIG.menuBannerArmSecondHint);
+            }
+        }
+        const drawers = TERMINAL_CONFIG?.menuSectionHoverDrawers;
+        if (!drawers) return;
+        const pairs = [
+            ['games', 'term-menu-section-games-display-title', 'term-menu-section-games-hint'],
+            ['software', 'term-menu-section-software-display-title', 'term-menu-section-software-hint']
+        ];
+        for (const [key, titleId, hintId] of pairs) {
+            const block = drawers[key];
+            if (!block) continue;
+            const titleEl = document.getElementById(titleId);
+            const hintEl = document.getElementById(hintId);
+            if (titleEl && block.displayTitle != null) titleEl.textContent = block.displayTitle;
+            if (hintEl && block.hint != null) hintEl.textContent = block.hint;
+        }
+    };
+    initTerminalMenuHoverDrawerCopy();
+
+    const initMusicShowcaseSpotifyWidget = () => {
+        const closeBtn = document.getElementById('music-showcase-spotify-close');
+        if (!closeBtn) return;
+        closeBtn.addEventListener('click', () => hideMusicShowcaseSpotifyWidget());
+    };
+    initMusicShowcaseSpotifyWidget();
+
+    const initMusicShowcaseYoutubeModal = () => {
+        const modal = document.getElementById('music-showcase-youtube-modal');
+        const closeBtn = document.getElementById('music-showcase-youtube-close');
+        const backdrop = document.getElementById('music-showcase-youtube-backdrop');
+        if (!modal || !closeBtn || !backdrop) return;
+        const close = () => hideMusicShowcaseYoutubeModal();
+        closeBtn.addEventListener('click', close);
+        backdrop.addEventListener('click', close);
+    };
+    initMusicShowcaseYoutubeModal();
+
     const initPortfolioDetailModal = () => {
         const modal = document.getElementById('portfolio-detail-modal');
         const closeBtn = document.getElementById('portfolio-detail-close');
@@ -2808,7 +4130,8 @@ function createUI() {
 
     // --- END NEW UI ELEMENTS ---
 
-    initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+    const topkekShell = initTopkekTerminalShell({ onCommand: runTopkekTerminalCommand });
+    initTermMenuBannerTwoStepLaunch(topkekShell);
 
     if (document.body) {
         fxDevPanelControl = initFxDevPanel({
@@ -3085,6 +4408,34 @@ async function updateText(newText) {
     setTimeout(() => {
         loaderContainer.style.display = 'none';
     }, 500);
+}
+
+/** Rebuild main TOPKEK voxel text from current `CONFIG.text` (no loader UI). */
+async function regenerateMainTextParticles(mainLetterFont) {
+    if (!mainLetterFont || !loadedFontRegular || !scene) return;
+
+    Object.values(meshRegistry).forEach((entry) => {
+        if (entry.top) {
+            scene.remove(entry.top);
+            entry.top.geometry.dispose();
+        }
+        if (entry.kek) {
+            scene.remove(entry.kek);
+            entry.kek.geometry.dispose();
+        }
+    });
+    meshRegistry = {};
+
+    if (innerCubeInstancedMesh) {
+        scene.remove(innerCubeInstancedMesh);
+        innerCubeInstancedMesh.geometry.dispose();
+        innerCubeInstancedMesh.material.dispose();
+    }
+
+    cubeGroups = [];
+    innerCubeParticles = [];
+
+    await generateParticles(mainLetterFont, loadedFontRegular);
 }
 
 function setMode(mode, activeBtn, inactiveBtns) {
@@ -3657,6 +5008,66 @@ function generateReturnPath(startPos, startRot, endPos) {
     return steps;
 }
 
+/** Per-instance HSL for inner cubes: horizontal rainbow + slight vertical spread (see CONFIG.innerCubeHueGradient). */
+function setInnerCubeInstanceHue(color, x, y, minX, maxX, minY, maxY) {
+    const g = CONFIG.innerCubeHueGradient;
+    const w = maxX - minX || 1;
+    const h = maxY - minY || 1;
+    const nx = THREE.MathUtils.clamp((x - minX) / w, 0, 1);
+    const ny = THREE.MathUtils.clamp((y - minY) / h, 0, 1);
+    if (!g?.enabled) {
+        const hue = nx - Math.floor(nx);
+        color.setHSL(hue, 1.0, 0.5);
+        return;
+    }
+    const xW = g.xWeight ?? 0.78;
+    const yW = g.yWeight ?? 0.22;
+    let hue = nx * xW + ny * yW;
+    hue -= Math.floor(hue);
+    color.setHSL(hue, g.saturation ?? 1.0, g.lightness ?? 0.52);
+}
+
+function attachInnerCubeGradientShader(innerCubeMat) {
+    innerCubeMat.vertexColors = true;
+    innerCubeMat.onBeforeCompile = (shader) => {
+        const hasInstanceColor =
+            shader.vertexShader.includes('vInstanceColor') ||
+            shader.fragmentShader.includes('vInstanceColor');
+        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
+        const perInstanceFactor = `(${colorVarying} * 0.96 + vec3(0.04))`;
+
+        const before = shader.fragmentShader;
+        let after = before;
+
+        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
+        let emissiveRadiancePatched = false;
+        if (emissiveRadianceToken.test(after)) {
+            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
+            emissiveRadiancePatched = true;
+        }
+
+        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
+        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
+            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
+        }
+
+        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
+        if (!emissiveRadiancePatched && totalFromEmissiveToken.test(after)) {
+            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
+        }
+
+        if (after === before) {
+            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
+        }
+
+        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
+            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
+            console.log('[innerCubes] emissive patch debug', { colorVarying, shaderPatched: after !== before });
+        }
+        shader.fragmentShader = after;
+    };
+}
+
 function onMouseDown(event) {
     // Ignore clicks on UI buttons
     if (event.target.closest('button') || event.target.closest('.mode-btn') || event.target.closest('.letter-btn')) {
@@ -3738,7 +5149,8 @@ async function generateParticles(font, fontRegular) {
     geometry.computeBoundingBox();
     const minX = geometry.boundingBox.min.x;
     const maxX = geometry.boundingBox.max.x;
-    const textWidth = maxX - minX;
+    const minY = geometry.boundingBox.min.y;
+    const maxY = geometry.boundingBox.max.y;
 
     // Sample points
     const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
@@ -4129,60 +5541,7 @@ async function generateParticles(font, fontRegular) {
     const innerCubeCount = 2000;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize * 1, CONFIG.particleSize * 1, CONFIG.particleSize * 1);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
-    // Enable instanceColor tinting for the shader (instancing color varying).
-    innerCubeMat.vertexColors = true;
-    innerCubeMat.onBeforeCompile = (shader) => {
-        // Three.js r0.160: InstancedMesh `instanceColor` is exposed via `vInstanceColor` (not `vColor`).
-        // Robust varying selection: in some material/shader variants the token may appear only in vertex or fragment shader.
-        const hasInstanceColor =
-            shader.vertexShader.includes('vInstanceColor') ||
-            shader.fragmentShader.includes('vInstanceColor');
-        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        // Mild lift vs raw tint: weaker than old `* 0.4 + vec3(0.2)` so hues stay saturated but dark instance colors still glow inside the shell.
-        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
-
-        const before = shader.fragmentShader;
-        let after = before;
-
-        // Prefer patching `emissiveRadiance` (earlier in shader flow), so later assignments can't “wash out” the tint.
-        // Only multiply `totalEmissiveRadiance = emissiveRadiance * factor` when `emissiveRadiance` was NOT already patched.
-        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
-        let emissiveRadiancePatched = false;
-        if (emissiveRadianceToken.test(after)) {
-            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
-            emissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
-        let totalFromEmissiveRadiancePatched = false;
-        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
-            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
-            totalFromEmissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
-        let totalFromEmissivePatched = false;
-        if (totalFromEmissiveToken.test(after)) {
-            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
-            totalFromEmissivePatched = true;
-        }
-
-        if (after === before) {
-            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
-        }
-
-        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
-            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
-            console.log('[innerCubes] emissive patch debug', {
-                colorVarying,
-                emissiveRadiancePatched,
-                totalFromEmissiveRadiancePatched,
-                totalFromEmissivePatched,
-                shaderPatched: after !== before
-            });
-        }
-        shader.fragmentShader = after;
-    };
+    attachInnerCubeGradientShader(innerCubeMat);
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCubeCount);
     const color = new THREE.Color();
@@ -4199,8 +5558,7 @@ async function generateParticles(font, fontRegular) {
         dummy.updateMatrix();
         innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
 
-        const hue = (tempPosition.x - minX) / textWidth;
-        color.setHSL(hue, 1.0, 0.5);
+        setInnerCubeInstanceHue(color, tempPosition.x, tempPosition.y, minX, maxX, minY, maxY);
         innerCubeInstancedMesh.setColorAt(sIdx, color);
 
         innerCubeParticles.push({
@@ -4386,6 +5744,7 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     if (crtPass) crtPass.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
+    updateStrobeFlashTransform();
 }
 
 
@@ -4394,6 +5753,7 @@ function animate() {
     requestAnimationFrame(animate);
 
     if (!camera || !scene || !renderer) return;
+    const frameDelta = clock.getDelta();
     updatePerformanceHud(performance.now());
 
     updateVideoBasedLighting(performance.now());
@@ -4591,7 +5951,7 @@ function animate() {
             debugMesh.position.copy(_rayPlaneHit); // Update debug sphere
 
             // Calculate Mouse Velocity (not when portfolio / MYSEN active - no sim interaction)
-            if (!portfolioSceneActive && !mysenState.active) {
+            if (!isParticleMouseSimSuppressed()) {
                 const now = Date.now();
                 const dt = (now - lastMouseTime) / 1000;
                 if (dt > 0 && dt < 0.1) {
@@ -4605,13 +5965,12 @@ function animate() {
             mouseVelocity.set(0, 0, 0);
         }
 
-        const simTarget = (portfolioSceneActive || mysenState.active)
+        const simTarget = isParticleMouseSimSuppressed()
             ? _simFarSim.set(1000, 1000, 1000)
             : _rayPlaneHit;
 
         const time = Date.now() * 0.001;
-        const delta = clock.getDelta();
-        updateFxRuntime(time, delta);
+        updateFxRuntime(time, frameDelta);
 
         if (portfolioSceneActive && portfolioScenePhase === 'subtitle_transform' && motionDesignState && motionDesignState.heartMesh && motionDesignState.heartCubes.length > 0) {
             const psc = PORTFOLIO_SCENE_CONFIG;
@@ -5189,11 +6548,27 @@ function animate() {
         crtPass.uniforms['time'].value = Date.now() * 0.001;
     }
 
+    updateStrobeFlashTransform();
+    if ((strobeActive || strobeSpaceHeld) && invertPass && strobeFlashMesh) {
+        const hz = STROBE_CONFIG.hz;
+        const phase = Math.floor(performance.now() * 0.001 * hz * 2) & 1;
+        if (phase === 0) {
+            invertPass.uniforms['uInvert'].value = 1;
+            strobeFlashMesh.visible = false;
+        } else {
+            invertPass.uniforms['uInvert'].value = 0;
+            strobeFlashMesh.visible = true;
+        }
+    } else if (invertPass) {
+        invertPass.uniforms['uInvert'].value = 0;
+        if (strobeFlashMesh) strobeFlashMesh.visible = false;
+    }
+
     composer.render();
 
     // Update Vajbuj mode
-    updateVajbujMode(clock.getDelta());
-    updateMysenMode(clock.getDelta());
+    updateVajbujMode(frameDelta);
+    updateMysenMode(frameDelta);
 
     // Process background voxel generation queues (VAJBUJ + MYSEN)
     const runLyricGenQueue = (state) => {
@@ -5272,16 +6647,20 @@ function onWheel(event) {
     resetVajbujActivityTimer();
     if (isFreeCam) return;
 
-    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN)
+    // Allow default scrolling when any scrollable modal is open (APPSTAIN, Glitch Lab, GENIMG, SCNDBREJN, newskin)
     const appstainModal = document.getElementById('appstain-modal');
     const glitchModal = document.getElementById('glitch-modal');
     const genimgModal = document.getElementById('genimg-modal');
     const scndbrejnModalWheel = document.getElementById('scndbrejn-modal');
+    const newskinModalWheel = document.getElementById('newskin-modal');
+    const pushkaModalWheel = document.getElementById('pushka-modal');
     if (
         (appstainModal && !appstainModal.classList.contains('hidden')) ||
         (glitchModal && !glitchModal.classList.contains('hidden')) ||
         (genimgModal && !genimgModal.classList.contains('hidden')) ||
-        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden'))
+        (scndbrejnModalWheel && !scndbrejnModalWheel.classList.contains('hidden')) ||
+        (newskinModalWheel && !newskinModalWheel.classList.contains('hidden')) ||
+        (pushkaModalWheel && !pushkaModalWheel.classList.contains('hidden'))
     ) {
         return;
     }
@@ -5321,140 +6700,8 @@ function initVajbujMode() {
     }
 }
 
-function queueLyricVoxelPregeneration(lyrics, font, state, lyricsConfig, logLabel) {
-    const uniqueWords = new Set();
-    lyrics.forEach((item) => {
-        if (!item.lineBreak) {
-            const word = item.text;
-            const scale = item.scale || 1.0;
-            uniqueWords.add(`${word}§${scale}`);
-        }
-    });
-
-    const styleSlice = {
-        wordSize: lyricsConfig.wordSize,
-        wordHeight: lyricsConfig.wordHeight,
-        wordThickness: lyricsConfig.wordThickness
-    };
-
-    console.log(`[${logLabel}] Queuing ${uniqueWords.size} unique words for background generation...`);
-
-    uniqueWords.forEach((key) => {
-        const sep = key.indexOf('§');
-        const word = key.slice(0, sep);
-        const scale = parseFloat(key.slice(sep + 1));
-        const task = createVoxelGenerationTask(word, scale, font, state.voxelCache, styleSlice);
-        state.generationQueue.push(task);
-    });
-}
-
 function startBackgroundGeneration(font) {
     queueLyricVoxelPregeneration(VAJBUJ_CONFIG.lyrics, font, vajbujState, VAJBUJ_CONFIG, 'VAJBUJ');
-}
-
-function createVoxelGenerationTask(word, scale, font, voxelCache, styleSlice) {
-    // State for the task
-    let step = 0;
-    let width = 0;
-    let voxelMap = new Map();
-    let gx, gy, minX, maxX, minY, maxY;
-    let textGeo, mesh;
-    let scanRaycaster = new THREE.Raycaster();
-    const voxelSize = CONFIG.particleSize;
-
-    return () => {
-        // Step 0: Init Geometry
-        if (step === 0) {
-            // Check cache first
-            const cacheKey = `${word}_${scale}`;
-            if (voxelCache[cacheKey]) return true; // Already done
-
-            // Replacement map for Polish characters
-            const polishMap = {
-                'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
-                'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
-                '.': '', ',': '', '!': '', '?': ''
-            };
-            const displayWord = word.split('').map(char => polishMap[char] || char).join('');
-
-            textGeo = new TextGeometry(displayWord, {
-                font: font,
-                size: styleSlice.wordSize * scale,
-                height: styleSlice.wordHeight * scale,
-                curveSegments: 4,
-                bevelEnabled: false
-            });
-            textGeo.computeBoundingBox();
-            width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
-
-            mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
-            mesh.updateMatrixWorld(); // Important for raycaster
-
-            minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
-            maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
-            minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
-            maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
-
-            gx = minX;
-            gy = minY;
-            step = 1;
-            return false; // Not done
-        }
-
-        // Step 1: Voxelization Loop (Chunked)
-        if (step === 1) {
-            const scanDir = new THREE.Vector3(0, 0, -1);
-            let iterations = 0;
-            const maxIter = 50; // Check 50 columns per frame
-
-            while (gx <= maxX) {
-                while (gy <= maxY) {
-                    const px = gx * voxelSize;
-                    const py = gy * voxelSize;
-
-                    scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
-                    const intersects = scanRaycaster.intersectObject(mesh);
-
-                    if (intersects.length > 0) {
-                        for (let z = 0; z < styleSlice.wordThickness; z++) {
-                            const key = `${gx},${gy},${z}`;
-                            if (!voxelMap.has(key)) {
-                                voxelMap.set(key, { x: px, y: py, z: z * voxelSize });
-                            }
-                        }
-                    }
-                    gy++;
-                }
-                gy = minY; // Reset Y
-                gx++; // Next X
-
-                iterations++;
-                if (iterations > 10) { // Small chunk size inside loop, yielding to supervisor loop
-                    return false;
-                }
-            }
-
-            // Loop finished
-            step = 2;
-            return false; // Yield one last time before finalizing
-        }
-
-        // Step 2: Finalize
-        if (step === 2) {
-            const positions = Array.from(voxelMap.values()).map(v => new THREE.Vector3(v.x, v.y, v.z));
-
-            voxelCache[`${word}_${scale}`] = {
-                positions: positions,
-                width: width
-            };
-
-            // Cleanup
-            if (textGeo) textGeo.dispose();
-            // mesh doesn't own geometry in this scope, but textGeo is disposed.
-
-            return true; // DONE
-        }
-    };
 }
 
 function createMusicModeBackgroundCubes(state, cfg) {
@@ -5532,9 +6779,15 @@ function createMusicModeBackgroundCubes(state, cfg) {
 function startVajbujMode() {
     if (vajbujState.active) return;
 
+    setStrobeActive(false);
+    clearStrobeSpaceHeld();
+
+    hideMusicShowcaseSpotifyWidget();
+    setMusicShowcaseMenuUiHidden(true);
     forceStopMysenSilent();
 
     introCameraFlyInActive = false;
+    ensureMusicShowcasePostprocessingBaseline();
 
     console.log('[VAJBUJ] Starting music video mode!');
     vajbujState.active = true;
@@ -5544,20 +6797,7 @@ function startVajbujMode() {
     vajbujState.completedLines = 0;
     vajbujState.displayedLines = [];
 
-    // Reset camera to starting position
-    CONFIG.animationMode = 'repulsion'; // Ensure we are in repulsion mode for the animation to work
-    isCinematic = false;
-    isFreeCam = false;
-    controls.enabled = false;
-    cameraAngle = 0;
-    cameraVerticalAngle = 0;
-    cameraRadius = CONFIG.initialZoom;
-    targetCameraAngle = 0;
-    targetCameraVerticalAngle = 0;
-    targetCameraRadius = CONFIG.initialZoom;
-    cameraFocusPoint.set(0, 0, 0);
-    camera.fov = 45;
-    camera.updateProjectionMatrix();
+    applyMusicShowcaseCameraPreset();
 
     // Clear any existing word meshes
     cleanupVajbujWords();
@@ -5615,7 +6855,7 @@ function startVajbujMode() {
     }, (duration - VAJBUJ_CONFIG.fadeOutDuration) * 1000);
 
     setTimeout(() => {
-        stopVajbujMode();
+        stopVajbujMode({ naturalEnd: true });
     }, duration * 1000);
 
     if (window.vajbujButton) window.vajbujButton.classList.add('vajbuj-active');
@@ -5653,17 +6893,11 @@ function fadeVisualOpacity(material, fromOpacity, toOpacity, duration) {
     tick();
 }
 
-/**
- * @param {'vajbuj'|'mysen'} timingKind — vajbuj uses wordTimings (frames); mysen uses `at` or wordTimesSec
- */
-function prepareMusicLyricWords(config, state, timingKind) {
-    state.words = [];
-
+function collectLyricsWordRows(src) {
     const allWords = [];
     let currentLineIdx = 0;
     let wordInLineIdx = 0;
-
-    config.lyrics.forEach((item) => {
+    src.forEach((item) => {
         if (item.lineBreak) {
             currentLineIdx++;
             wordInLineIdx = 0;
@@ -5675,22 +6909,18 @@ function prepareMusicLyricWords(config, state, timingKind) {
             });
         }
     });
+    return { allWords, totalLines: currentLineIdx + 1 };
+}
 
+/** VAJBUJ: word timings as 25fps frames + optional wordTimings array. */
+function prepareVajbujLyricWords() {
+    const config = VAJBUJ_CONFIG;
+    const state = vajbujState;
+    state.words = [];
+    const { allWords, totalLines } = collectLyricsWordRows(config.lyrics);
     const totalWords = allWords.length;
-    const totalLines = currentLineIdx + 1;
     const startT = config.audioStartTime || 0;
-    let fragmentDuration;
-    if (timingKind === 'mysen') {
-        const endT = config.audioEndTime;
-        if (endT != null && Number.isFinite(endT) && endT > startT) {
-            fragmentDuration = endT - startT;
-        } else {
-            const d = state.audio?.duration;
-            fragmentDuration = (Number.isFinite(d) && d > startT) ? d - startT : 180;
-        }
-    } else {
-        fragmentDuration = config.audioEndTime - config.audioStartTime;
-    }
+    const fragmentDuration = config.audioEndTime - config.audioStartTime;
     const fps = 25;
 
     allWords.forEach((wordData, globalIdx) => {
@@ -5707,35 +6937,90 @@ function prepareMusicLyricWords(config, state, timingKind) {
             textGeo.dispose();
         }
 
-        let assembledAtSeconds;
-        if (timingKind === 'vajbuj') {
-            let targetFrame;
-            if (config.wordTimings.length >= totalWords) {
-                targetFrame = config.wordTimings[globalIdx];
-            } else {
-                const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
-                const lineStartNormalized = wordData.lineIndex / lineCountCalc;
-                const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
-                const wordStagger = 12;
-                targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
-            }
-            targetFrame += 18;
-            assembledAtSeconds = (targetFrame / fps) + (config.lyricsStartDelay || 0);
+        let targetFrame;
+        if (config.wordTimings.length >= totalWords) {
+            targetFrame = config.wordTimings[globalIdx];
         } else {
-            if (Number.isFinite(wordData.at)) {
-                assembledAtSeconds = wordData.at + (config.lyricsStartDelay || 0);
-            } else if (config.wordTimesSec && config.wordTimesSec.length > globalIdx) {
-                assembledAtSeconds = config.wordTimesSec[globalIdx] + (config.lyricsStartDelay || 0);
-            } else {
-                const t = totalWords > 1 ? globalIdx / (totalWords - 1) : 0;
-                assembledAtSeconds = t * fragmentDuration * 0.85 + (config.lyricsStartDelay || 0);
-            }
+            const lineCountCalc = totalLines > 1 ? totalLines - 1 : 1;
+            const lineStartNormalized = wordData.lineIndex / lineCountCalc;
+            const lineStartFrame = lineStartNormalized * (fragmentDuration * 0.8) * fps;
+            const wordStagger = 12;
+            targetFrame = Math.round(lineStartFrame + (wordData.wordIndex * wordStagger));
         }
-
+        targetFrame += 18;
+        const assembledAtSeconds = (targetFrame / fps) + (config.lyricsStartDelay || 0);
         const startSeconds = Math.max(0, assembledAtSeconds - config.wordAssemblyDuration);
+
+        const atSrc = Number.isFinite(wordData.atSourceSec)
+            ? wordData.atSourceSec
+            : startT + (Number.isFinite(wordData.at) ? wordData.at : 0);
 
         state.words.push({
             ...wordData,
+            atSourceSec: atSrc,
+            startTime: startSeconds,
+            assembledTime: assembledAtSeconds,
+            state: 'waiting',
+            mesh: null,
+            cubes: [],
+            progress: 0
+        });
+    });
+}
+
+/** MYSEN: `at` / wordTimesSec / spread on fragment; uses merged lyric list. */
+function prepareMysenLyricWords(config, state, lyricsSource) {
+    state.words = [];
+    const src = lyricsSource || config.lyrics;
+    const { allWords } = collectLyricsWordRows(src);
+    const totalWords = allWords.length;
+    const startT = config.audioStartTime || 0;
+    const endT = config.audioEndTime;
+    let fragmentDuration;
+    if (endT != null && Number.isFinite(endT) && endT > startT) {
+        fragmentDuration = endT - startT;
+    } else {
+        const d = state.audio?.duration;
+        fragmentDuration = (Number.isFinite(d) && d > startT) ? d - startT : 180;
+    }
+
+    allWords.forEach((wordData, globalIdx) => {
+        if (loadedFontRegular) {
+            const textGeo = new TextGeometry(wordData.text, {
+                font: loadedFontRegular,
+                size: config.wordSize * (wordData.scale || 1.0),
+                height: config.wordHeight * (wordData.scale || 1.0),
+                curveSegments: 4,
+                bevelEnabled: false
+            });
+            textGeo.computeBoundingBox();
+            wordData.width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+            textGeo.dispose();
+        }
+
+        let assembledAtSeconds;
+        if (Number.isFinite(wordData.at)) {
+            assembledAtSeconds = wordData.at + (config.lyricsStartDelay || 0);
+        } else if (config.wordTimesSec && config.wordTimesSec.length > globalIdx) {
+            assembledAtSeconds = config.wordTimesSec[globalIdx] + (config.lyricsStartDelay || 0);
+        } else {
+            const t = totalWords > 1 ? globalIdx / (totalWords - 1) : 0;
+            assembledAtSeconds = t * fragmentDuration * 0.85 + (config.lyricsStartDelay || 0);
+        }
+
+        const asmDur =
+            Number.isFinite(wordData.assemblyDurationSec) && wordData.assemblyDurationSec > 0
+                ? wordData.assemblyDurationSec
+                : config.wordAssemblyDuration;
+        const startSeconds = Math.max(0, assembledAtSeconds - asmDur);
+
+        const atSrc = Number.isFinite(wordData.atSourceSec)
+            ? wordData.atSourceSec
+            : startT + (Number.isFinite(wordData.at) ? wordData.at : 0);
+
+        state.words.push({
+            ...wordData,
+            atSourceSec: atSrc,
             startTime: startSeconds,
             assembledTime: assembledAtSeconds,
             state: 'waiting',
@@ -5747,157 +7032,55 @@ function prepareMusicLyricWords(config, state, timingKind) {
 }
 
 function prepareVajbujWords() {
-    prepareMusicLyricWords(VAJBUJ_CONFIG, vajbujState, 'vajbuj');
+    prepareVajbujLyricWords();
     const lineCount = vajbujState.words.length ? vajbujState.words[vajbujState.words.length - 1].lineIndex + 1 : 0;
     console.log(`[VAJBUJ] Prepared ${vajbujState.words.length} words in ${lineCount} lines.`);
 }
 
 function prepareMysenWords() {
-    prepareMusicLyricWords(MYSEN_CONFIG, mysenState, 'mysen');
-    const lineCount = mysenState.words.length ? mysenState.words[mysenState.words.length - 1].lineIndex + 1 : 0;
-    console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines.`);
-}
-
-function createVoxelWord(wordData, font, voxelCache, voxelStyle) {
-    const word = wordData.text;
-    const polishMap = {
-        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
-        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
-        '.': '', ',': '', '!': '', '?': ''
-    };
-
-    const displayWord = word.split('').map(char => polishMap[char] || char).join('');
-
-    const wordScale = wordData.scale || 1.0;
-    const voxelSize = CONFIG.particleSize;
-    const scatterRadius = voxelStyle.scatterRadius;
-
-    const cacheKey = `${word}_${wordScale}`;
-    let cubePositions = [];
-    let width = 0;
-
-    if (voxelCache && voxelCache[cacheKey]) {
-        cubePositions = voxelCache[cacheKey].positions;
-        width = voxelCache[cacheKey].width;
+    const eff = mysenState.mergedMysenConfig || MYSEN_CONFIG;
+    let merged;
+    if (mysenState.showcaseAnimationDoc) {
+        merged = lyricsArrayFromShowcaseDoc(mysenState.showcaseAnimationDoc);
+        const fts = mysenState.showcaseAnimationDoc.timing?.firstTimestampLineIndex;
+        mysenState.firstTimestampLineIndex = Number.isFinite(fts) ? fts : 99999;
     } else {
-        const textGeo = new TextGeometry(displayWord, {
-            font: font,
-            size: voxelStyle.wordSize * wordScale,
-            height: voxelStyle.wordHeight * wordScale,
-            curveSegments: 4,
-            bevelEnabled: false
-        });
+        merged = buildMergedMysenLyrics();
+        const lastIntro = lastFilledLineIndexInLyrics(eff.introLyrics || eff.lyrics);
+        mysenState.firstTimestampLineIndex = lastIntro >= 0 ? lastIntro + 1 : 6;
+        applyMysenWordAnimationToMergedLyrics(merged, mysenState.wordAnimationDoc?.overrides);
+    }
 
-        textGeo.computeBoundingBox();
-        width = textGeo.boundingBox.max.x - textGeo.boundingBox.min.x;
+    prepareMysenLyricWords(eff, mysenState, merged);
+    queueMysenVoxelPregenForPreparedWords(mysenState, eff);
 
-        const mesh = new THREE.Mesh(textGeo, new THREE.MeshBasicMaterial());
-        const voxelMap = new Map();
-
-        const minX = Math.floor(textGeo.boundingBox.min.x / voxelSize);
-        const maxX = Math.ceil(textGeo.boundingBox.max.x / voxelSize);
-        const minY = Math.floor(textGeo.boundingBox.min.y / voxelSize);
-        const maxY = Math.ceil(textGeo.boundingBox.max.y / voxelSize);
-
-        const scanRaycaster = new THREE.Raycaster();
-        const scanDir = new THREE.Vector3(0, 0, -1);
-
-        for (let gx = minX; gx <= maxX; gx++) {
-            for (let gy = minY; gy <= maxY; gy++) {
-                const px = gx * voxelSize;
-                const py = gy * voxelSize;
-
-                scanRaycaster.set(new THREE.Vector3(px, py, 10), scanDir);
-                const intersects = scanRaycaster.intersectObject(mesh);
-
-                if (intersects.length > 0) {
-                    for (let z = 0; z < voxelStyle.wordThickness; z++) {
-                        const key = `${gx},${gy},${z}`;
-                        if (!voxelMap.has(key)) {
-                            voxelMap.set(key, {
-                                x: px,
-                                y: py,
-                                z: z * voxelSize
-                            });
-                        }
-                    }
-                }
+    const firstTs = mysenState.firstTimestampLineIndex;
+    const introStagger = eff.introAssembly?.lineStaggerSec ?? 0;
+    if (introStagger > 0) {
+        for (let i = 0; i < mysenState.words.length; i++) {
+            const w = mysenState.words[i];
+            if (w.lineIndex < firstTs) {
+                const off = w.lineIndex * introStagger;
+                w.startTime += off;
+                w.assembledTime += off;
             }
         }
-
-        voxelMap.forEach(v => cubePositions.push(new THREE.Vector3(v.x, v.y, v.z)));
-
-        voxelCache[cacheKey] = {
-            positions: cubePositions,
-            width: width
-        };
-
-        textGeo.dispose();
     }
 
-    const cubeGeo = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
-    const cubeMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        metalness: 0.3,
-        roughness: 0.7,
-        emissive: new THREE.Color(0xffffff).multiplyScalar(0.2),
-        transparent: true,
-        opacity: 1
-    });
-
-    const instancedMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubePositions.length);
-    instancedMesh.visible = false;
-
-    const initColor = new THREE.Color(0x050505);
-    for (let i = 0; i < cubePositions.length; i++) {
-        instancedMesh.setColorAt(i, initColor);
+    const lineStaggerLyrics = eff.lyricAssembly?.lineStaggerSec ?? 0;
+    if (lineStaggerLyrics > 0) {
+        for (let i = 0; i < mysenState.words.length; i++) {
+            const w = mysenState.words[i];
+            if (w.lineIndex >= firstTs) {
+                const k = w.lineIndex - firstTs;
+                w.startTime += k * lineStaggerLyrics;
+                w.assembledTime += k * lineStaggerLyrics;
+            }
+        }
     }
 
-    const cubes = cubePositions.map((pos) => {
-        const scatterPos = new THREE.Vector3(
-            pos.x + (Math.random() - 0.5) * scatterRadius * 2,
-            pos.y + (Math.random() - 0.5) * scatterRadius * 2 - 5,
-            pos.z + (Math.random() - 0.5) * scatterRadius
-        );
-
-        const delay = Math.pow(Math.random(), 3) * 0.7;
-
-        return {
-            targetPos: pos.clone(),
-            scatterPos: scatterPos,
-            currentPos: scatterPos.clone(),
-            currentScale: 0,
-            delay,
-            shouldOvershoot: Math.random() < 0.3,
-            overshootMagnitude: 0.3 + Math.random() * 0.4
-        };
-    });
-
-    // Center the word
-    const centerX = width / 2;
-    cubes.forEach(cube => {
-        cube.targetPos.x -= centerX;
-        cube.scatterPos.x -= centerX;
-        cube.currentPos.x -= centerX;
-    });
-
-    // textGeo.dispose(); // Removed to fix ReferenceError
-
-    return {
-        mesh: instancedMesh,
-        cubes: cubes,
-        width: width
-    };
-}
-
-function voxelStyleFromMusicConfig(config) {
-    return {
-        wordSize: config.wordSize,
-        wordHeight: config.wordHeight,
-        wordThickness: config.wordThickness,
-        scatterRadius: config.scatterRadius,
-        defaultWordColor: config.defaultWordColor
-    };
+    const lineCount = mysenState.words.length ? mysenState.words[mysenState.words.length - 1].lineIndex + 1 : 0;
+    console.log(`[MYSEN] Prepared ${mysenState.words.length} words in ${lineCount} lines (timestamp line ≥ ${mysenState.firstTimestampLineIndex}).`);
 }
 
 function maybeStartWordPulse(wordData, config) {
@@ -5932,14 +7115,107 @@ function getWordPulseScaleMul(wordData) {
     return 1 + (wordData._pulseScaleMax - 1) * p;
 }
 
-function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
-    const { consoleTag = 'MUSIC', enablePulse = false } = options;
+/** Spread phase duration for VAJBUJ path (no MYSEN_CONFIG fallback). */
+function getVajbujSpreadDurationSec(config) {
+    const v = config.spread?.durationSec;
+    if (Number.isFinite(v) && v > 0) return v;
+    return 1.35;
+}
+
+/** Mysen lyric timing uses wall `elapsed` from mode start; keep spread/vanish on same axis as `assembledTime` (not raw audio.currentTime, which can lag or differ with fallback clip). */
+function getMysenSpreadDurationSec(config) {
+    const v = config.spread?.durationSec;
+    if (Number.isFinite(v) && v > 0) return v;
+    const fb = MYSEN_CONFIG.spread?.durationSec;
+    return Number.isFinite(fb) && fb > 0 ? fb : 1.35;
+}
+
+/** Approximate media timeline position on file (s) — matches how word `startTime` / `at` are interpreted vs `elapsed`. */
+function getMysenApproxMediaSec(config, elapsed) {
+    const startT = config.audioStartTime || 0;
+    return startT + elapsed;
+}
+
+/**
+ * Shared voxel-lyric tick. VAJBUJ uses timestampLyricsStyle=false (no MYSEN-only fly/spread/vanish).
+ * MYSEN passes timestampLyricsStyle=true and mysenWallElapsedSec for intro/outro spread.
+ */
+function stepLyricWordsShared(state, config, elapsed, tempoMultiplier, options = {}) {
+    const {
+        consoleTag = 'MUSIC',
+        enablePulse = false,
+        deltaSec = 1 / 60,
+        timestampLyricsStyle = false,
+        firstTimestampLineIndex = 99999,
+        mysenWallElapsedSec = 0,
+        getSpreadDurationSec = getVajbujSpreadDurationSec
+    } = options;
+
     const tempColor = new THREE.Color();
-    const targetWhite = new THREE.Color(0xffffff);
-    const startDark = new THREE.Color(0x050505);
+    const asmEndCol = new THREE.Color();
+    const asmStartCol = new THREE.Color();
     const vStyle = voxelStyleFromMusicConfig(config);
+    const firstTs = firstTimestampLineIndex;
+    const getSpreadDur = getSpreadDurationSec;
 
     state.words.forEach((wordData) => {
+        if (wordData.state === 'done') return;
+
+        const kx = wordData._showcaseOx || 0;
+        const ky = wordData._showcaseOy || 0;
+        const kz = wordData._showcaseOz || 0;
+        const krX = wordData._showcaseRx || 0;
+        const krY = wordData._showcaseRy || 0;
+        const krZ = wordData._showcaseRz || 0;
+        const showKfMul = wordData._showcaseScaleMul > 0 ? wordData._showcaseScaleMul : 1;
+        const wordScaleMul = (wordData.assembledScale > 0 ? wordData.assembledScale : 1) * showKfMul;
+
+        if (wordData.state === 'spreading' && wordData.mesh && wordData.cubes) {
+            const vf0 = wordData.visibleFromFragSec;
+            const vt0 = wordData.visibleToFragSec;
+            if (Number.isFinite(vf0) || Number.isFinite(vt0)) {
+                const inWin0 =
+                    (!Number.isFinite(vf0) || elapsed >= vf0) && (!Number.isFinite(vt0) || elapsed <= vt0);
+                if (!inWin0) {
+                    wordData.mesh.visible = false;
+                    return;
+                }
+                wordData.mesh.visible = true;
+            }
+            const introDur = config.introOutroSpread?.spreadDurationSec;
+            const dur = wordData._introOutroSpread && Number.isFinite(introDur) && introDur > 0
+                ? introDur
+                : getSpreadDur(config);
+            wordData._spreadT = (wordData._spreadT || 0) + deltaSec;
+            const u = dur > 0 ? wordData._spreadT / dur : 1;
+            const t = Math.min(1, Math.max(0, u));
+            const amp = (config.spread?.amplitude ?? 4) * t;
+            const pulseMul = enablePulse ? getWordPulseScaleMul(wordData) : 1;
+            const px = wordData.posX || 0;
+            const py = wordData.posY || 0;
+            const pz = wordData.posZ || 0;
+
+            wordData.cubes.forEach((cube, i) => {
+                const sx = cube.targetPos.x !== 0 ? Math.sign(cube.targetPos.x) : (i % 2 === 0 ? 1 : -1);
+                const sy = cube.targetPos.y !== 0 ? Math.sign(cube.targetPos.y) : (i % 3 === 0 ? 1 : -1);
+                dummy.position.set(
+                    cube.targetPos.x + sx * amp * 0.2 + px + kx,
+                    cube.targetPos.y + sy * amp * 0.2 + py + ky,
+                    cube.targetPos.z + pz + kz
+                );
+                dummy.scale.setScalar(pulseMul * (1 - t) * wordScaleMul);
+                dummy.rotation.set(krX, krY, krZ);
+                dummy.updateMatrix();
+                wordData.mesh.setMatrixAt(i, dummy.matrix);
+            });
+            wordData.mesh.instanceMatrix.needsUpdate = true;
+            if (t >= 1) {
+                wordData.state = 'done';
+                wordData.mesh.visible = false;
+            }
+            return;
+        }
+
         if (wordData.state === 'waiting' && elapsed >= wordData.startTime) {
             wordData.state = 'assembling';
 
@@ -5950,28 +7226,81 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                 wordData.width = voxelWord.width;
 
                 let lineX = 0;
-                const wordsInThisLine = state.words.filter(w => w.lineIndex === wordData.lineIndex);
+                const wordsInThisLine = state.words.filter(
+                    (w) =>
+                        w.lineIndex === wordData.lineIndex &&
+                        w.mysenSplitRow === wordData.mysenSplitRow
+                );
                 const currentWordIdxInLine = wordsInThisLine.indexOf(wordData);
 
                 for (let i = 0; i < currentWordIdxInLine; i++) {
                     const prevWord = wordsInThisLine[i];
-                    if (prevWord && prevWord.width) {
-                        lineX += prevWord.width + config.wordSpacing;
-                    } else {
-                        lineX += 1.5;
-                    }
+                    const pw = prevWord && prevWord.width ? prevWord.width : 1.5;
+                    const extra = prevWord && prevWord.extraWordSpacingAfter ? prevWord.extraWordSpacingAfter : 0;
+                    lineX += pw + config.wordSpacing + extra;
                 }
 
                 let totalLineWidth = 0;
-                wordsInThisLine.forEach(w => {
-                    totalLineWidth += (w.width || 1.5) + config.wordSpacing;
-                });
-                totalLineWidth -= config.wordSpacing;
+                for (let wi = 0; wi < wordsInThisLine.length; wi++) {
+                    const w = wordsInThisLine[wi];
+                    totalLineWidth += (w.width || 1.5);
+                    if (wi < wordsInThisLine.length - 1) {
+                        totalLineWidth += config.wordSpacing + (w.extraWordSpacingAfter || 0);
+                    }
+                }
 
                 const startX = -totalLineWidth / 2;
                 wordData.posX = startX + lineX + (wordData.width / 2) + (wordData.offsetX || 0);
-                wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
-                wordData.posZ = 0;
+                let initShift = state.completedLines - wordData.lineIndex;
+                if (initShift < 0) initShift = 0;
+                wordData.posY =
+                    config.lyricsOffsetY + initShift * config.lineSpacing + (wordData.offsetY || 0);
+                wordData.posZ = wordData.offsetZ || 0;
+
+                const isTsWord = timestampLyricsStyle && wordData.lineIndex >= firstTs;
+                const groupedTsLine = wordData.mysenGroupedLine === true;
+                const hasFixedSpawn =
+                    Number.isFinite(wordData.spawnX) &&
+                    Number.isFinite(wordData.spawnY) &&
+                    Number.isFinite(wordData.spawnZ);
+                const useFly =
+                    isTsWord && !groupedTsLine && (hasFixedSpawn || config.randomFly?.enabled);
+                if (useFly) {
+                    wordData._railX = wordData.posX;
+                    wordData._railY = wordData.posY;
+                    wordData._railZ = wordData.posZ;
+                    if (hasFixedSpawn) {
+                        wordData._spawnX = wordData.spawnX;
+                        wordData._spawnY = wordData.spawnY;
+                        wordData._spawnZ = wordData.spawnZ;
+                        wordData.posX = wordData.spawnX;
+                        wordData.posY = wordData.spawnY;
+                        wordData.posZ = wordData.spawnZ;
+                    } else {
+                        const d0 = config.randomFly.spawnDistanceMin ?? 25;
+                        const d1 = config.randomFly.spawnDistanceMax ?? 40;
+                        const margin = config.randomFly?.ndcMargin ?? 0.1;
+                        const useSeeded =
+                            config.mysenTimestampLineGroups?.seededRandomFly !== false &&
+                            Number.isFinite(wordData.atSourceSec);
+                        const spawn = useSeeded
+                            ? sampleMysenSeededRandomFlySpawn(
+                                  d0,
+                                  d1,
+                                  margin,
+                                  mysenHashSeedU32(`${wordData.text}|${wordData.atSourceSec}`)
+                              )
+                            : sampleMysenRandomFrustumPoint(
+                                  d0 + Math.random() * Math.max(0.01, d1 - d0)
+                              );
+                        wordData._spawnX = spawn.x;
+                        wordData._spawnY = spawn.y;
+                        wordData._spawnZ = spawn.z;
+                        wordData.posX = spawn.x;
+                        wordData.posY = spawn.y;
+                        wordData.posZ = spawn.z;
+                    }
+                }
 
                 scene.add(wordData.mesh);
                 wordData.mesh.visible = true;
@@ -5982,17 +7311,47 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
             let shiftCount = state.completedLines - wordData.lineIndex;
             if (shiftCount < 0) shiftCount = 0;
 
-            const targetLineY = config.lyricsOffsetY + shiftCount * config.lineSpacing;
+            const targetLineY =
+                config.lyricsOffsetY +
+                shiftCount * config.lineSpacing +
+                (wordData.offsetY || 0);
 
-            if (wordData.posY === undefined) wordData.posY = config.lyricsOffsetY;
+            if (wordData.posY === undefined) {
+                wordData.posY = config.lyricsOffsetY + (wordData.offsetY || 0);
+            }
             wordData.posY += (targetLineY - wordData.posY) * 0.1;
 
+            const isTsWord = timestampLyricsStyle && wordData.lineIndex >= firstTs;
+            if (isTsWord && wordData._railX != null && wordData.state === 'assembling') {
+                const flyBlend = wordData.progress ?? 0;
+                wordData.posX = THREE.MathUtils.lerp(wordData._spawnX, wordData._railX, flyBlend);
+                wordData.posY = THREE.MathUtils.lerp(wordData._spawnY, wordData._railY, flyBlend);
+                wordData.posZ = THREE.MathUtils.lerp(wordData._spawnZ, wordData._railZ, flyBlend);
+            }
+
             const pulseMul = enablePulse ? getWordPulseScaleMul(wordData) : 1;
+            const jx = 0;
+            const jy = 0;
+            const jz = 0;
 
             if (wordData.state === 'assembling') {
                 const assemblyElapsed = elapsed - wordData.startTime;
-                const assemblyDuration = config.wordAssemblyDuration;
+                const assemblyDuration =
+                    Number.isFinite(wordData.assemblyDurationSec) && wordData.assemblyDurationSec > 0
+                        ? wordData.assemblyDurationSec
+                        : config.wordAssemblyDuration;
                 wordData.progress = Math.min(assemblyElapsed / assemblyDuration, 1);
+
+                const hexAsmEnd =
+                    wordData._assemblyColorEnd != null
+                        ? wordData._assemblyColorEnd
+                        : wordData.color != null
+                          ? wordData.color
+                          : 0xffffff;
+                const hexAsmStart =
+                    wordData._assemblyColorStart != null ? wordData._assemblyColorStart : 0x050505;
+                asmEndCol.setHex(hexAsmEnd);
+                asmStartCol.setHex(hexAsmStart);
 
                 if (wordData.mesh && wordData.cubes) {
                     wordData.cubes.forEach((cube, i) => {
@@ -6026,23 +7385,23 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                             const transitionWindow = 0.5;
 
                             if (effectiveProgress >= 1) {
-                                tempColor.copy(targetWhite);
+                                tempColor.copy(asmEndCol);
                             } else if (timeRemaining <= transitionWindow && timeRemaining > 0) {
-                                const t = 1 - (timeRemaining / transitionWindow);
-                                tempColor.copy(startDark).lerp(targetWhite, t);
+                                const tt = 1 - (timeRemaining / transitionWindow);
+                                tempColor.copy(asmStartCol).lerp(asmEndCol, tt);
                             } else {
-                                tempColor.copy(startDark);
+                                tempColor.copy(asmStartCol);
                             }
                             wordData.mesh.setColorAt(i, tempColor);
                         }
 
                         dummy.position.set(
-                            cube.currentPos.x + (wordData.posX || 0),
-                            cube.currentPos.y + (wordData.posY || 0),
-                            cube.currentPos.z + (wordData.posZ || 0)
+                            cube.currentPos.x + (wordData.posX || 0) + jx + kx,
+                            cube.currentPos.y + (wordData.posY || 0) + jy + ky,
+                            cube.currentPos.z + (wordData.posZ || 0) + jz + kz
                         );
-                        dummy.scale.setScalar(cube.currentScale * pulseMul);
-                        dummy.rotation.set(0, 0, 0);
+                        dummy.scale.setScalar(cube.currentScale * pulseMul * wordScaleMul);
+                        dummy.rotation.set(krX, krY, krZ);
                         dummy.updateMatrix();
                         wordData.mesh.setMatrixAt(i, dummy.matrix);
                     });
@@ -6061,20 +7420,86 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
                         state.completedLines = wordData.lineIndex + 1;
                         console.log(`[${consoleTag}] Line ${wordData.lineIndex} completed. Shifting up!`);
                     }
+
+                    const vanishAtMedia = wordData.lineVanishAtSourceSec;
+                    const spreadDur = getSpreadDur(config);
+                    const goSpreadTs =
+                        timestampLyricsStyle &&
+                        isTsWord &&
+                        spreadDur > 0 &&
+                        !Number.isFinite(vanishAtMedia);
+                    if (goSpreadTs) {
+                        wordData.state = 'spreading';
+                        const lst = config.lyricSpread?.lineStaggerSec ?? 0;
+                        const li = Math.max(0, wordData.lineIndex - firstTs);
+                        wordData._spreadT = lst > 0 ? -li * lst : 0;
+                        wordData._introOutroSpread = false;
+                    }
                 }
             } else if (wordData.mesh && wordData.cubes) {
+                if (
+                    wordData.state === 'assembled' &&
+                    timestampLyricsStyle &&
+                    wordData.lineIndex < firstTs &&
+                    !wordData.mysenPersistentOnScreen
+                ) {
+                    const ios = config.introOutroSpread;
+                    if (
+                        ios &&
+                        ios.enabled !== false &&
+                        (getSpreadDur(config) > 0 ||
+                            (Number.isFinite(ios.spreadDurationSec) && ios.spreadDurationSec > 0))
+                    ) {
+                        const wall = mysenWallElapsedSec;
+                        const d = ios.delaySec ?? 4;
+                        const st = ios.lineStaggerSec ?? 0.35;
+                        if (wall >= d + wordData.lineIndex * st) {
+                            wordData.state = 'spreading';
+                            wordData._spreadT = 0;
+                            wordData._introOutroSpread = true;
+                        }
+                    }
+                }
+                if (
+                    wordData.state === 'assembled' &&
+                    timestampLyricsStyle &&
+                    isTsWord &&
+                    Number.isFinite(wordData.lineVanishAtSourceSec) &&
+                    getSpreadDur(config) > 0
+                ) {
+                    const mediaSec = getMysenApproxMediaSec(config, elapsed);
+                    if (mediaSec >= wordData.lineVanishAtSourceSec) {
+                        wordData.state = 'spreading';
+                        wordData._spreadT = 0;
+                        wordData._introOutroSpread = false;
+                    }
+                }
                 wordData.cubes.forEach((cube, i) => {
                     dummy.position.set(
-                        cube.targetPos.x + (wordData.posX || 0),
-                        cube.targetPos.y + (wordData.posY || 0),
-                        cube.targetPos.z + (wordData.posZ || 0)
+                        cube.targetPos.x + (wordData.posX || 0) + jx + kx,
+                        cube.targetPos.y + (wordData.posY || 0) + jy + ky,
+                        cube.targetPos.z + (wordData.posZ || 0) + jz + kz
                     );
-                    dummy.scale.setScalar(pulseMul);
-                    dummy.rotation.set(0, 0, 0);
+                    dummy.scale.setScalar(pulseMul * wordScaleMul);
+                    dummy.rotation.set(krX, krY, krZ);
                     dummy.updateMatrix();
                     wordData.mesh.setMatrixAt(i, dummy.matrix);
                 });
                 wordData.mesh.instanceMatrix.needsUpdate = true;
+            }
+        }
+
+        if (wordData.mesh && wordData.state !== 'done') {
+            const vf = wordData.visibleFromFragSec;
+            const vt = wordData.visibleToFragSec;
+            if (Number.isFinite(vf) || Number.isFinite(vt)) {
+                const inWin =
+                    (!Number.isFinite(vf) || elapsed >= vf) && (!Number.isFinite(vt) || elapsed <= vt);
+                if (!inWin) {
+                    wordData.mesh.visible = false;
+                } else if (wordData.state !== 'waiting') {
+                    wordData.mesh.visible = true;
+                }
             }
         }
     });
@@ -6104,10 +7529,35 @@ function stepMusicLyricWords(state, config, elapsed, tempoMultiplier, options = 
     }
 }
 
+function stepVajbujLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
+    stepLyricWordsShared(state, config, elapsed, tempoMultiplier, {
+        ...options,
+        timestampLyricsStyle: false,
+        firstTimestampLineIndex: 99999,
+        mysenWallElapsedSec: 0,
+        getSpreadDurationSec: getVajbujSpreadDurationSec
+    });
+}
+
+function stepMysenLyricWords(state, config, elapsed, tempoMultiplier, options = {}) {
+    const firstTs = state.firstTimestampLineIndex ?? 99999;
+    stepLyricWordsShared(state, config, elapsed, tempoMultiplier, {
+        ...options,
+        timestampLyricsStyle: true,
+        firstTimestampLineIndex: firstTs,
+        mysenWallElapsedSec: (Date.now() - state.startTime) / 1000,
+        getSpreadDurationSec: getMysenSpreadDurationSec
+    });
+}
+
 function updateVajbujMode(delta) {
     if (!vajbujState.active) {
-        if (VAJBUJ_CONFIG.enabled && VAJBUJ_CONFIG.autoTrigger &&
-            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout) {
+        if (
+            !isVajbujAutoStartBlocked() &&
+            VAJBUJ_CONFIG.enabled &&
+            VAJBUJ_CONFIG.autoTrigger &&
+            Date.now() - vajbujState.lastActivityTime > VAJBUJ_CONFIG.inactivityTimeout
+        ) {
             startVajbujMode();
         }
         return;
@@ -6122,12 +7572,13 @@ function updateVajbujMode(delta) {
         tempoMultiplier = VAJBUJ_CONFIG.slowPhaseSpeed;
     }
 
-    stepMusicLyricWords(vajbujState, VAJBUJ_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'VAJBUJ', enablePulse: false });
+    stepVajbujLyricWords(vajbujState, VAJBUJ_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'VAJBUJ', enablePulse: false });
 }
 
 function updateMysenMode(delta) {
     if (!mysenState.active) return;
 
+    const eff = mysenState.mergedMysenConfig || MYSEN_CONFIG;
     const elapsed = (Date.now() - mysenState.startTime) / 1000;
     let fragmentDuration = mysenState.playbackDurationSec;
     if (!Number.isFinite(fragmentDuration) || fragmentDuration <= 0) {
@@ -6136,11 +7587,112 @@ function updateMysenMode(delta) {
     const progressNormalized = fragmentDuration > 0 ? elapsed / fragmentDuration : 0;
 
     let tempoMultiplier = 1.0;
-    if (progressNormalized < MYSEN_CONFIG.slowPhaseEnd) {
-        tempoMultiplier = MYSEN_CONFIG.slowPhaseSpeed;
+    if (progressNormalized < eff.slowPhaseEnd) {
+        tempoMultiplier = eff.slowPhaseSpeed;
     }
 
-    stepMusicLyricWords(mysenState, MYSEN_CONFIG, elapsed, tempoMultiplier, { consoleTag: 'MYSEN', enablePulse: true });
+    if (backgroundVideoEl && MYSEN_CONFIG.mysenVideoPlaybackRate?.enabled) {
+        const pr = MYSEN_CONFIG.mysenVideoPlaybackRate;
+        const r0 = pr.start ?? 1;
+        const r1 = pr.end ?? 0.35;
+        backgroundVideoEl.playbackRate = r0 + (r1 - r0) * Math.min(1, progressNormalized);
+    }
+
+    const bgFade = MYSEN_CONFIG.mysenBackgroundVideoFadeOut;
+    if (
+        MYSEN_CONFIG.showBackgroundVideoDuringMysen &&
+        backgroundVideoMesh &&
+        backgroundVideoMesh.visible &&
+        backgroundVideoMesh.material &&
+        bgFade &&
+        bgFade.enabled !== false
+    ) {
+        const fo = bgFade;
+        const t0 = Number.isFinite(fo.fadeStartSec) ? fo.fadeStartSec : 60;
+        const startOp = Number.isFinite(fo.startOpacity)
+            ? Math.min(1, Math.max(0, fo.startOpacity))
+            : 1;
+        const endOp = Number.isFinite(fo.endOpacity)
+            ? Math.min(1, Math.max(0, fo.endOpacity))
+            : 0;
+        let opacity = startOp;
+        if (elapsed >= t0 && fragmentDuration > t0) {
+            const span = fragmentDuration - t0;
+            const u = Math.min(1, Math.max(0, (elapsed - t0) / span));
+            opacity = startOp + (endOp - startOp) * u;
+        }
+        backgroundVideoMesh.material.opacity = opacity;
+        backgroundVideoMesh.material.transparent = opacity < 0.999;
+    }
+
+    if (mysenState.showcaseAnimationDoc) {
+        applyShowcaseTransformKeyframes(mysenState, mysenState.showcaseAnimationDoc, elapsed);
+        applyShowcasePostprocessKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            getPostprocessingPassBundle()
+        );
+        applyShowcaseVolumetricKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            mysenState._showcaseVolBoost
+        );
+        applyShowcaseCustomKeyframes(
+            mysenState.showcaseAnimationDoc,
+            elapsed,
+            mysenState._showcaseCustomScalars
+        );
+    } else {
+        for (const k of Object.keys(mysenState._showcaseVolBoost)) {
+            delete mysenState._showcaseVolBoost[k];
+        }
+        for (const k of Object.keys(mysenState._showcaseCustomScalars)) {
+            delete mysenState._showcaseCustomScalars[k];
+        }
+    }
+
+    if (mysenState.active && CONFIG.backgroundVideo?.videoIbl?.enabled) {
+        applyVideoIblMaterialBoost();
+    }
+
+    stepMysenLyricWords(mysenState, eff, elapsed, tempoMultiplier, {
+        consoleTag: 'MYSEN',
+        enablePulse: true,
+        deltaSec: delta
+    });
+}
+
+function applyMusicShowcaseCameraPreset() {
+    const z = computeMusicShowcaseCameraResetValues(CONFIG);
+    CONFIG.animationMode = z.animationMode;
+    isCinematic = z.isCinematic;
+    isFreeCam = z.isFreeCam;
+    controls.enabled = z.controlsEnabled;
+    cameraAngle = z.cameraAngle;
+    cameraVerticalAngle = z.cameraVerticalAngle;
+    cameraRadius = z.cameraRadius;
+    targetCameraAngle = z.targetCameraAngle;
+    targetCameraVerticalAngle = z.targetCameraVerticalAngle;
+    targetCameraRadius = z.targetCameraRadius;
+    cameraFocusPoint.set(z.focusX, z.focusY, z.focusZ);
+    camera.fov = z.cameraFov;
+    camera.updateProjectionMatrix();
+}
+
+function getPostprocessingPassBundle() {
+    return { bloomPass, saoPass, crtPass };
+}
+
+function ensureMusicShowcasePostprocessingBaseline() {
+    if (_musicShowcasePostSnap != null) return;
+    _musicShowcasePostSnap = capturePostprocessingSnapshot(getPostprocessingPassBundle());
+}
+
+function tryReleaseMusicShowcasePostprocessingBaseline() {
+    if (!vajbujState.active && !mysenState.active && _musicShowcasePostSnap) {
+        restorePostprocessingSnapshot(getPostprocessingPassBundle(), _musicShowcasePostSnap);
+        _musicShowcasePostSnap = null;
+    }
 }
 
 function finalizeVajbujCleanup() {
@@ -6165,6 +7717,26 @@ function finalizeVajbujCleanup() {
     vajbujState.active = false;
     vajbujState.isStopping = false;
     vajbujState.lastActivityTime = Date.now();
+    setMusicShowcaseMenuUiHidden(false);
+    tryReleaseMusicShowcasePostprocessingBaseline();
+
+    const showAttribution = vajbujState.pendingSpotifyWidgetAfterFinalize;
+    vajbujState.pendingSpotifyWidgetAfterFinalize = false;
+    const ytSrc = VAJBUJ_CONFIG.originalTrackYoutubeEmbedSrc;
+    const spSrc = VAJBUJ_CONFIG.originalTrackSpotifyEmbedSrc;
+    if (showAttribution && ytSrc && typeof ytSrc === 'string') {
+        requestAnimationFrame(() => {
+            showMusicShowcaseYoutubeModal({
+                embedSrc: ytSrc,
+                title: VAJBUJ_CONFIG.originalTrackYoutubeModalTitle,
+                bodyText: VAJBUJ_CONFIG.originalTrackYoutubeAttributionEn
+            });
+        });
+    } else if (showAttribution && spSrc) {
+        requestAnimationFrame(() => {
+            showMusicShowcaseSpotifyWidget(spSrc, VAJBUJ_CONFIG.originalTrackSpotifyWidgetTitle);
+        });
+    }
 }
 
 function forceStopVajbujSilent() {
@@ -6185,12 +7757,17 @@ function forceStopVajbujSilent() {
     cleanupVajbujWords();
     vajbujState.active = false;
     vajbujState.isStopping = false;
+    vajbujState.pendingSpotifyWidgetAfterFinalize = false;
     if (window.vajbujButton) window.vajbujButton.classList.remove('vajbuj-active');
+    hideMusicShowcaseSpotifyWidget();
+    tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
-function stopVajbujMode() {
+function stopVajbujMode(opts = {}) {
     if (vajbujState.isStopping) return;
     if (!vajbujState.active) return;
+
+    vajbujState.pendingSpotifyWidgetAfterFinalize = opts.naturalEnd === true;
 
     console.log('[VAJBUJ] Initiating smooth shutdown');
     vajbujState.isStopping = true;
@@ -6249,10 +7826,44 @@ function finalizeMysenCleanup() {
     mysenState.isStopping = false;
     mysenState.lastActivityTime = Date.now();
 
+    if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        void setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        mysenState.savedBgSrcForMysen = null;
+    }
+    if (backgroundVideoEl) {
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    }
+    restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
+    setMusicShowcaseMenuUiHidden(false);
+    tryReleaseMusicShowcasePostprocessingBaseline();
+
+    const showAttributionM = mysenState.pendingSpotifyWidgetAfterFinalize;
+    mysenState.pendingSpotifyWidgetAfterFinalize = false;
+    const ytSrcM = MYSEN_CONFIG.originalTrackYoutubeEmbedSrc;
+    const spSrcM = MYSEN_CONFIG.originalTrackSpotifyEmbedSrc;
+    if (showAttributionM && ytSrcM && typeof ytSrcM === 'string') {
+        requestAnimationFrame(() => {
+            showMusicShowcaseYoutubeModal({
+                embedSrc: ytSrcM,
+                title: MYSEN_CONFIG.originalTrackYoutubeModalTitle,
+                bodyText: MYSEN_CONFIG.originalTrackYoutubeAttributionEn
+            });
+        });
+    } else if (showAttributionM && spSrcM) {
+        requestAnimationFrame(() => {
+            showMusicShowcaseSpotifyWidget(spSrcM, MYSEN_CONFIG.originalTrackSpotifyWidgetTitle);
+        });
+    }
+}
+
+function setMysenTerminalMenuActive(active) {
+    if (window.mysenButton) window.mysenButton.classList.toggle('mysen-active', active);
+    const bannerHint = document.getElementById('term-mysen-banner-hint');
+    if (bannerHint) bannerHint.classList.toggle('mysen-active', active);
 }
 
 function forceStopMysenSilent() {
@@ -6273,10 +7884,21 @@ function forceStopMysenSilent() {
     cleanupMysenWords();
     mysenState.active = false;
     mysenState.isStopping = false;
+    mysenState.pendingSpotifyWidgetAfterFinalize = false;
+    if (mysenState.savedBgSrcForMysen && MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        void setBackgroundVideoBySrc(mysenState.savedBgSrcForMysen);
+        mysenState.savedBgSrcForMysen = null;
+    }
+    if (backgroundVideoEl) {
+        applyBackgroundVideoPlaybackRate(currentBackgroundBpm);
+    }
+    restoreBackgroundVideoMeshMaterialAfterMysen();
     setMainTopkekSceneVisible(true, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
     clearMysenPlaybackTimers();
     mysenState.playbackDurationSec = null;
+    hideMusicShowcaseSpotifyWidget();
+    tryReleaseMusicShowcasePostprocessingBaseline();
 }
 
 function createMysenAudioElement() {
@@ -6320,19 +7942,105 @@ function initMysenMode() {
 
     createMusicModeBackgroundCubes(mysenState, MYSEN_CONFIG);
 
+    mysenState.timestampLyricsParsed = [];
+    mysenState._timestampLoadPromise = Promise.resolve();
+    mysenState.wordAnimationDoc = null;
+    mysenState._wordAnimationLoadPromise = Promise.resolve();
     if (loadedFontRegular) {
-        queueLyricVoxelPregeneration(MYSEN_CONFIG.lyrics, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN');
+        queueLyricVoxelPregeneration(MYSEN_CONFIG.introLyrics || MYSEN_CONFIG.lyrics, loadedFontRegular, mysenState, MYSEN_CONFIG, 'MYSEN');
+    }
+    if (MYSEN_CONFIG.timestampLyricsEnabled && MYSEN_CONFIG.timestampLyricsUrl) {
+        mysenState._timestampLoadPromise = fetch(MYSEN_CONFIG.timestampLyricsUrl)
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((text) => {
+                mysenState.timestampLyricsParsed = parseMysenTimestampLyricsFile(text);
+                if (mysenState.timestampLyricsParsed.length) {
+                    console.log('[MYSEN] Loaded', mysenState.timestampLyricsParsed.length, 'timestamp lyric tokens');
+                }
+                queueMysenTimestampVoxelPregen();
+            })
+            .catch(() => {});
+    }
+    if (MYSEN_CONFIG.wordAnimationEnabled && MYSEN_CONFIG.wordAnimationUrl) {
+        mysenState._wordAnimationLoadPromise = fetch(MYSEN_CONFIG.wordAnimationUrl)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                mysenState.wordAnimationDoc = data && typeof data === 'object' ? data : null;
+                if (mysenState.wordAnimationDoc?.version != null) {
+                    console.log('[MYSEN] Word animation JSON loaded, version', mysenState.wordAnimationDoc.version);
+                }
+            })
+            .catch((e) => {
+                console.warn('[MYSEN] Word animation JSON fetch/parse failed:', e);
+                mysenState.wordAnimationDoc = null;
+            });
+    }
+
+    mysenState.showcaseAnimationDoc = null;
+    mysenState._showcaseAnimationLoadPromise = Promise.resolve();
+    if (MYSEN_CONFIG.showcaseAnimationEnabled && MYSEN_CONFIG.showcaseAnimationUrl) {
+        const url = MYSEN_CONFIG.showcaseAnimationUrl;
+        mysenState._showcaseAnimationLoadPromise = fetch(url)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((json) => {
+                if (!json || typeof json !== 'object') {
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                const v = validateShowcaseAnimationDoc(json);
+                if (!v.ok) {
+                    console.warn('[MYSEN] Showcase animation JSON invalid:', v.error);
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                if (v.doc.adapter !== 'voxelLyricsMysen') {
+                    console.warn('[MYSEN] Showcase adapter must be voxelLyricsMysen, got:', v.doc.adapter);
+                    mysenState.showcaseAnimationDoc = null;
+                    return;
+                }
+                mysenState.showcaseAnimationDoc = normalizeShowcaseAnimationDocForRuntime(v.doc);
+                console.log('[MYSEN] Showcase animation document loaded:', url);
+                if (loadedFontRegular) {
+                    const lyr = lyricsArrayFromShowcaseDoc(v.doc);
+                    const cfg = { ...MYSEN_CONFIG, ...(v.doc.style || {}) };
+                    queueLyricVoxelPregeneration(lyr, loadedFontRegular, mysenState, cfg, 'MYSEN-showcase');
+                }
+            })
+            .catch((e) => {
+                console.warn('[MYSEN] Showcase animation fetch failed:', e);
+                mysenState.showcaseAnimationDoc = null;
+            });
     }
 
     console.log('[MYSEN] Mode initialized.');
 }
 
-function startMysenMode() {
+async function startMysenMode() {
     if (mysenState.active) return;
 
+    setStrobeActive(false);
+    clearStrobeSpaceHeld();
+
+    hideMusicShowcaseSpotifyWidget();
+    setMusicShowcaseMenuUiHidden(true);
     forceStopVajbujSilent();
 
     introCameraFlyInActive = false;
+
+    try {
+        await ensureMysenTimestampsLoaded();
+        await ensureMysenWordAnimationLoaded();
+        await mysenState._showcaseAnimationLoadPromise;
+    } catch (e) {
+        setMusicShowcaseMenuUiHidden(false);
+        tryReleaseMusicShowcasePostprocessingBaseline();
+        throw e;
+    }
+    mysenState.mergedMysenConfig = buildMysenEffectiveConfig();
+    if (mysenState.showcaseAnimationDoc) {
+        mergeShowcaseStyleIntoConfig(mysenState.mergedMysenConfig, mysenState.showcaseAnimationDoc);
+    }
+    ensureMusicShowcasePostprocessingBaseline();
 
     console.log('[MYSEN] Starting remix mode');
     clearMysenPlaybackTimers();
@@ -6344,24 +8052,19 @@ function startMysenMode() {
     mysenState.completedLines = 0;
     mysenState.displayedLines = [];
 
-    CONFIG.animationMode = 'repulsion';
-    isCinematic = false;
-    isFreeCam = false;
-    controls.enabled = false;
-    cameraAngle = 0;
-    cameraVerticalAngle = 0;
-    cameraRadius = CONFIG.initialZoom;
-    targetCameraAngle = 0;
-    targetCameraVerticalAngle = 0;
-    targetCameraRadius = CONFIG.initialZoom;
-    cameraFocusPoint.set(0, 0, 0);
-    camera.fov = 45;
-    camera.updateProjectionMatrix();
+    applyMusicShowcaseCameraPreset();
 
     cleanupMysenWords();
     prepareMysenWords();
 
-    setMainTopkekSceneVisible(false, { hideBackgroundVideo: MYSEN_CONFIG.hideBackgroundVideo });
+    if (MYSEN_CONFIG.mysenBackgroundVideoSrc) {
+        mysenState.savedBgSrcForMysen = activeBackgroundVideoSource?.src ?? null;
+        await setBackgroundVideoBySrc(MYSEN_CONFIG.mysenBackgroundVideoSrc);
+    }
+
+    restoreBackgroundVideoMeshMaterialAfterMysen();
+
+    setMainTopkekSceneVisible(false, { hideBackgroundVideo: mysenHideBackgroundVideoWhileActive() });
 
     if (mysenState.bgCubesMesh) {
         mysenState.bgCubesMesh.visible = true;
@@ -6407,12 +8110,14 @@ function startMysenMode() {
         if (seekFallbackMysen) clearTimeout(seekFallbackMysen);
     }
 
-    if (window.mysenButton) window.mysenButton.classList.add('mysen-active');
+    setMysenTerminalMenuActive(true);
 }
 
-function stopMysenMode() {
+function stopMysenMode(opts = {}) {
     if (mysenState.isStopping) return;
     if (!mysenState.active) return;
+
+    mysenState.pendingSpotifyWidgetAfterFinalize = opts.naturalEnd === true;
 
     console.log('[MYSEN] Initiating smooth shutdown');
     mysenState.isStopping = true;
@@ -6438,7 +8143,7 @@ function stopMysenMode() {
     targetCameraRadius = CONFIG.initialZoom;
     cameraFocusPoint.set(0, 0, 0);
 
-    if (window.mysenButton) window.mysenButton.classList.remove('mysen-active');
+    setMysenTerminalMenuActive(false);
 
     if (mysenFinalizeTimerId) clearTimeout(mysenFinalizeTimerId);
     mysenFinalizeTimerId = setTimeout(() => {
@@ -6628,68 +8333,25 @@ async function loadParticles(data) {
     const innerCount = data.inner.length;
     const innerCubeGeo = new THREE.BoxGeometry(CONFIG.particleSize, CONFIG.particleSize, CONFIG.particleSize);
     const innerCubeMat = new THREE.MeshStandardMaterial(MATERIALS.innerCubes);
-    // Enable instanceColor tinting for the shader (instancing color varying).
-    innerCubeMat.vertexColors = true;
-    innerCubeMat.onBeforeCompile = (shader) => {
-        const hasInstanceColor =
-            shader.vertexShader.includes('vInstanceColor') ||
-            shader.fragmentShader.includes('vInstanceColor');
-        const colorVarying = hasInstanceColor ? 'vInstanceColor' : 'vColor';
-        const perInstanceFactor = `(${colorVarying} * 0.85 + vec3(0.10))`;
-
-        const before = shader.fragmentShader;
-        let after = before;
-
-        const emissiveRadianceToken = /vec3\s+emissiveRadiance\s*=\s*emissive\s*;/;
-        let emissiveRadiancePatched = false;
-        if (emissiveRadianceToken.test(after)) {
-            after = after.replace(emissiveRadianceToken, `vec3 emissiveRadiance = emissive * ${perInstanceFactor};`);
-            emissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveRadianceToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissiveRadiance\s*;/;
-        let totalFromEmissiveRadiancePatched = false;
-        if (!emissiveRadiancePatched && totalFromEmissiveRadianceToken.test(after)) {
-            after = after.replace(totalFromEmissiveRadianceToken, `vec3 totalEmissiveRadiance = emissiveRadiance * ${perInstanceFactor};`);
-            totalFromEmissiveRadiancePatched = true;
-        }
-
-        const totalFromEmissiveToken = /vec3\s+totalEmissiveRadiance\s*=\s*emissive\s*;/;
-        let totalFromEmissivePatched = false;
-        if (totalFromEmissiveToken.test(after)) {
-            after = after.replace(totalFromEmissiveToken, `vec3 totalEmissiveRadiance = emissive * ${perInstanceFactor};`);
-            totalFromEmissivePatched = true;
-        }
-
-        if (after === before) {
-            console.warn('[innerCubes] emissive per-instance shader patch: token not found; expected totalEmissiveRadiance assignment.');
-        }
-
-        if (DEBUG_FLAGS?.innerCubesEmissivePatchLog && !innerCubeMat.userData._innerCubesEmissivePatchLogged) {
-            innerCubeMat.userData._innerCubesEmissivePatchLogged = true;
-            console.log('[innerCubes] emissive patch debug', {
-                colorVarying,
-                emissiveRadiancePatched,
-                totalFromEmissiveRadiancePatched,
-                totalFromEmissivePatched,
-                shaderPatched: after !== before
-            });
-        }
-        shader.fragmentShader = after;
-    };
+    attachInnerCubeGradientShader(innerCubeMat);
 
     innerCubeInstancedMesh = new THREE.InstancedMesh(innerCubeGeo, innerCubeMat, innerCount);
     const color = new THREE.Color();
 
     let minX = Infinity;
     let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
     if (innerCount > 0) {
         data.inner.forEach(p => {
-            if (p.p[0] < minX) minX = p.p[0];
-            if (p.p[0] > maxX) maxX = p.p[0];
+            const px = p.p[0];
+            const py = p.p[1];
+            if (px < minX) minX = px;
+            if (px > maxX) maxX = px;
+            if (py < minY) minY = py;
+            if (py > maxY) maxY = py;
         });
     }
-    const textWidth = maxX - minX || 1;
 
     let sIdx = 0;
     data.inner.forEach(p => {
@@ -6702,8 +8364,7 @@ async function loadParticles(data) {
         dummy.updateMatrix();
         innerCubeInstancedMesh.setMatrixAt(sIdx, dummy.matrix);
 
-        const hue = (pos.x - minX) / textWidth;
-        color.setHSL(hue, 1.0, 0.5);
+        setInnerCubeInstanceHue(color, pos.x, pos.y, minX, maxX, minY, maxY);
         innerCubeInstancedMesh.setColorAt(sIdx, color);
 
         innerCubeParticles.push({

@@ -1,13 +1,19 @@
 """
 Minimal HTTP server that suppresses connection errors when the client
-closes the connection before the response is fully sent (e.g. refresh, large files).
+closes or aborts the connection before the response is fully sent
+(e.g. refresh, large files, video seek / tab close; WinError 10053/10054).
 """
 import errno
 import sys
 import os
+from functools import partial
 
-# Run from script's directory so paths match start.bat behaviour
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+# Directory that contains index.html (this file lives next to it).
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Match relative paths in HTML/JS; explicit `directory=` (Py3.7+) avoids listing
+# the wrong folder if cwd was not topkek (e.g. `python path/to/server.py`).
+os.chdir(SCRIPT_DIR)
 
 try:
     from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -23,12 +29,16 @@ class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
     def copyfile(self, source, outputfile):
         try:
             super().copyfile(source, outputfile)
-        except (ConnectionResetError, BrokenPipeError):
-            # Client closed connection (refresh, navigate away, cancel) - ignore
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            # Client closed connection (refresh, navigate away, cancel, video seek) - ignore
             pass
         except OSError as e:
-            # On Windows, closed connection often raises OSError with errno 10054
-            if e.errno in (errno.ECONNRESET, errno.EPIPE, WSAECONNRESET):
+            # On Windows, closed socket often raises OSError (10054 reset, 10053 abort)
+            winerror = getattr(e, "winerror", None)
+            if e.errno in (errno.ECONNRESET, errno.EPIPE, WSAECONNRESET) or winerror in (
+                10053,
+                10054,
+            ):
                 pass
             else:
                 raise
@@ -40,8 +50,15 @@ class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8002
-    server = HTTPServer(("", port), QuietHTTPRequestHandler)
-    print("Serving at http://localhost:%s (ConnectionResetError suppressed)" % port)
+    if sys.version_info >= (3, 7):
+        handler_cls = partial(QuietHTTPRequestHandler, directory=SCRIPT_DIR)
+    else:
+        handler_cls = QuietHTTPRequestHandler
+    server = HTTPServer(("", port), handler_cls)
+    print(
+        "Serving %s at http://127.0.0.1:%s/ (use this URL on Windows if localhost fails; client disconnect noise suppressed)"
+        % (SCRIPT_DIR, port)
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
