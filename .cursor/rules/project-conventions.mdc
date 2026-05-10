@@ -1,0 +1,32 @@
+---
+description: Zasady projektu topkek – język, dokumentacja, TODO, CHANGELOG
+alwaysApply: true
+---
+
+# Zasady projektu topkek
+
+## Język i dokumentacja
+
+- **Dokumentacja użytkowa i komentarze dla użytkownika:** po polsku (README_GL_PL.md, UI, opisy).
+- **Dokumentacja techniczna / kod:** komentarze w plikach JS/CSS mogą być po angielsku; nazwy zmiennych i funkcji – angielski.
+- **Dwa README:** README_GL_PL.md (główny, PL), README_GL_ENG.md (EN) – przy zmianach w jednym zaktualizuj drugi w tym samym miejscu.
+
+## TODO i Changelog
+
+- **TODO.md** – lista zadań. Przy dodawaniu nowych zadań do projektu dopisuj je do sekcji „Do zrobienia”. Przy zamykaniu zadania oznacz jako `[x]` lub przenieś do „Zrobione”.
+- **CHANGELOG.md** – historia wersji. **Po każdej implementacji** dopisz wpis w sekcji `[Unreleased]` (zob. zasadę „changelog-after-implementation”). Przy wydaniu nowej wersji:
+  1. Przenieś wpisy z `[Unreleased]` pod nową wersję (np. `## [1.1.0] - RRRR-MM-DD`).
+  2. Zostaw pustą sekcję `[Unreleased]` na górze na kolejne zmiany.
+- Nie wymyślaj wersji ani dat – jeśli nie ma informacji, zostaw placeholder lub zapytaj.
+
+## Struktura projektu
+
+- Główna aplikacja webowa: pliki w katalogu **topkek/** (index.html, style.css, script.js, config.js).
+- Konfiguracja: **config.js** (parametry aplikacji, teksty, ścieżki). Dane zewnętrzne: particles_pc.json, particles_mobile.json, keyframes.txt.
+- Zasoby i podprojekty: **ASSETS/** (obrazki, podstrony, np. APPSTAIN, GENIMG).
+- Zasady Cursora: **.cursor/rules/** – nie modyfikuj bez wyraźnej prośby użytkownika.
+
+## Ogólne
+
+- Nie dodawaj zależności ani skryptów buildowych bez prośby.
+- Zachowaj kompatybilność z przeglądarką (ES modules, import map w index.html dla Three.js).

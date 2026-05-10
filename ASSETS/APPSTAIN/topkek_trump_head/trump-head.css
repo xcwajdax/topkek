@@ -1,0 +1,121 @@
+/**
+ * TOPKEK – styl gadającej głowy Trumpa (identyczny wygląd jak w APPSTAIN).
+ * Zmienne CSS jak w base.css; style character-container / speech-bubble z components.css i animations.css.
+ */
+
+:root {
+    --primary-gold: #D4AF37;
+    --font-body: 'Roboto', sans-serif;
+}
+
+.topkek-character-container {
+    position: fixed;
+    top: 5%;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.5rem;
+}
+
+.topkek-character-heads-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.topkek-character-head {
+    width: 80px;
+    height: 80px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.6));
+    transition: transform 0.3s, filter 0.3s;
+    cursor: pointer;
+}
+
+.topkek-character-head:hover {
+    transform: scale(1.1) rotate(2deg);
+    filter: drop-shadow(0 6px 16px rgba(212, 175, 55, 0.8));
+}
+
+/* Speech Bubble – identycznie jak .speech-bubble w APPSTAIN */
+.topkek-speech-bubble {
+    position: relative;
+    background: white;
+    color: black;
+    padding: 1rem 1.5rem;
+    border-radius: 16px;
+    border: 3px solid var(--primary-gold);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    max-width: 400px;
+    animation: topkek-bubbleAppear 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    margin-top: 0.5rem;
+}
+
+.topkek-speech-bubble.hidden {
+    display: none;
+}
+
+.topkek-speech-text {
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    font-weight: 600;
+}
+
+/* Speech bubble tail – identycznie jak .speech-tail w APPSTAIN */
+.topkek-speech-tail {
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 12px solid transparent;
+    border-right: 12px solid transparent;
+    border-bottom: 14px solid var(--primary-gold);
+}
+
+.topkek-speech-tail::after {
+    content: '';
+    position: absolute;
+    bottom: -16px;
+    left: -10px;
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-bottom: 12px solid white;
+}
+
+@keyframes topkek-bubbleAppear {
+    from {
+        opacity: 0;
+        transform: scale(0.7) translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateX(0);
+    }
+}
+
+/* Opcjonalnie: responsywność jak w mobile.css APPSTAIN */
+@media (max-width: 768px) {
+    .topkek-character-head {
+        width: 60px;
+        height: 60px;
+    }
+    .topkek-speech-bubble {
+        max-width: 240px;
+        padding: 0.75rem 1rem;
+    }
+    .topkek-speech-text {
+        font-size: 0.8rem;
+    }
+}

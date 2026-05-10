@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOPKEK Productions</title>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="ASSETS/APPSTAIN/topkek_trump_head/trump-head.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body class="post-intro-ui-pending">
+    <div id="canvas-container"></div>
+    <div id="loader-container">
+        <div id="loader-content">
+            <div id="loader-title">T O P K E K</div>
+            <div id="loading-text">Loading Assets...</div>
+            <div id="progress-bar-container">
+                <div id="progress-fill"></div>
+            </div>
+            <div id="progress-percentage">0%</div>
+        </div>
+    </div>
+
+    <!-- RIGHT PANEL: controls above terminal menu -->
+    <div id="right-panel">
+    <div id="ui-container"></div>
+    <div id="terminal-menu">
+        <!-- Animation portfolio: temporarily hidden (remove hidden to restore) -->
+        <div id="anim-portfolio-terminal-block" hidden>
+        <div class="term-line">Animation portfolio</div><br>
+        <div class="term-line interactive-term-line" id="term-anim-portfolio">> Animation portfolio</div>
+        </div>
+        <div class="term-menu-category-heading" role="presentation">ANIMATIONS</div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--pushka"
+                tabindex="0"
+                role="group"
+                aria-label="PUSHKA STUDIO — hover to play preview video"
+                aria-describedby="term-pushka-banner-hint"
+                data-term-banner-cmd="/pushka">
+                <video id="pushka-menu-banner-video" class="term-menu-banner-video" muted playsinline loop preload="auto" aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-pushka-drawer-display-title" aria-hidden="true">PUSHKA STUDIO</span>
+                    <div class="term-menu-banner-hint" id="term-pushka-banner-hint"></div>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--newskin"
+                tabindex="0"
+                role="group"
+                aria-label="NEWSKIN — hover to play preview video"
+                aria-describedby="term-newskin-banner-hint"
+                data-term-banner-cmd="/newskin">
+                <video
+                    id="newskin-menu-banner-video"
+                    class="term-menu-banner-video"
+                    muted
+                    playsinline
+                    loop
+                    preload="auto"
+                    aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner newskin-menu-banner-drawer-hint">
+                    <span class="term-menu-drawer-display-title" id="term-newskin-drawer-display-title" aria-hidden="true">NEWSKIN</span>
+                    <div class="term-menu-banner-hint" id="term-newskin-banner-hint">
+                        A band I work with currently.<br>/newskin opens the promo panel.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-banner-block">
+            <div
+                id="term-mysen"
+                class="term-menu-banner-wrap term-menu-banner-mysen-wrap"
+                tabindex="0"
+                role="group"
+                aria-label="MYSEN — najechanie odtwarza podgląd wideo"
+                aria-describedby="term-mysen-banner-hint"
+                data-term-banner-cmd="/mysen">
+                <div class="term-menu-banner-media">
+                    <img
+                        class="term-menu-banner-poster"
+                        src="ASSETS/UI/mysen_menu_banner_poster.png"
+                        alt=""
+                        width="926"
+                        height="243"
+                        decoding="async"
+                        aria-hidden="true" />
+                    <video
+                        id="term-menu-banner-mysen-video"
+                        class="term-menu-banner-video"
+                        muted
+                        playsinline
+                        loop
+                        preload="auto"
+                        aria-hidden="true"></video>
+                </div>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-mysen-drawer-display-title" aria-hidden="true">MYSEN</span>
+                    <div class="term-menu-banner-hint" id="term-mysen-banner-hint">
+                        Remix mode — a band I worked with; maybe live again someday.<br>Terminal: /mysen start · /mysen stop — Esc stops while playing.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-banner-block">
+            <div
+                class="term-menu-banner-wrap term-menu-banner-wrap--vajbuj"
+                tabindex="0"
+                role="group"
+                aria-label="VAJBUJ — hover to play preview video"
+                aria-describedby="term-vajbuj"
+                data-term-banner-cmd="/vajbuj">
+                <video id="vajbuj-menu-banner-video" class="term-menu-banner-video" muted playsinline loop preload="auto" aria-hidden="true"></video>
+                <div class="term-menu-banner-armed-overlay" aria-hidden="true">
+                    <span class="term-menu-banner-armed-text"></span>
+                </div>
+            </div>
+            <div class="term-menu-banner-drawer">
+                <div class="term-menu-banner-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-vajbuj-drawer-display-title" aria-hidden="true">VAJBUJ</span>
+                    <div class="term-menu-banner-hint" id="term-vajbuj">YANN x GABRIEL HERMES — VAJBUJ SZMATO<br>Just a track I like — big fan, not affiliated.</div>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-category-spacer" aria-hidden="true"></div>
+        <div class="term-menu-category-heading" role="presentation">GAMES</div>
+        <div class="term-menu-section-hover-block" tabindex="0" role="group" aria-label="Games — hover or focus to expand details">
+            <div class="menu-section">
+                <div class="term-line interactive-term-line" id="term-appstain">> APPSTAIN v0.101.0</div>
+                <div class="term-line">> floppy driver v_0.05.20</div>
+            </div>
+            <div class="term-menu-section-drawer">
+                <div class="term-menu-section-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-menu-section-games-display-title" aria-hidden="true">GAMES</span>
+                    <p class="term-menu-banner-hint term-menu-section-drawer-hint" id="term-menu-section-games-hint"></p>
+                </div>
+            </div>
+        </div>
+        <div class="term-menu-category-heading" role="presentation">SOFTWARE</div>
+        <div class="term-menu-section-hover-block" tabindex="0" role="group" aria-label="Software — hover or focus to expand details">
+            <div class="menu-section">
+                <div class="term-line interactive-term-line" id="term-scndbrejn">> SCNDBREJN</div>
+                <div class="term-line">> Bonehandler</div>
+                <div class="term-line interactive-term-line" id="term-portfolio">> Portfolio (Vimeo test)</div>
+                <div class="term-line">> pixelgen v 0.2</div>
+                <div class="term-line interactive-term-line" id="term-genimg">> GENIMG v 1.3</div>
+                <div class="term-line interactive-term-line" id="term-agents">> A G E N T S</div>
+                <div class="term-line">Type in terminal: /agents</div>
+                <div class="term-line interactive-term-line" id="term-glitch">> Glitch Lab v_0.72.34</div>
+                <div class="term-line">> Frame Gen v_1.0</div>
+            </div>
+            <div class="term-menu-section-drawer">
+                <div class="term-menu-section-drawer-inner">
+                    <span class="term-menu-drawer-display-title" id="term-menu-section-software-display-title" aria-hidden="true">SOFTWARE</span>
+                    <p class="term-menu-banner-hint term-menu-section-drawer-hint" id="term-menu-section-software-hint"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="topkek-terminal-shell" class="topkek-terminal-shell" aria-label="TOPKEK command console">
+        <div class="topkek-terminal-shell-title">console</div>
+        <div class="topkek-terminal-log" role="log" aria-live="polite" data-terminal-log></div>
+        <div class="topkek-terminal-input-row">
+            <span class="topkek-terminal-prompt" data-terminal-prompt>U &gt;</span>
+            <input type="text" class="topkek-terminal-input" data-terminal-input autocomplete="off" spellcheck="false" aria-label="Console command" />
+        </div>
+    </div>
+    </div>
+
+    <!-- APPSTAIN MODAL -->
+    <div id="appstain-modal" class="hidden">
+        <div id="appstain-backdrop"></div>
+        <div id="appstain-overlay"></div>
+        <div id="appstain-content">
+            <button id="appstain-close" class="close-btn">X</button>
+
+            <!-- Logo + banners -->
+            <img src="ASSETS/APPSTAIN/AA2.png" alt="APPSTAIN ACTS" class="appstain-logo">
+            <div class="appstain-banners">
+                <img src="ASSETS/APPSTAIN/handcraft_napis.png" alt="100% Hand Crafted = 100% AI Coded" class="appstain-banner">
+                <img src="ASSETS/APPSTAIN/slop_napis.png" alt="200% SLOP" class="appstain-banner">
+            </div>
+
+            <!-- Trump head above intro card -->
+            <div id="topkek-character-container" class="topkek-character-container appstain-trump-widget">
+                <div class="topkek-character-heads-row">
+                    <img id="topkek-trump-head" class="topkek-character-head" src="ASSETS/APPSTAIN/character_head.png" alt="Ronald Dump">
+                </div>
+                <div id="topkek-speech-bubble" class="topkek-speech-bubble hidden">
+                    <div class="topkek-speech-text"></div>
+                    <div class="topkek-speech-tail"></div>
+                </div>
+            </div>
+            <div class="appstain-card appstain-intro-card">
+                <p class="appstain-intro">Satirical clicker game in development since December 2025, featuring deep mechanics and layered gameplay. Your goal: secure Trump's re-election by accumulating Acts, building infrastructure, and managing public support.</p>
+            </div>
+
+            <!-- Tutorial section: quest preview + one-line info -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Tutorial – In-game quests</h3>
+                <p class="appstain-quest-intro">The game features an elaborate quest system that introduces the player to the game.</p>
+                <div class="appstain-quest-thumbs">
+                    <img src="ASSETS/APPSTAIN/quest_01.jpg" alt="Quest 1 – First Redactions" class="appstain-quest-img appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/quest_02.jpg" alt="Quest 2 – Troll Army" class="appstain-quest-img appstain-screenshot">
+                </div>
+            </section>
+
+            <!-- Concept video -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Concept Trailer</h3>
+                <div class="appstain-video-wrap">
+                    <video class="appstain-video" src="ASSETS/APPSTAIN/tak02_1_smoll.mp4" controls preload="metadata"></video>
+                    <div class="appstain-card appstain-caption-card">
+                        <p class="appstain-video-caption">This is a concept video — not final in-game footage.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Music: custom player -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Listen: Files and Loops</h3>
+                <div class="appstain-card appstain-audio-card">
+                    <audio id="appstain-audio-el" src="ASSETS/APPSTAIN/Appstain Clicker - Akta i Petle.mp3" preload="metadata"></audio>
+                    <div class="appstain-audio-player">
+                        <button type="button" id="appstain-audio-play" class="appstain-audio-btn" aria-label="Play">Play</button>
+                        <div class="appstain-audio-progress-wrap">
+                            <input type="range" id="appstain-audio-seek" class="appstain-audio-seek" min="0" max="100" value="0" aria-label="Seek">
+                            <div class="appstain-audio-progress-fill" id="appstain-audio-progress-fill"></div>
+                        </div>
+                        <span class="appstain-audio-time" id="appstain-audio-time">0:00 / 0:00</span>
+                    </div>
+                    <p class="appstain-audio-caption">Theme from APPSTAIN Clicker.</p>
+                </div>
+            </section>
+
+            <!-- Screenshots -->
+            <section class="appstain-section-box">
+                <h3 class="appstain-section-title">Screenshots</h3>
+                <div class="appstain-screenshots">
+                    <img src="ASSETS/APPSTAIN/game_01.jpg" alt="Game screenshot" class="appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/game_02.jpg" alt="Game screenshot" class="appstain-screenshot">
+                    <img src="ASSETS/APPSTAIN/game_03.jpg" alt="Game screenshot" class="appstain-screenshot">
+                </div>
+            </section>
+
+            <!-- Alpha info + riddle -->
+            <div class="appstain-riddle">
+                <div class="appstain-card appstain-alpha-card">
+                    <p class="appstain-alpha-badge">Closed Alpha</p>
+                    <p class="appstain-alpha-detail">Current version: <strong>v0.101.0</strong> &nbsp;·&nbsp; Public Alpha planned for <strong>May 2026</strong></p>
+                </div>
+                <p class="appstain-riddle-question">What does KEK mean?</p>
+                <input type="text" id="appstain-password" placeholder="Your answer" autocomplete="off">
+                <button id="appstain-submit" class="mode-btn">Take me to the Files</button>
+                <p id="appstain-error" class="appstain-error">Access Denied</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- GLITCH LAB MODAL -->
+    <div id="glitch-modal" class="hidden">
+        <div id="glitch-backdrop"></div>
+        <div id="glitch-content" class="portfolio-modal-box">
+            <button id="glitch-close" class="close-btn">X</button>
+            <h2 id="glitch-title" class="portfolio-modal-title">Glitch Lab v_0.72.34</h2>
+
+            <div id="glitch-header" class="glitch-lang-row">
+                <div id="lang-toggle">
+                    <span id="lang-pl" class="lang-opt active">PL</span> / <span id="lang-eng" class="lang-opt">ENG</span>
+                </div>
+            </div>
+
+            <div id="glitch-body">
+                <div id="glitch-img-container">
+                    <img src="GL.jpg" alt="Glitch Lab Preview" class="glitch-hero-img">
+                </div>
+                <!-- Markdown content – same typography as GENIMG -->
+                <div id="glitch-md-content" class="genimg-md">Loading...</div>
+            </div>
+
+            <div id="glitch-footer">
+                <a href="https://github.com/xcwajdax/GlitchLabTKEK" target="_blank" id="glitch-repo-btn">
+                    CHECK REPO [GITHUB]
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- GENIMG MODAL -->
+    <div id="genimg-modal" class="hidden">
+        <div id="genimg-backdrop"></div>
+        <div id="genimg-content" class="portfolio-modal-box">
+            <button id="genimg-close" class="close-btn">X</button>
+            <h2 id="genimg-title" class="portfolio-modal-title">GENIMG v 1.3</h2>
+
+            <div class="genimg-gallery">
+                <img src="ASSETS/GENIMG/01.jpg" alt="GENIMG 01" class="genimg-thumb">
+                <img src="ASSETS/GENIMG/02.jpg" alt="GENIMG 02" class="genimg-thumb">
+                <img src="ASSETS/GENIMG/03.jpg" alt="GENIMG 03" class="genimg-thumb">
+            </div>
+
+            <div id="genimg-md-content" class="genimg-md">
+                <h3>GENIMG – System &amp; UI Overview</h3>
+                <h4>1. Core System Architecture &amp; Workflow</h4>
+                <p>GENIMG is a local workspace designed for the structured generation, management, and versioning of AI-generated images and videos.</p>
+                <p><strong>How it works:</strong></p>
+                <ul>
+                    <li><strong>Strict Project Structure:</strong> Work is organized into numbered folders (e.g. <code>PROJECT_001</code>), initialized from a <code>_template</code>. Each project contains a <code>PROJECT.md</code> file that dictates the style, color palette, and context, serving as the absolute source of truth for generation.</li>
+                    <li><strong>Milestone Tracking:</strong> The system relies heavily on files—both at the workspace root and within individual projects—to log major changes, new versions, and project history.</li>
+                    <li><strong>Generation Engine:</strong> The actual asset creation is handled by Python scripts (<code>generate.py</code>, <code>generate_video.py</code>) that communicate with Google's Vertex AI APIs (Imagen for images, Veo for videos) via OAuth2 authentication.</li>
+                    <li><strong>Meticulous Prompt Logging:</strong> Every generated asset (in <code>generated/</code>) is versioned (e.g. <code>v1_asset.jpg</code>) and never overwritten. A Markdown file in <code>logs/</code> stores the exact prompt, parameters, timestamp, and link to the output file.</li>
+                </ul>
+                <hr>
+                <h4>2. Graphical User Interface (GENIMG UI)</h4>
+                <p>The <code>genimg-ui</code> is a local Next.js web application on <code>localhost:3000</code>. It is the visual frontend and control center for the GENIMG workspace.</p>
+                <p><strong>Key Features &amp; Functions:</strong></p>
+                <ul>
+                    <li><strong>Project Dashboard:</strong> Overview of all <code>PROJECT_XXX</code> directories, project details, visual timeline (from CHANGELOG.md), and new project creation.</li>
+                    <li><strong>Asset Gallery:</strong> Customizable gallery for images and videos—Grid/List views, resizing, filtering by type.</li>
+                    <li><strong>Interactive Generation Forms:</strong> Forms for images (Imagen) and videos (Veo): prompts, target project, parameters (e.g. first frame for video). Backend spawns Python scripts via API routes.</li>
+                    <li><strong>Real-Time Streaming (SSE):</strong> Terminal logs and script progress streamed live; inline preview when the asset is ready.</li>
+                    <li><strong>Advanced Asset Interaction:</strong> Lightbox on click; copy prompts, view prompt log inline, compare versions side-by-side.</li>
+                    <li><strong>Workspace Navigation:</strong> Batch View for related collections, source badges (standard vs. fine-tuned), prompt search across all log files.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCNDBREJN MODAL -->
+    <div id="scndbrejn-modal" class="hidden">
+        <div id="scndbrejn-backdrop"></div>
+        <div id="scndbrejn-content" class="portfolio-modal-box">
+            <button id="scndbrejn-close" class="close-btn">X</button>
+            <h2 class="portfolio-modal-title">SCNDBREJN</h2>
+            <div class="genimg-md">
+                <p><strong>SCNDBREJN</strong> is desktop software built to explore and navigate your personal data in a structured way.</p>
+                <p>Its flagship capability is a dedicated <strong>YouTube watch history browser</strong>: open, search, and skim everything you have actually watched—without relying on the limited surface YouTube exposes in the app or on the web.</p>
+                <p>Use it to rediscover forgotten videos, audit your viewing trail, or pipe that history into your own workflows.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PORTFOLIO DETAIL MODAL (per-animation: description, media, typography) -->
+    <div id="portfolio-detail-modal" class="hidden portfolio-detail-modal">
+        <div class="portfolio-detail-backdrop"></div>
+        <div class="portfolio-detail-content">
+            <button id="portfolio-detail-close" class="close-btn" aria-label="Close">X</button>
+            <h2 id="portfolio-detail-title" class="portfolio-detail-title"></h2>
+            <p id="portfolio-detail-description" class="portfolio-detail-description"></p>
+            <div id="portfolio-detail-gallery" class="portfolio-detail-gallery"></div>
+            <div id="portfolio-detail-typography" class="portfolio-detail-typography"></div>
+            <button id="portfolio-detail-play-video" class="button-primary">Play video</button>
+        </div>
+    </div>
+
+    <!-- NEWSKIN: /newskin — panel jak sekcja menu (280px), wyśrodkowany; minimalizacja -->
+    <div id="newskin-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="newskin-modal-title"
+        aria-hidden="true">
+        <div class="newskin-modal-scrim" id="newskin-modal-scrim" aria-hidden="true"></div>
+        <div class="newskin-modal-panel menu-section newskin-modal-menu-section">
+            <div class="newskin-modal-header">
+                <span id="newskin-modal-title" class="menu-section-title newskin-modal-title-text">NEWSKIN</span>
+                <div class="newskin-modal-header-actions">
+                    <button type="button" id="newskin-modal-minimize" class="newskin-modal-icon-btn"
+                        aria-label="Minimalizuj panel" title="Minimalizuj" aria-expanded="true">
+                        <svg class="newskin-modal-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true">
+                            <path d="M18 15l-6-6-6 6" />
+                        </svg>
+                    </button>
+                    <button type="button" id="newskin-modal-close" class="newskin-modal-icon-btn"
+                        aria-label="Zamknij newskin" title="Zamknij">
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+            </div>
+            <div class="newskin-modal-body" id="newskin-modal-body">
+                <div class="newskin-modal-youtube portfolio-vimeo-aspect">
+                    <iframe id="newskin-modal-youtube-iframe" src="" title="YouTube — newskin" frameborder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                </div>
+                <p id="newskin-modal-caption" class="term-line newskin-modal-caption"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PUSHKA STUDIO: /pushka — panel jak newskin, Vimeo zamiast YouTube -->
+    <div id="pushka-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="pushka-modal-title"
+        aria-hidden="true">
+        <div class="newskin-modal-scrim" id="pushka-modal-scrim" aria-hidden="true"></div>
+        <div class="newskin-modal-panel menu-section newskin-modal-menu-section">
+            <div class="newskin-modal-header">
+                <span id="pushka-modal-title" class="menu-section-title newskin-modal-title-text">PUSHKA STUDIO</span>
+                <div class="newskin-modal-header-actions">
+                    <button type="button" id="pushka-modal-minimize" class="newskin-modal-icon-btn"
+                        aria-label="Minimalizuj panel" title="Minimalizuj" aria-expanded="true">
+                        <svg class="newskin-modal-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true">
+                            <path d="M18 15l-6-6-6 6" />
+                        </svg>
+                    </button>
+                    <button type="button" id="pushka-modal-close" class="newskin-modal-icon-btn"
+                        aria-label="Zamknij Pushka Studio" title="Zamknij">
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+            </div>
+            <div class="newskin-modal-body" id="pushka-modal-body">
+                <div class="newskin-modal-youtube portfolio-vimeo-aspect">
+                    <iframe id="pushka-modal-vimeo-iframe" src="" title="Vimeo — Pushka Studio" frameborder="0"
+                        allow="autoplay; fullscreen; picture-in-picture"
+                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                </div>
+                <p id="pushka-modal-caption" class="term-line newskin-modal-caption"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PORTFOLIO VIMEO MODAL -->
+    <div id="portfolio-vimeo-modal" class="hidden">
+        <div id="portfolio-vimeo-backdrop"></div>
+        <div id="portfolio-vimeo-content">
+            <button id="portfolio-vimeo-close" class="close-btn">X</button>
+            <div class="portfolio-vimeo-aspect">
+                <iframe id="portfolio-vimeo-iframe"
+                    src=""
+                    frameborder="0"
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    title="Portfolio video">
+                </iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- IMAGE VIEWER -->
+    <div id="image-viewer" class="hidden">
+        <img id="full-image" src="" alt="Full Screen Preview">
+    </div>
+
+    <!-- Spotify widget after natural end of VAJBUJ / MYSEN (see config.js originalTrackSpotifyEmbedSrc) -->
+    <div id="music-showcase-spotify-widget" class="music-showcase-spotify-widget hidden" role="dialog"
+        aria-modal="false" aria-labelledby="music-showcase-spotify-widget-title" aria-hidden="true">
+        <div class="music-showcase-spotify-widget-panel">
+            <button type="button" id="music-showcase-spotify-close" class="close-btn"
+                aria-label="Zamknij panel Spotify">×</button>
+            <div id="music-showcase-spotify-widget-title" class="music-showcase-spotify-widget-title">Spotify</div>
+            <div class="music-showcase-spotify-iframe-wrap">
+                <iframe id="music-showcase-spotify-iframe" title="Spotify — odtwarzacz" loading="lazy" src=""
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube modal after natural end of VAJBUJ / MYSEN (see config.js originalTrackYoutube*) -->
+    <div id="music-showcase-youtube-modal" class="music-showcase-youtube-modal hidden" role="dialog"
+        aria-modal="true" aria-labelledby="music-showcase-youtube-modal-title" aria-hidden="true">
+        <div id="music-showcase-youtube-backdrop" class="music-showcase-youtube-backdrop" aria-hidden="true"></div>
+        <div class="music-showcase-youtube-content">
+            <button type="button" id="music-showcase-youtube-close" class="close-btn"
+                aria-label="Close original track dialog">×</button>
+            <h2 id="music-showcase-youtube-modal-title" class="music-showcase-youtube-modal-title">Original</h2>
+            <p id="music-showcase-youtube-attribution" class="music-showcase-youtube-attribution"></p>
+            <div class="music-showcase-youtube-aspect">
+                <iframe id="music-showcase-youtube-iframe" title="YouTube — original track" loading="lazy" src=""
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <script src="ASSETS/APPSTAIN/topkek_trump_head/trump-quotes.js"></script>
+    <script type="module" src="script.js"></script>
+</body>
+
+</html>

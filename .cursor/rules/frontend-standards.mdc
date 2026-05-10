@@ -1,0 +1,29 @@
+---
+description: Standardy frontendu – JS, CSS, HTML, Three.js, config
+globs: "**/*.js,**/*.css,**/*.html"
+alwaysApply: false
+---
+
+# Standardy frontendu (topkek)
+
+## JavaScript
+
+- **ES modules:** używaj `import`/`export`. Główna logika w script.js, konfiguracja w config.js.
+- **Three.js:** wersja z import map w index.html (three.module.js, addons z examples/jsm). Nie zmieniaj CDN bez potrzeby.
+- **Konfiguracja:** wartości sterujące aplikacją (teksty, liczby, ścieżki, tryby) trzymaj w **config.js**. Nie hardkoduj ich w script.js.
+- **Mobile/desktop:** używaj `IS_MOBILE` z config.js do rozgałęzień (particle count, rozdzielczości, pliki JSON).
+
+## CSS
+
+- **Klasy:** BEM lub spójne nazewnictwo (np. prefiksy: `appstain-`, `topkek-`, `term-`). Nie usuwaj istniejących prefiksów.
+- **Responsywność:** zachowaj media queries i style dla mobile; zmiany w layoutach testuj na wąskim viewport.
+
+## HTML
+
+- **Semantyka:** używaj sekcji, nagłówków, `aria-` gdzie to poprawia dostępność. Nie zmieniaj struktury modali bez potrzeby.
+- **Skrypty:** jeden wejściowy script (type="module") ładujący moduły. Import map już zdefiniowany – nie duplikuj.
+
+## Ogólne
+
+- Nie refaktoryzuj dużych fragmentów „na zapas” – tylko zmiany potrzebne do zadania.
+- Przy dodawaniu nowych funkcji rozważ wpis w TODO.md (zadanie) i w CHANGELOG.md pod [Unreleased] po zakończeniu.

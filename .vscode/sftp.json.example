@@ -1,0 +1,21 @@
+{
+  "name": "TOPKEK webspace",
+  "host": "access-5020093790.webspace-host.com",
+  "protocol": "sftp",
+  "port": 22,
+  "username": "su115808",
+  "password": "",
+  "remotePath": "/public_html",
+  "uploadOnSave": false,
+  "useTempFile": false,
+  "connectTimeout": 20000,
+  "ignore": [
+    ".vscode",
+    ".git",
+    ".cursor",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+    "docs",
+    "start.bat"
+  ]
+}

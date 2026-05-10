@@ -1,0 +1,23 @@
+# GENIMG – System & UI Overview
+
+## 1. Core System Architecture & Workflow
+GENIMG is a local workspace designed for the structured generation, management, and versioning of AI-generated images and videos.
+
+**How it works:**
+- **Strict Project Structure:** Work is organized into numbered folders (e.g., `PROJECT_001`), initialized from a `_template`. Each project contains a `PROJECT.md` file that dictates the style, color palette, and context, serving as the absolute source of truth for generation.
+- **Milestone Tracking:** The system relies heavily on files—both at the workspace root and within individual projects—to log major changes, new versions, and project history.
+- **Generation Engine:** The actual asset creation is handled by Python scripts (`scripts/generate.py` and `scripts/generate_video.py`) that communicate with Google's Vertex AI APIs (using Imagen for images and Veo for videos) via OAuth2 authentication.
+- **Meticulous Prompt Logging:** The system enforces a strict logging protocol. Every generated asset (stored in `generated/`) is heavily versioned (e.g., `v1_asset.jpg`) and NEVER overwritten. A corresponding Markdown file is automatically created in the `logs/` directory containing the exact prompt, parameters, timestamp, and a link to the output file.
+
+---
+
+## 2. Graphical User Interface (GENIMG UI)
+The `genimg-ui` is a local Next.js web application running on `localhost:3000`. It acts as the visual frontend and control center for the GENIMG workspace, bridging the gap between raw file logs and user interaction.
+
+**Key Features & Functions:**
+- **Project Dashboard:** Displays an overview of all `PROJECT_XXX` directories. Users can view project details, read the visual timeline (derived from `CHANGELOG.md`), and create new projects directly from the interface.
+- **Asset Gallery:** A highly customizable visual gallery for generated images and videos. It supports switching between Grid and List views, resizing asset cards, and filtering to show only images or only videos.
+- **Interactive Generation Forms:** Provides dedicated forms for generating images (Imagen) and videos (Veo). Users can input prompts, select the target project, and configure parameters (such as providing a first frame for video generation). The backend uses API routes to `spawn` the Python generation scripts.
+- **Real-Time Streaming (SSE):** During the generation process, the UI uses Server-Sent Events to stream terminal logs and script progress in real-time, displaying a seamless inline preview once the asset is ready.
+- **Advanced Asset Interaction:** Clicking an asset opens a Lightbox. The UI also enables users to easily copy prompts to their clipboard, view the specific prompt log inline, and compare versions side-by-side.
+- **Workspace Navigation:** Additional features include a "Batch View" for looking at globally related collections, source badges (recognizing standard vs. fine-tuned generations), and a prompt search engine covering all log files.

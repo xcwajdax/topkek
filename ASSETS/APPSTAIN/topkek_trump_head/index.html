@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOPKEK – Gadająca głowa Trumpa (demo)</title>
+    <link rel="stylesheet" href="trump-head.css">
+</head>
+<body>
+    <!-- Widget: gadająca głowa Trumpa + dymek z cytatami (identycznie jak w APPSTAIN) -->
+    <div id="topkek-character-container" class="topkek-character-container">
+        <div class="topkek-character-heads-row">
+            <img id="topkek-trump-head" class="topkek-character-head" src="../ASSETS/character_head.png" alt="Ronald Dump">
+        </div>
+        <div id="topkek-speech-bubble" class="topkek-speech-bubble hidden">
+            <div class="topkek-speech-text"></div>
+            <div class="topkek-speech-tail"></div>
+        </div>
+    </div>
+
+    <script src="trump-quotes.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            TopkekTrumpHead.init({
+                imagePath: '../ASSETS/character_head.png',
+                minInterval: 60000,
+                maxInterval: 120000,
+                displayDurationBase: 3000,
+                displayDurationPerChar: 50,
+                displayDurationMin: 3000,
+                displayDurationMax: 15000,
+                clickCooldown: 25000
+            });
+        });
+    </script>
+</body>
+</html>
